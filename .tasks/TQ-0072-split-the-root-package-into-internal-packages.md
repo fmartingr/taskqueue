@@ -1,7 +1,7 @@
 ---
 id: TQ-0072
 title: Split the root package into internal packages
-status: in-progress
+status: done
 priority: normal
 labels:
   - refactor
@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T18:55:16+02:00
-updated: 2026-08-25T19:44:02+02:00
+updated: 2026-08-25T19:52:32+02:00
 ---
 
 ## Why now
@@ -117,3 +117,10 @@ those two, the better.
 
 - 2026-08-25T18:55:30+02:00 — TQ-0038 (integration boilerplate) is not a hard dependency but is the safety net this refactor wants: it is the only test layer that survives the packages being rearranged. Doing it first turns a large mechanical change from 'trust the unit tests that are themselves moving' into 'the binary still behaves'.
 - 2026-08-25T18:58:32+02:00 — Decided: internal/. No package outside cmd/tq is importable, so the module makes no Go API promise; promoting a package out of internal/ later stays possible, taking a published one back does not.
+- 2026-08-25T19:52:32+02:00 — Done in six commits, one package each, suite green at every step: task, config with the shared fixtures, store, guide, web, cli. fsx was extracted first because two packages heading to different homes both needed the atomic write.
+- 2026-08-25T19:52:32+02:00 — Import direction verified with go list, not by eye: internal/task depends on nothing of ours, and each package depends only on those below it — config on fsx, store on config and task, guide and web on store, cli on all of them.
+- 2026-08-25T19:52:32+02:00 — The predicted costs all landed. public/ moved with the package that embeds it, which took build.ts, the Makefile and CI's staleness gate with it, and split the embed path from the DEV disk path since they can no longer be one string. Shared fixtures went to internal/tqtest. The cross-cutting test moved to the root and now drives Main and the router through exported API only.
+- 2026-08-25T19:52:32+02:00 — Two decisions the ticket left open. The version variable stays in the root package and is passed into web and cli as a value, so ldflags, the Makefile, goreleaser and CI were untouched. frontmatter.go went into task, as its own encoding rather than a package holding two functions.
+- 2026-08-25T19:52:32+02:00 — Two things had to change to compile rather than merely move, both called out in their commits: the serve command was a cli method living in server.go and moved to cli.go, and the store and cli packages needed exported entry points, Run and NewRouter, for callers across the boundary.
+- 2026-08-25T19:52:32+02:00 — store keeps its own test fixtures instead of using tqtest. Its tests reach its internals, so importing a helper package that builds one of its stores would be an import cycle. config's tests went external for the same reason.
+- 2026-08-25T19:52:32+02:00 — TQ-0038 was not done first, as this ticket recommended. Compensated by exercising the built binary after every package: CLI commands, embedded serving, DEV=1 disk serving, a goreleaser snapshot and the frontend build.

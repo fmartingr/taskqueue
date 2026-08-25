@@ -1,4 +1,4 @@
-package taskqueue
+package cli
 
 import (
 	"encoding/json"
@@ -39,9 +39,20 @@ const (
 // cli holds everything a command needs from its environment, which keeps the
 // commands testable without spawning the binary.
 type cli struct {
+	// version is stamped on the binary at build time and passed in, because
+	// this package is not the binary.
+	version string
+
 	stdout io.Writer
 	stderr io.Writer
 	dir    string // working directory used to discover the task directory
+}
+
+// Run executes one command and returns the process exit code. It takes its
+// streams, its working directory and the binary's version rather than reaching
+// for globals, so a test can drive it the same way the binary does.
+func Run(stdout, stderr io.Writer, dir, version string, args []string) int {
+	return runCLI(&cli{stdout: stdout, stderr: stderr, dir: dir, version: version}, args)
 }
 
 func runCLI(c *cli, args []string) int {
@@ -537,9 +548,9 @@ func (c *cli) runVersion(args []string) int {
 		return code
 	}
 	if *jsonOut {
-		return c.printJSON(map[string]string{"version": version})
+		return c.printJSON(map[string]string{"version": c.version})
 	}
-	fmt.Fprintf(c.stdout, "tq %s\n", version)
+	fmt.Fprintf(c.stdout, "tq %s\n", c.version)
 	return exitOK
 }
 
@@ -694,7 +705,7 @@ func (c *cli) runServe(args []string) int {
 	}
 
 	dev := os.Getenv("DEV") != ""
-	handler, err := web.NewRouter(st, dev, version)
+	handler, err := web.NewRouter(st, dev, c.version)
 	if err != nil {
 		return c.fail(err)
 	}

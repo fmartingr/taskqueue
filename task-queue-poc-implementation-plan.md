@@ -168,6 +168,13 @@ controllers/
 
 The application is intentionally small. Split files by responsibility while keeping a single `package main`, as in the reference project.
 
+> **Superseded (TQ-0072).** The flat layout was right while the application
+> was small, and it stayed right for the whole proof of concept. It stopped
+> being right at roughly 2,600 lines of code across sixteen mutually visible
+> files, where nothing enforced the boundary between the model, the
+> filesystem, HTTP and the CLI. The code now lives in layered packages under
+> `internal/`, with one `main` in `cmd/tq`; see AGENTS.md for the shape.
+
 If the codebase eventually grows enough to justify packages, that can be addressed after the PoC.
 
 ---

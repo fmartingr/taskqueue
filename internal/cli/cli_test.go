@@ -1,4 +1,4 @@
-package taskqueue
+package cli
 
 import (
 	"bytes"
@@ -18,6 +18,9 @@ import (
 
 	"github.com/fmartingr/taskqueue/internal/guide"
 )
+
+// testVersion stands in for the string the build stamps on the binary.
+const testVersion = "test-version"
 
 type testCLI struct {
 	*cli
@@ -75,7 +78,7 @@ func newBareCLI(t *testing.T) *testCLI {
 	root := tqtest.Root(t)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	return &testCLI{
-		cli:    &cli{stdout: stdout, stderr: stderr, dir: root},
+		cli:    &cli{stdout: stdout, stderr: stderr, dir: root, version: testVersion},
 		t:      t,
 		stdout: stdout,
 		stderr: stderr,
@@ -567,8 +570,8 @@ func TestCLIUsageAndVersion(t *testing.T) {
 	}
 
 	out := tc.mustRun("version")
-	if !strings.Contains(out, version) {
-		t.Errorf("version output = %q, want it to contain %q", out, version)
+	if !strings.Contains(out, testVersion) {
+		t.Errorf("version output = %q, want it to contain %q", out, testVersion)
 	}
 
 	out = tc.mustRun("help")
@@ -632,7 +635,7 @@ func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
 	}
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo}, t: t, stdout: stdout, stderr: stderr, root: repo}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: repo}
 	tc.mustRun("list")
 
 	notice := stderr.String()
@@ -673,7 +676,7 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: project}, t: t, stdout: stdout, stderr: stderr, root: project}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: project, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: project}
 	anchorProject(t, project)
 
 	tc.mustRun("init")
@@ -714,11 +717,11 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 	}
 
 	seedOut, seedErr := &bytes.Buffer{}, &bytes.Buffer{}
-	seed := &testCLI{cli: &cli{stdout: seedOut, stderr: seedErr, dir: project}, t: t, stdout: seedOut, stderr: seedErr, root: project}
+	seed := &testCLI{cli: &cli{stdout: seedOut, stderr: seedErr, dir: project, version: testVersion}, t: t, stdout: seedOut, stderr: seedErr, root: project}
 	seed.mustRun("add", "existing work")
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: nested}, t: t, stdout: stdout, stderr: stderr, root: nested}
+	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: nested, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: nested}
 
 	var out struct {
 		TaskDir string `json:"task_dir"`
@@ -756,7 +759,7 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo}, t: t, stdout: stdout, stderr: stderr, root: repo}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: repo}
 
 	var out struct {
 		TaskDir string `json:"task_dir"`
@@ -817,7 +820,7 @@ func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
 	}
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep}, t: t, stdout: stdout, stderr: stderr, root: deep}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: deep}
 	tc.mustRun("init")
 
 	if _, err := os.Stat(filepath.Join(outside, guide.AgentsFileName)); !os.IsNotExist(err) {
@@ -848,7 +851,7 @@ func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep}, t: t, stdout: stdout, stderr: stderr, root: tc.root}
+	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: tc.root}
 	sub.mustRun("init")
 
 	if _, err := os.Stat(guide); err != nil {

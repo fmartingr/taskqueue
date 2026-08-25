@@ -3,6 +3,8 @@ package taskqueue
 import (
 	"fmt"
 	"os"
+
+	"github.com/fmartingr/taskqueue/internal/cli"
 )
 
 // version is set at build time via
@@ -15,7 +17,7 @@ func Main(args []string) int {
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return exitError
+		return 1
 	}
-	return runCLI(&cli{stdout: os.Stdout, stderr: os.Stderr, dir: cwd}, args)
+	return cli.Run(os.Stdout, os.Stderr, cwd, version, args)
 }

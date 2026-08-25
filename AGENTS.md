@@ -12,22 +12,25 @@ files are the only source of truth.
 - **Backend**: Go (standard library as much as possible)
 - **Frontend**: vanilla TypeScript + CSS, built with Bun, embedded via `go:embed`
   (no JavaScript dependencies at all, so there is no lockfile to commit)
-- **Layout**: one package at the repository root, flat files by responsibility,
-  with a thin `package main` in `cmd/tq`
+- **Layout**: one `main` in `cmd/tq`, everything else under `internal/`, by
+  responsibility and layered leaf-first
 
 ```text
-cmd/tq/main.go The binary: `go install` names it after this directory
-tq.go          Main entry point and version variable
-cli.go         Commands, flags, human/JSON output, exit codes
-server.go      net/http server, REST API, static serving, tq serve
-store.go       Filesystem store: discovery, atomic writes, ID allocation
-config.go      .taskqueue.yaml: the project marker, its loader and path
-task.go        Task model, validation, filters, dependencies, notes
-frontmatter.go YAML frontmatter parse/render
-embed.go       go:embed public/
-frontend/      app.ts, notes.ts, index.html, style.css, build.ts (Bun)
-public/        Built frontend (committed; regenerate with `make frontend`)
+cmd/tq/main.go     The binary: `go install` names it after this directory
+tq.go              Main() and the version variable
+internal/task/     Model, validation, filters, dependencies, notes, frontmatter.
+                   Imports nothing of ours.
+internal/config/   .taskqueue.yaml: the project marker, its loader, the walk
+internal/store/    Filesystem store: discovery, atomic writes, ID allocation
+internal/guide/    The generated .tasks/AGENTS.md
+internal/web/      REST API, the server, and public/ (embedded frontend)
+internal/cli/      Commands, flags, human/JSON output, exit codes
+internal/fsx/      Atomic file write, shared by the two generators
+internal/tqtest/   Test fixtures shared across packages
+frontend/          app.ts, notes.ts, index.html, style.css, build.ts (Bun)
 ```
+
+Dependencies run one way: `task` <- `config` <- `store` <- `guide`, `web`, `cli`.
 
 ## Commands
 
@@ -69,11 +72,11 @@ make dev            # Bun watch + DEV=1 server
   root of the enclosing Git repository (or `TQ_DIR`). Commands must not fail
   merely because a project has not been initialised.
 - Prefer the Go standard library where practical.
-- Keep the flat architecture: one package at the root, files by responsibility,
-  and no `internal/` or `pkg/`. The only subpackage is `cmd/tq`, which exists
-  solely so `go install` names the binary `tq` rather than after the module.
-  It holds a `main` that calls `Main` and nothing else; `public/` and its
-  `go:embed` stay at the root, where the embed can reach them.
+- Keep the layering: `internal/task` imports nothing of ours, and nothing
+  imports back up the list above. Everything except `cmd/tq` stays under
+  `internal/`, so the module promises no Go API — the stable interface is the
+  CLI and its JSON. `public/` lives beside the package that embeds it, because
+  a `go:embed` cannot reach outside its own directory.
 - Track work in this project's own queue, following the lifecycle in
   [Task management](#task-management).
 

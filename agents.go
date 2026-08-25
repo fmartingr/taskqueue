@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -115,25 +116,27 @@ func writeIfChanged(path string, content []byte) (bool, error) {
 
 // withTaskSection returns doc with a "Task management" section pointing at
 // link, and reports whether anything needed changing. An existing section is
-// rewritten (the task directory may have moved); an existing link is left
-// alone.
+// rewritten (the task directory may have moved); a section that already points
+// at the guide is left alone.
 func withTaskSection(doc, link string) (string, bool) {
 	section := fmt.Sprintf("See [%s](%s)", AgentsFileName, link)
-	if strings.Contains(doc, "("+link+")") {
-		return doc, false
+
+	lines := strings.Split(strings.TrimRight(doc, "\n"), "\n")
+	levels := headingLevels(lines)
+
+	if start, end, level := findSection(lines, levels, taskSectionTitle); start >= 0 {
+		if pointsAtGuide(lines[start:end], levels[start:end], link) {
+			return doc, false
+		}
+		replacement := append([]string{strings.Repeat("#", level) + " " + taskSectionTitle, "", section}, lines[end:]...)
+		return strings.Join(append(lines[:start], replacement...), "\n") + "\n", true
 	}
 
 	// A second level-one heading would be invalid in a document that already
 	// has one, so match the depth of what is already there.
 	heading := "# "
-	if strings.Contains(doc, "\n# ") || strings.HasPrefix(doc, "# ") {
+	if slices.Contains(levels, 1) {
 		heading = "## "
-	}
-
-	lines := strings.Split(strings.TrimRight(doc, "\n"), "\n")
-	if start, end, level := findSection(lines, taskSectionTitle); start >= 0 {
-		replacement := append([]string{strings.Repeat("#", level) + " " + taskSectionTitle, "", section}, lines[end:]...)
-		return strings.Join(append(lines[:start], replacement...), "\n") + "\n", true
 	}
 
 	if doc = strings.TrimRight(doc, "\n"); doc == "" {
@@ -142,26 +145,101 @@ func withTaskSection(doc, link string) (string, bool) {
 	return doc + "\n\n" + heading + taskSectionTitle + "\n\n" + section + "\n", true
 }
 
-// findSection locates a heading by title and returns the line range it covers
-// (up to the next heading of the same or higher level) plus its level.
-func findSection(lines []string, title string) (start, end, level int) {
+// pointsAtGuide reports whether a section already sends the reader to the
+// guide, either as a Markdown link or as an `@`-include. A mention inside a
+// fenced block documents the convention instead of following it, so it does
+// not count.
+func pointsAtGuide(lines []string, levels []int, link string) bool {
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		hashes := len(trimmed) - len(strings.TrimLeft(trimmed, "#"))
-		if hashes == 0 || !strings.EqualFold(strings.TrimSpace(trimmed[hashes:]), title) {
+		if levels[i] == fencedLine {
+			continue
+		}
+		if strings.Contains(line, "("+link+")") || strings.Contains(line, "@"+link) {
+			return true
+		}
+	}
+	return false
+}
+
+// findSection locates a heading by title and returns the line range it covers
+// (up to the next heading of the same or higher level) plus its level. levels
+// comes from headingLevels, so headings quoted inside a fence are ignored.
+func findSection(lines []string, levels []int, title string) (start, end, level int) {
+	for i, line := range lines {
+		hashes := levels[i]
+		if hashes <= 0 || !strings.EqualFold(strings.TrimSpace(line[hashes:]), title) {
 			continue
 		}
 
 		for j := i + 1; j < len(lines); j++ {
-			next := strings.TrimSpace(lines[j])
-			depth := len(next) - len(strings.TrimLeft(next, "#"))
-			if depth > 0 && depth <= hashes && strings.HasPrefix(next[depth:], " ") {
+			if depth := levels[j]; depth > 0 && depth <= hashes {
 				return i, j, hashes
 			}
 		}
 		return i, len(lines), hashes
 	}
 	return -1, -1, 0
+}
+
+// fencedLine marks a line that sits inside a fenced code block, delimiters
+// included. Such a line is never structure: a leading `#` there is a shell
+// comment, and a link is an example.
+const fencedLine = -1
+
+// headingLevels classifies every line of a document: the level of its ATX
+// heading, 0 for anything else, and fencedLine inside a fenced code block.
+func headingLevels(lines []string) []int {
+	levels := make([]int, len(lines))
+	open := ""
+
+	for i, line := range lines {
+		fence, info := fenceDelimiter(line)
+		if open != "" {
+			levels[i] = fencedLine
+			// A closing fence is at least as long as its opener, uses the same
+			// character and carries no info string.
+			if fence != "" && fence[0] == open[0] && len(fence) >= len(open) && strings.TrimSpace(info) == "" {
+				open = ""
+			}
+			continue
+		}
+		// A backtick in the info string means a run of inline code, not a fence.
+		if fence != "" && (fence[0] == '~' || !strings.Contains(info, "`")) {
+			open, levels[i] = fence, fencedLine
+			continue
+		}
+		levels[i] = headingLevel(line)
+	}
+	return levels
+}
+
+// headingLevel returns the level of an ATX heading, or 0 when the line is not
+// one. A heading starts at column 0 and its hashes are followed by a space.
+func headingLevel(line string) int {
+	hashes := len(line) - len(strings.TrimLeft(line, "#"))
+	if hashes == 0 || hashes > 6 {
+		return 0
+	}
+	if rest := line[hashes:]; rest != "" && !strings.HasPrefix(rest, " ") {
+		return 0
+	}
+	return hashes
+}
+
+// fenceDelimiter splits a code fence line into its run of backticks or tildes
+// and the info string that follows. It returns an empty marker for any other
+// line, indented code blocks included.
+func fenceDelimiter(line string) (fence, info string) {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 {
+		return "", "" // indented four spaces: a code block, not a fence
+	}
+	for _, char := range "`~" {
+		if run := len(trimmed) - len(strings.TrimLeft(trimmed, string(char))); run >= 3 {
+			return trimmed[:run], trimmed[run:]
+		}
+	}
+	return "", ""
 }
 
 // taskGuide is the agent-facing cheat sheet stored next to the tasks. It is

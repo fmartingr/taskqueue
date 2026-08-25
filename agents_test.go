@@ -278,3 +278,108 @@ func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
 		at = i
 	}
 }
+
+// A shell fence whose first line is a `#` comment is the commonest construct
+// in an instructions file: it must not read as the heading that ends the
+// section. The section is regenerated wholesale, so a fence inside it goes
+// with it — what must not happen is the fence being cut in half, leaving its
+// body as prose and its closer dangling.
+func TestWithTaskSectionEndsTheSectionPastAFence(t *testing.T) {
+	doc := "# Project\n\n## Task management\n\nSee [AGENTS.md](old/path.md)\n\n```bash\n# how to run\ntq list\n```\n\n## Other\n\nKeep me.\n"
+
+	updated, changed := withTaskSection(doc, ".tasks/AGENTS.md")
+	if !changed {
+		t.Fatal("a stale link should be rewritten")
+	}
+	for _, leftover := range []string{"```", "# how to run", "tq list", "old/path.md"} {
+		if strings.Contains(updated, leftover) {
+			t.Errorf("the replaced section left %q behind:\n%s", leftover, updated)
+		}
+	}
+	if !strings.Contains(updated, "## Other\n\nKeep me.") {
+		t.Errorf("the following section should survive:\n%s", updated)
+	}
+	if strings.Count(updated, "Task management") != 1 {
+		t.Errorf("the section should not be duplicated:\n%s", updated)
+	}
+}
+
+// The section boundary is the next real heading, so a fenced block that
+// belongs to a later section is none of tq's business.
+func TestWithTaskSectionLeavesALaterFenceAlone(t *testing.T) {
+	doc := "# Project\n\n## Task management\n\nSee [AGENTS.md](old/path.md)\n\n## Other\n\n```bash\n# how to run\ntq list\n```\n"
+
+	updated, changed := withTaskSection(doc, ".tasks/AGENTS.md")
+	if !changed {
+		t.Fatal("a stale link should be rewritten")
+	}
+	if !strings.Contains(updated, "## Other\n\n```bash\n# how to run\ntq list\n```") {
+		t.Errorf("a fence in another section should survive intact:\n%s", updated)
+	}
+}
+
+// A heading inside a fence is an example, not structure.
+func TestWithTaskSectionIgnoresAFencedHeading(t *testing.T) {
+	doc := "# Project\n\n~~~md\n## Task management\n\nSee [AGENTS.md](example/AGENTS.md)\n~~~\n"
+
+	updated, changed := withTaskSection(doc, ".tasks/AGENTS.md")
+	if !changed {
+		t.Fatal("a document whose only mention is an example needs a real section")
+	}
+	if !strings.Contains(updated, "~~~md\n## Task management\n\nSee [AGENTS.md](example/AGENTS.md)\n~~~") {
+		t.Errorf("the example should survive untouched:\n%s", updated)
+	}
+	if !strings.HasSuffix(updated, "## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n") {
+		t.Errorf("a real section should be appended:\n%s", updated)
+	}
+}
+
+// README-style snippets showing the convention must not make a project opt
+// itself out of the pointer.
+func TestWithTaskSectionIgnoresAFencedPointer(t *testing.T) {
+	doc := "# Project\n\nThe convention looks like this:\n\n```md\nSee [AGENTS.md](.tasks/AGENTS.md)\n```\n"
+
+	updated, changed := withTaskSection(doc, ".tasks/AGENTS.md")
+	if !changed {
+		t.Fatal("a pointer inside an example does not point anywhere")
+	}
+	if !strings.Contains(updated, "## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n") {
+		t.Errorf("the document should gain a section:\n%s", updated)
+	}
+}
+
+// The pointer may be an `@`-include: that is how Claude-style docs pull the
+// guide in, and rewriting it as a Markdown link would break the include.
+func TestWithTaskSectionKeepsAnIncludePointer(t *testing.T) {
+	doc := "# Project\n\n## Task management\n\n@.tasks/AGENTS.md\n"
+
+	updated, changed := withTaskSection(doc, ".tasks/AGENTS.md")
+	if changed || updated != doc {
+		t.Errorf("an include already points at the guide, got changed=%v:\n%s", changed, updated)
+	}
+}
+
+// A pointer only counts where it is: inside the section that is supposed to
+// carry it.
+func TestWithTaskSectionIgnoresAPointerOutsideTheSection(t *testing.T) {
+	doc := "# Project\n\nTasks live in [AGENTS.md](.tasks/AGENTS.md), by the way.\n"
+
+	updated, changed := withTaskSection(doc, ".tasks/AGENTS.md")
+	if !changed {
+		t.Fatal("a passing mention is not a Task management section")
+	}
+	if !strings.HasSuffix(updated, "## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n") {
+		t.Errorf("the document should gain a section:\n%s", updated)
+	}
+}
+
+// The level of an appended heading follows the document's real headings, not a
+// `#` comment that happens to sit in a fence.
+func TestWithTaskSectionIgnoresAFencedHashWhenChoosingItsLevel(t *testing.T) {
+	doc := "Instructions.\n\n```sh\n# not a heading\ntq list\n```\n"
+
+	updated, _ := withTaskSection(doc, ".tasks/AGENTS.md")
+	if !strings.Contains(updated, "\n# Task management\n") {
+		t.Errorf("the document has no level-one heading, so the section is one:\n%s", updated)
+	}
+}

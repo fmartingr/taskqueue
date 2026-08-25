@@ -1,13 +1,13 @@
 ---
 id: TQ-0045
 title: withTaskSection scans Markdown by substring, so a code fence corrupts the doc
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/cli
 created: 2026-08-25T13:55:55+02:00
-updated: 2026-08-25T13:55:55+02:00
+updated: 2026-08-25T14:02:50+02:00
 ---
 
 ## Finding
@@ -62,3 +62,17 @@ matching the whole document — that fixes the false positive and the
 `@`-include miss in TQ-0042 together.
 
 Found by `/code-review` on TQ-0041; both cases reproduced by hand.
+
+---
+
+## Notes
+
+- 2026-08-25T14:02:47+02:00 — Added headingLevels(): one pass over the document classifying each line as an ATX heading level, 0 for prose, or -1 (fencedLine) inside a fenced block, delimiters included.
+- 2026-08-25T14:02:48+02:00 — fenceDelimiter() handles both backtick and tilde fences, closing fences at least as long as their opener with no info string, and skips four-space-indented lines, which are code blocks rather than fences.
+- 2026-08-25T14:02:48+02:00 — headingLevel() now requires column 0 and hashes followed by a space or end of line, so an indented line is no longer read as a heading.
+- 2026-08-25T14:02:48+02:00 — findSection() takes the precomputed levels, so a hash comment inside a shell fence no longer ends the section early and the splice no longer eats the fence opener.
+- 2026-08-25T14:02:48+02:00 — Replaced the whole-document strings.Contains guard with pointsAtGuide(), which looks only inside the Task management section and skips fenced lines, so a README-style example no longer suppresses the pointer.
+- 2026-08-25T14:02:48+02:00 — pointsAtGuide() also accepts an at-sign include of the link, so a Claude-style include counts as a pointer and is left alone. That is TQ-0042 symptom, which this guard rework resolves; TQ-0042 itself left open for its owner.
+- 2026-08-25T14:02:48+02:00 — The heading level chosen for an appended section now comes from the same levels slice, so a hash comment in a fence no longer demotes a new section to level two.
+- 2026-08-25T14:02:48+02:00 — Six new tests in agents_test.go, each confirmed failing first: fenced block past the section end, a later fence untouched, a fenced heading ignored, a fenced pointer ignored, an include kept, a pointer outside the section ignored, and the fenced-hash heading level.
+- 2026-08-25T14:02:48+02:00 — taskGuide is untouched and the generated .tasks/AGENTS.md is byte-identical. make test, make lint (0 issues) and make build all pass.

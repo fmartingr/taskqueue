@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-25T12:02:53+02:00
+updated: 2026-08-25T12:12:30+02:00
 ---
 
 ## Proposal
@@ -38,11 +38,13 @@ labels:
 
 ## Behaviour
 
-- With a config present, `tq add --label`, `tq update --add-label`, `POST
-  /api/tasks` and `PATCH /api/tasks/{id}` reject labels that are not in the
-  set, and the error lists the valid ones.
-- Without a config, any label is accepted — today's behaviour, so nothing
-  breaks before a project opts in.
+- **Labels stay freeform**, unlike columns and severities. The configured set
+  is a reference, not a restriction: it supplies colours, display names,
+  grouping and autocomplete, and gives humans and agents a shared vocabulary,
+  but `tq add --label`, `tq update --add-label` and the API all accept a label
+  that is not in it.
+- A label in use but not configured renders in a neutral colour and is worth
+  surfacing, so it either joins the set or gets cleaned up.
 - **Reading never fails on an unknown label.** Tasks that already carry labels
   outside the set keep them and render in a neutral colour; otherwise adopting
   a config would break every task already filed.
@@ -94,9 +96,10 @@ label today means editing frontmatter by hand).
 
 ## Acceptance criteria
 
-- Labels come from the config; an unconfigured label is rejected on write with
-  a useful message, and tolerated on read.
-- No config still means no restriction.
+- Configured labels supply colours, display names and grouping; an
+  unconfigured label is accepted everywhere and renders neutral.
+- `tq label list [--json]` prints the configured vocabulary and flags labels
+  that are in use but not configured.
 - The board groups by prefix, colours the chips and shows display names.
 - `tq init` seeds the base set into a new config.
 

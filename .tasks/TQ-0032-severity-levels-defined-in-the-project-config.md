@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:59:41+02:00
-updated: 2026-08-25T11:59:41+02:00
+updated: 2026-08-25T12:12:37+02:00
 ---
 
 ## Proposal
@@ -101,3 +101,7 @@ rename if the semantics genuinely change.
 - Exactly one default is enforced with a useful error.
 - Round-trip test with a custom set, for example `p0`..`p3`, covering create,
   filter, sort and the board.
+
+## Notes
+
+- 2026-08-25T12:12:37+02:00 — Columns and severities are the strict sets, labels are freeform (see TQ-0035 and TQ-0030). Open question for severities: should a task carrying a severity that is no longer configured snap to the default the way an unknown column snaps to the first column, or keep the value and sort last as this ticket currently says?

@@ -1,4 +1,4 @@
-module git.nakama.town/fmartingr/task-queue
+module github.com/fmartingr/taskqueue
 
 go 1.26.5
 

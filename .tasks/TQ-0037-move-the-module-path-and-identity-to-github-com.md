@@ -1,14 +1,14 @@
 ---
 id: TQ-0037
 title: Move the module path and identity to github.com/fmartingr/taskqueue
-status: todo
+status: done
 priority: high
 labels:
   - docs
   - chore
   - component/build
 created: 2026-08-25T12:16:11+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:19:52+02:00
 ---
 
 ## Why
@@ -70,3 +70,14 @@ method.
 - Both terraria-companion links are untouched.
 - `go install github.com/fmartingr/taskqueue@latest` works once the repository
   is pushed and public.
+
+---
+
+## Notes
+
+- 2026-08-25T18:19:51+02:00 — go.mod now declares github.com/fmartingr/taskqueue. This is package main with no internal imports, so the one line plus go mod tidy was the whole rename; go build, go test, make build and make lint all pass.
+- 2026-08-25T18:19:51+02:00 — .gitignore now ignores taskqueue rather than task-queue, verified with git check-ignore against a real stray binary from go build ./..., and package.json is taskqueue-frontend. The old task-queue binary in the working tree was deleted, since nothing ignores that name any more.
+- 2026-08-25T18:19:51+02:00 — Both terraria-companion links are untouched, one in README.md and one in the plan; that repository is a different project on the forge and stays put.
+- 2026-08-25T18:19:52+02:00 — Two corrections to the ticket. The README has no go install line at all, so there was nothing to respell here; TQ-0036 owns that section and will add it with the right path. And .goreleaser.yml still says name: task-queue, inside the gitea release block TQ-0036 deletes outright, so changing it here would be churn.
+- 2026-08-25T18:19:52+02:00 — goreleaser check fails with 'no remote configured to list refs from'. Verified it fails identically at HEAD, so this is the environmental limitation the ticket anticipated, not a regression. There is no git remote at all yet.
+- 2026-08-25T18:19:52+02:00 — Not done, deliberately: pointing the remote at the new repository and pushing. That is outward-facing and needs the repository to exist; left for a human to do.

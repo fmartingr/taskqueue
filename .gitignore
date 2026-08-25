@@ -1,6 +1,6 @@
 # Go binary
 tq
-task-queue
+taskqueue
 dist/
 
 # Task data of projects that use tq (never the tool's own repo)

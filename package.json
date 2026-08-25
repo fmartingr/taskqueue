@@ -1,5 +1,5 @@
 {
-  "name": "task-queue-frontend",
+  "name": "taskqueue-frontend",
   "private": true,
   "type": "module",
   "scripts": {

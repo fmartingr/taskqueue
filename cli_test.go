@@ -19,6 +19,16 @@ type testCLI struct {
 
 // newTestCLI returns a CLI rooted in a temporary project that already has a
 // task directory.
+// anchorProject marks a directory as a repository root, so task directory
+// discovery stops there. Without it a fixture walks out of t.TempDir() and can
+// reach — and write into — a developer's own queue (TQ-0053).
+func anchorProject(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newTestCLI(t *testing.T) *testCLI {
 	t.Helper()
 	tc := newBareCLI(t)
@@ -33,6 +43,7 @@ func newTestCLI(t *testing.T) *testCLI {
 func newBareCLI(t *testing.T) *testCLI {
 	t.Helper()
 	root := t.TempDir()
+	anchorProject(t, root)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	return &testCLI{
 		cli:    &cli{stdout: stdout, stderr: stderr, dir: root},
@@ -491,6 +502,14 @@ func TestCLIReportsUncreatableTaskDir(t *testing.T) {
 	}
 	tc.dir = filepath.Join(file, "sub")
 
+	// Fixtures are anchored, so creation now falls back to the repository
+	// root: make that unwritable too, or there is nothing uncreatable left to
+	// report. Restored before t.TempDir's own cleanup, which runs after this.
+	if err := os.Chmod(tc.root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(tc.root, 0o755) })
+
 	for _, args := range [][]string{{"list"}, {"add", "x"}, {"ready"}} {
 		if code := tc.run(args...); code != exitProjectNotFound {
 			t.Errorf("tq %s = exit %d, want %d", strings.Join(args, " "), code, exitProjectNotFound)
@@ -605,5 +624,118 @@ func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
 
 	if strings.Contains(tc.stderr.String(), EnvWalkForever) {
 		t.Errorf("stderr = %q, want no mention of %s when nothing was excluded", tc.stderr, EnvWalkForever)
+	}
+}
+
+// The reason this fix was reverted once: with init discovering, an unanchored
+// fixture walks out of t.TempDir(). TQ-0017's bound does not help here, since
+// a bare temp directory has no repository root to stop at, so the fixtures
+// carry their own anchor.
+func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
+	outer := t.TempDir()
+	if _, err := InitStore(outer); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadDir(filepath.Join(outer, TaskDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	project := filepath.Join(outer, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: project}, t: t, stdout: stdout, stderr: stderr, root: project}
+	anchorProject(t, project)
+
+	tc.mustRun("init")
+	tc.mustRun("add", "fixture task")
+
+	after, err := os.ReadDir(filepath.Join(outer, TaskDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("the fixture wrote into the queue above it: %d entries, was %d", len(after), len(before))
+	}
+}
+
+// tq init from a subdirectory must adopt the project's queue, not fork one.
+// The project here is deliberately not a Git repository, which is the shape
+// that still breaks: when there is a repository root, taskDirTarget already
+// stops at it and init lands in the right place by accident. The enclosing
+// temp directory carries the .git anchor so the walk cannot escape it.
+func TestCLIInitFindsTheQueueAbove(t *testing.T) {
+	outer := t.TempDir()
+	anchorProject(t, outer)
+
+	project := filepath.Join(outer, "project")
+	nested := filepath.Join(project, "backend")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Directly, not through InitStore: the enclosing anchor would send it to
+	// the repository root, and the point here is a queue the project owns.
+	if err := os.MkdirAll(filepath.Join(project, TaskDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	seedOut, seedErr := &bytes.Buffer{}, &bytes.Buffer{}
+	seed := &testCLI{cli: &cli{stdout: seedOut, stderr: seedErr, dir: project}, t: t, stdout: seedOut, stderr: seedErr, root: project}
+	seed.mustRun("add", "existing work")
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: nested}, t: t, stdout: stdout, stderr: stderr, root: nested}
+
+	var out struct {
+		TaskDir string `json:"task_dir"`
+		Created bool   `json:"created"`
+	}
+	sub.mustRunJSON(&out, "init", "--json")
+
+	if want := filepath.Join(project, TaskDirName); out.TaskDir != want {
+		t.Errorf("task_dir = %q, want the project's queue %q", out.TaskDir, want)
+	}
+	if out.Created {
+		t.Error("created = true, want false: the queue already existed")
+	}
+	if _, err := os.Stat(filepath.Join(nested, TaskDirName)); !os.IsNotExist(err) {
+		t.Error("init forked a second queue in the subdirectory")
+	}
+	if _, err := os.Stat(filepath.Join(outer, TaskDirName)); !os.IsNotExist(err) {
+		t.Error("init created a queue at the enclosing repository root")
+	}
+	sub.reset()
+	if listing := sub.mustRun("list"); !strings.Contains(listing, "existing work") {
+		t.Errorf("the subdirectory lost sight of the project's work: %q", listing)
+	}
+}
+
+// The bound TQ-0017 added is what makes the above safe: discovery must not
+// reach a queue outside the repository, or init adopts it and creates nothing.
+func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
+	outer := t.TempDir()
+	if _, err := InitStore(outer); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(outer, "project")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo}, t: t, stdout: stdout, stderr: stderr, root: repo}
+
+	var out struct {
+		TaskDir string `json:"task_dir"`
+		Created bool   `json:"created"`
+	}
+	tc.mustRunJSON(&out, "init", "--json")
+
+	if want := filepath.Join(repo, TaskDirName); out.TaskDir != want {
+		t.Errorf("task_dir = %q, want the repository's own queue %q", out.TaskDir, want)
+	}
+	if !out.Created {
+		t.Error("created = false, want true: the repository had no queue")
 	}
 }

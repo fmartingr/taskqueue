@@ -125,7 +125,12 @@ func (c *cli) runInit(args []string) int {
 		return code
 	}
 
-	store, err := InitStore(c.dir)
+	// Discover the queue the way every other command does, so init in a
+	// subdirectory adopts the project's queue instead of forking a second one.
+	// OpenStore falls back to creating at the repository root when there is
+	// nothing to find, and discovery stops there too (TQ-0017), so init cannot
+	// adopt a queue from outside the repository.
+	store, err := OpenStore(c.dir)
 	if err != nil {
 		return c.fail(err)
 	}

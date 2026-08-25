@@ -281,8 +281,13 @@ no runtime dependencies.
 
 ## Known limitations (deliberate, for now)
 
-- Two processes creating a task at the same instant can race for the same ID.
-- Simultaneous edits are last-writer-wins; writes are atomic but not locked.
+- Two tq processes creating a task at the same instant can race for the same ID.
+  Within one process — a server, however many requests — allocation is
+  serialised, and a losing racer takes the next ID rather than overwriting.
+- Across processes, simultaneous edits are last-writer-wins, and an appended
+  note is lost outright rather than merged. Within one process, a task's
+  read-modify-write is serialised, so concurrent notes all survive. Writes are
+  atomic either way.
 - No authentication; the server binds to localhost.
 - Every request scans the task directory. Fine at PoC scale.
 - The four statuses are fixed and the board is one project per server.

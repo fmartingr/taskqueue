@@ -1,13 +1,13 @@
 ---
 id: TQ-0009
 title: Concurrent note appends overwrite each other
-status: in-progress
+status: done
 priority: high
 labels:
   - bug
   - component/api
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T18:36:54+02:00
+updated: 2026-08-25T18:40:49+02:00
 ---
 
 ## Finding
@@ -25,3 +25,12 @@ Reproduced: 20 concurrent `POST /api/tasks/TQ-0001/notes` — every request retu
 Take the same store mutex across the Get/AppendNote/Update sequence, so a read-modify-write cannot interleave with another handler.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T18:40:49+02:00 — Already fixed. This is the same defect as TQ-0067, which I filed while working TQ-0008 without noticing this ticket existed; commit 66dd976 moved the Get, AppendNote, Update sequence inside the store as Store.Note, guarded by the mutex, and both handleAddNote and the CLI call it.
+- 2026-08-25T18:40:49+02:00 — Verified against this ticket's own reproduction rather than assumed: 20 concurrent POSTs to /api/tasks/TQ-0001/notes against a live tq serve now leave 20 notes in the file, where this ticket recorded 2. All 20 returned 200.
+- 2026-08-25T18:40:49+02:00 — The cross-process half of this ticket is not fixed and cannot be by a mutex, which is all the Suggested fix here proposes. Measured: 10 separate tq note processes leave 2 of 10 notes. That is the deliberate limitation the README lists.
+- 2026-08-25T18:40:49+02:00 — Sharpened that README entry instead of leaving it. Last-writer-wins understates losing an append, and it said nothing about the in-process guarantee now being real. It states both, with the numbers behind them.

@@ -259,7 +259,10 @@ func scanNotesStart(lines []string, honourFences bool) (start int, balanced bool
 			fenced = !fenced
 			continue
 		}
-		if fenced || !isATXHeading(trimmed) {
+		// Only an unindented heading opens a section. An indented one belongs
+		// to the list item above it — a multi-line note may carry one — and
+		// must not cut the notes section short.
+		if fenced || indented(line) || !isATXHeading(trimmed) {
 			continue
 		}
 		if trimmed == notesHeading {
@@ -277,10 +280,23 @@ func isATXHeading(trimmed string) bool {
 	return hashes > 0 && hashes <= 6 && strings.HasPrefix(trimmed[hashes:], " ")
 }
 
+// indented reports whether a line starts with whitespace.
+func indented(line string) bool {
+	return strings.TrimLeft(line, " \t") != line
+}
+
+// noteIndent is what a note's second and further lines owe the bullet they
+// belong to, so that Markdown keeps reading them as part of it.
+const noteIndent = "  "
+
 // AppendNote appends a timestamped bullet to the task body's notes section,
 // creating it — rule included — at the very end of the body when it is missing.
+// A note that is blank once normalised leaves the body alone.
 func AppendNote(body, text string, ts time.Time) string {
-	note := "- " + ts.Format(time.RFC3339) + " — " + strings.Join(strings.Fields(text), " ")
+	note := noteBullet(text, ts)
+	if note == "" {
+		return body
+	}
 
 	content, notes := notesSection(body)
 	section := notesHeading
@@ -291,6 +307,54 @@ func AppendNote(body, text string, ts time.Time) string {
 		return section + "\n\n" + note
 	}
 	return section + "\n\n" + notes + "\n" + note
+}
+
+// noteBullet renders one note as a single Markdown list item: the first line
+// follows the timestamp and every further line is indented under it, so a note
+// keeps the structure its author gave it — a wrapped sentence, a list, a
+// pasted command — without breaking out of the bullet. It returns "" when the
+// text holds nothing but whitespace.
+func noteBullet(text string, ts time.Time) string {
+	lines := noteLines(text)
+	if len(lines) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("- " + ts.Format(time.RFC3339) + " — " + lines[0])
+	for _, line := range lines[1:] {
+		b.WriteString("\n")
+		if line != "" {
+			b.WriteString(noteIndent + line)
+		}
+	}
+	return b.String()
+}
+
+// noteLines normalises a note's text into the lines of its bullet: line
+// endings are unified, trailing whitespace goes, runs of blank lines collapse
+// to one, and the blank lines around the note are dropped. The first line is
+// also stripped of its indentation, since it sits after the timestamp.
+func noteLines(text string) []string {
+	var lines []string
+	blank := false
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line = strings.TrimRight(strings.TrimSuffix(line, "\r"), " \t")
+		if line == "" {
+			// A blank line only counts once, and never before the first line.
+			blank = len(lines) > 0
+			continue
+		}
+		if blank {
+			lines = append(lines, "")
+			blank = false
+		}
+		if len(lines) == 0 {
+			line = strings.TrimLeft(line, " \t")
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 // TaskPatch is a partial update. Nil pointers mean "leave unchanged", which is

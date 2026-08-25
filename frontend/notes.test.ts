@@ -69,6 +69,16 @@ describe("splitBody", () => {
     expect(splitBody(`Description\n---\n\n## Notes\n\n- ${STAMP} — A note.`).content).toBe("Description\n---");
   });
 
+  // tq note indents the lines after the first under their bullet, so a note
+  // may carry a heading of its own. That heading belongs to the note, and must
+  // not end the section the way an unindented one does.
+  test("an indented heading inside a note is part of the note", () => {
+    expect(splitBody(`Description.\n\n---\n\n## Notes\n\n- ${STAMP} — A note.\n\n  ## Details\n\n  text`)).toEqual({
+      content: "Description.",
+      notes: [{ timestamp: STAMP, text: "A note.\n\n## Details\n\ntext" }],
+    });
+  });
+
   test("an empty section yields no notes", () => {
     expect(splitBody("Description.\n\n---\n\n## Notes")).toEqual({ content: "Description.", notes: [] });
   });

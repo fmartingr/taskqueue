@@ -267,10 +267,34 @@ func TestAppendNote(t *testing.T) {
 			want: "Description.\n\n---\n\n## Notes\n\n- earlier note\n" + note + "Second note.",
 		},
 		{
-			name: "collapses newlines in the note text",
+			name: "keeps the note's own line breaks, indented under the bullet",
 			body: "",
 			text: "line one\nline two",
-			want: "## Notes\n\n" + note + "line one line two",
+			want: "## Notes\n\n" + note + "line one\n  line two",
+		},
+		{
+			name: "a note can hold a list of its own",
+			body: "",
+			text: "Line one.\n\n- bullet a\n- bullet b",
+			want: "## Notes\n\n" + note + "Line one.\n\n  - bullet a\n  - bullet b",
+		},
+		{
+			name: "existing indentation inside a note is kept relative to the bullet",
+			body: "",
+			text: "Ran:\n\n    tq list --json\n",
+			want: "## Notes\n\n" + note + "Ran:\n\n      tq list --json",
+		},
+		{
+			name: "carriage returns, trailing spaces and blank runs are normalised",
+			body: "",
+			text: "line one  \r\n\r\n\r\n\r\nline two\t\n",
+			want: "## Notes\n\n" + note + "line one\n\n  line two",
+		},
+		{
+			name: "a note that is only whitespace is dropped rather than half-written",
+			body: "Description.",
+			text: "  \n\n\t\n",
+			want: "Description.",
 		},
 	}
 
@@ -289,6 +313,42 @@ func TestAppendNote(t *testing.T) {
 			"- 2026-08-25T10:42:00+02:00 — Second note."
 		if got != want {
 			t.Errorf("got:\n%q\nwant:\n%q", got, want)
+		}
+	})
+
+	// A multi-line note has to survive being written, read back and appended
+	// to: the second note must land in the same section, under the first.
+	t.Run("a multi-line note survives a second append", func(t *testing.T) {
+		body := AppendNote("Description.", "Line one.\n\n- bullet a\n- bullet b", ts)
+		got := AppendNote(body, "Second note.", ts.Add(time.Hour))
+		want := "Description.\n\n---\n\n## Notes\n\n" + note + "Line one.\n\n  - bullet a\n  - bullet b\n" +
+			"- 2026-08-25T10:42:00+02:00 — Second note."
+		if got != want {
+			t.Errorf("got:\n%q\nwant:\n%q", got, want)
+		}
+		content, notes := notesSection(got)
+		if content != "Description." {
+			t.Errorf("content = %q, want %q", content, "Description.")
+		}
+		if !strings.Contains(notes, "  - bullet a") {
+			t.Errorf("the note lost its list:\n%q", notes)
+		}
+	})
+
+	// A heading inside a note is indented under its bullet, so it must not be
+	// read as the heading that ends the notes section — otherwise the next
+	// note would open a second one and the board would show the notes as
+	// content.
+	t.Run("a heading inside a note does not end the section", func(t *testing.T) {
+		body := AppendNote("Description.", "Fixed it.\n\n## Details\n\ntext", ts)
+		got := AppendNote(body, "Second note.", ts.Add(time.Hour))
+		want := "Description.\n\n---\n\n## Notes\n\n" + note + "Fixed it.\n\n  ## Details\n\n  text\n" +
+			"- 2026-08-25T10:42:00+02:00 — Second note."
+		if got != want {
+			t.Errorf("got:\n%q\nwant:\n%q", got, want)
+		}
+		if strings.Count(got, notesHeading+"\n") != 1 {
+			t.Errorf("a second notes section was opened:\n%s", got)
 		}
 	})
 }
@@ -343,6 +403,13 @@ func TestNotesSection(t *testing.T) {
 			name:    "notes only",
 			body:    "## Notes\n\n- a note",
 			content: "", notes: "- a note",
+		},
+		{
+			// An indented heading belongs to the bullet above it — a note may
+			// carry one — so it does not open a section of its own.
+			name:    "an indented heading inside a note is part of the note",
+			body:    "Content.\n\n---\n\n## Notes\n\n- a note\n\n  ## Details\n\n  text",
+			content: "Content.", notes: "- a note\n\n  ## Details\n\n  text",
 		},
 	}
 

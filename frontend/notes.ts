@@ -26,6 +26,7 @@ export const NOTES_RULE = "---";
 
 const FENCE_PATTERN = /^(```|~~~)/;
 const HEADING_PATTERN = /^#{1,6}\s/;
+const INDENT_PATTERN = /^[ \t]/;
 const BULLET_PATTERN = /^[-*]\s+/;
 /** A bullet tq wrote: "<timestamp> — <text>", once the marker is stripped. */
 const NOTE_PATTERN = /^(\S+)\s+—\s+([\s\S]*)$/;
@@ -94,7 +95,10 @@ function scanNotesStart(lines: string[], honourFences: boolean): [start: number,
       fenced = !fenced;
       continue;
     }
-    if (fenced || !HEADING_PATTERN.test(trimmed)) continue;
+    // Only an unindented heading opens a section. An indented one belongs to
+    // the list item above it — a multi-line note may carry one — and must not
+    // cut the notes section short.
+    if (fenced || INDENT_PATTERN.test(lines[i]) || !HEADING_PATTERN.test(trimmed)) continue;
     start = trimmed === NOTES_HEADING ? i : -1;
   }
   return [start, !fenced];

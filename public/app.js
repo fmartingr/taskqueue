@@ -3,6 +3,7 @@ var NOTES_HEADING = "## Notes";
 var NOTES_RULE = "---";
 var FENCE_PATTERN = /^(```|~~~)/;
 var HEADING_PATTERN = /^#{1,6}\s/;
+var INDENT_PATTERN = /^[ \t]/;
 var BULLET_PATTERN = /^[-*]\s+/;
 var NOTE_PATTERN = /^(\S+)\s+—\s+([\s\S]*)$/;
 var CONTINUATION_INDENT = "  ";
@@ -43,7 +44,7 @@ function scanNotesStart(lines, honourFences) {
       fenced = !fenced;
       continue;
     }
-    if (fenced || !HEADING_PATTERN.test(trimmed))
+    if (fenced || INDENT_PATTERN.test(lines[i]) || !HEADING_PATTERN.test(trimmed))
       continue;
     start = trimmed === NOTES_HEADING ? i : -1;
   }

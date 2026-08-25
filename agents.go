@@ -294,8 +294,8 @@ done. These are steps in the task, not bookkeeping around it.
 2. `+"`tq show <id> --json`"+` — read it in full, body included.
 3. `+"`tq move <id> in-progress`"+` — claim it, before you touch a file.
 4. `+"`tq note <id> \"what happened\"`"+` — append a timestamped note as you go:
-   decisions, surprises, anything the next reader would need. One note per
-   point; each becomes a single line.
+   decisions, surprises, anything the next reader would need. A note keeps the
+   line breaks you give it, so it can hold a paragraph or a short list.
 5. `+"`tq done <id>`"+` — close it once the work is verified.
 
 Use `+"`tq move <id> <status>`"+` for any other transition.
@@ -323,6 +323,8 @@ Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 - Notes are the last section of a body, introduced by a `+"`---`"+` rule with a blank
   line above it. A `+"`## Notes`"+` heading anywhere else is ordinary content, so a
   body can document notes without `+"`tq note`"+` mistaking prose for notes.
+- Each note is one Markdown list item. The lines after its first are indented
+  under the bullet, which is what keeps a multi-line note inside its note.
 - A task is *ready* when it is neither done nor in-progress and every task in
   `+"`depends_on`"+` exists and is done. A missing dependency blocks it.
 - `+"`--json`"+` prints JSON to stdout and nothing else; errors go to stderr.

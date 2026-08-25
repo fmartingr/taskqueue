@@ -363,10 +363,16 @@ func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
 		"## Working a task",
 		"Claim a task before the first edit and close it before you report the work",
 		"`tq note <id> \"what happened\"`",
+		// A note keeps its line breaks, and the guide has to say so: agents
+		// were told the opposite while the text was being flattened.
+		"A note keeps the\n   line breaks you give it",
 	} {
 		if !strings.Contains(guide, want) {
 			t.Errorf("guide is missing %q", want)
 		}
+	}
+	if strings.Contains(guide, "single line") {
+		t.Error("the guide still describes notes as being flattened to a single line")
 	}
 
 	at := -1

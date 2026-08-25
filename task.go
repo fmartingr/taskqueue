@@ -252,17 +252,24 @@ func notesStart(lines []string) int {
 // scanNotesStart is notesStart over one pass, also reporting whether the code
 // fences it honoured were balanced.
 func scanNotesStart(lines []string, honourFences bool) (start int, balanced bool) {
-	start, fenced := -1, false
+	start, fenced, inItem := -1, false, false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if honourFences && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")) {
 			fenced = !fenced
 			continue
 		}
-		// Only an unindented heading opens a section. An indented one belongs
-		// to the list item above it — a multi-line note may carry one — and
-		// must not cut the notes section short.
-		if fenced || indented(line) || !isATXHeading(trimmed) {
+		// An indented heading is ambiguous: a note's continuation lines are
+		// indented under their bullet and may carry one, but CommonMark also
+		// allows a real heading up to three spaces in. What separates them is
+		// the list item — inside one the heading is the note's own text, and
+		// outside one it is a heading like any other.
+		// A blank line does not end a list item — a multi-line note has one
+		// between its paragraphs — so only a line with content resets this.
+		if !indented(line) && trimmed != "" {
+			inItem = listMarker(trimmed)
+		}
+		if fenced || (indented(line) && inItem) || !isATXHeading(trimmed) {
 			continue
 		}
 		if trimmed == notesHeading {
@@ -278,6 +285,18 @@ func scanNotesStart(lines []string, honourFences bool) (start int, balanced bool
 func isATXHeading(trimmed string) bool {
 	hashes := len(trimmed) - len(strings.TrimLeft(trimmed, "#"))
 	return hashes > 0 && hashes <= 6 && strings.HasPrefix(trimmed[hashes:], " ")
+}
+
+// listMarker reports whether a trimmed line opens a Markdown list item. Notes
+// are written as "- " bullets, but a body may use any of the markers, and an
+// indented line below one is that item's content rather than a heading.
+func listMarker(trimmed string) bool {
+	if len(trimmed) > 1 && strings.ContainsRune("-*+", rune(trimmed[0])) && trimmed[1] == ' ' {
+		return true
+	}
+	digits := len(trimmed) - len(strings.TrimLeft(trimmed, "0123456789"))
+	return digits > 0 && digits < 10 && len(trimmed) > digits+1 &&
+		(trimmed[digits] == '.' || trimmed[digits] == ')') && trimmed[digits+1] == ' '
 }
 
 // indented reports whether a line starts with whitespace.

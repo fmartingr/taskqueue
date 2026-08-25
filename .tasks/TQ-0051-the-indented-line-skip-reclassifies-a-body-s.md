@@ -1,13 +1,13 @@
 ---
 id: TQ-0051
 title: The indented-line skip reclassifies a body's Notes section in both directions
-status: todo
+status: done
 priority: urgent
 labels:
   - bug
   - component/store
 created: 2026-08-25T14:46:51+02:00
-updated: 2026-08-25T14:46:51+02:00
+updated: 2026-08-25T15:54:57+02:00
 ---
 
 ## Finding
@@ -60,3 +60,11 @@ existing `.tasks/*.md` with the pre- and post-diff binaries produces identical
 bodies. The regression bites shapes not currently present.
 
 Found by `/code-review` over 004aa72~1..HEAD; both directions reproduced.
+
+---
+
+## Notes
+
+- 2026-08-25T15:54:56+02:00 — Fixed forward. The unconditional indented() skip is replaced by a list-item test: an indented heading is a note's own text only when it continues a list item, and otherwise it is a heading like any other, which restores CommonMark's 1-3 space allowance.
+- 2026-08-25T15:54:57+02:00 — A blank line does not end a list item — a multi-line note has one between its paragraphs — so only an unindented line with content resets the state. Getting that wrong broke the case TQ-0048 added, which caught it.
+- 2026-08-25T15:54:57+02:00 — Both parsers moved together, as notes.ts's header comment requires, and the TS change is mutation-checked: reverting the predicate alone fails the two new bun tests. Verified end to end that both regression cases now match the pre-regression binary byte for byte, and that all 55 existing task files parse identically to the pre-batch build.

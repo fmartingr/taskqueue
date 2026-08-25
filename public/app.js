@@ -4,6 +4,7 @@ var NOTES_RULE = "---";
 var FENCE_PATTERN = /^(```|~~~)/;
 var HEADING_PATTERN = /^#{1,6}\s/;
 var INDENT_PATTERN = /^[ \t]/;
+var LIST_MARKER_PATTERN = /^([-*+]|\d{1,9}[.)])\s/;
 var BULLET_PATTERN = /^[-*]\s+/;
 var NOTE_PATTERN = /^(\S+)\s+—\s+([\s\S]*)$/;
 var CONTINUATION_INDENT = "  ";
@@ -38,13 +39,17 @@ function notesStart(lines) {
 function scanNotesStart(lines, honourFences) {
   let start = -1;
   let fenced = false;
+  let inItem = false;
   for (let i = 0;i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (honourFences && FENCE_PATTERN.test(trimmed)) {
       fenced = !fenced;
       continue;
     }
-    if (fenced || INDENT_PATTERN.test(lines[i]) || !HEADING_PATTERN.test(trimmed))
+    const isIndented = INDENT_PATTERN.test(lines[i]);
+    if (!isIndented && trimmed !== "")
+      inItem = LIST_MARKER_PATTERN.test(trimmed);
+    if (fenced || isIndented && inItem || !HEADING_PATTERN.test(trimmed))
       continue;
     start = trimmed === NOTES_HEADING ? i : -1;
   }

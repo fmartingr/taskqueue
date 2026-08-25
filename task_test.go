@@ -365,6 +365,23 @@ func TestNotesSection(t *testing.T) {
 			body: "Just content.", content: "Just content.",
 		},
 		{
+			// A heading indented 1-3 spaces is still a heading to CommonMark,
+			// so it must keep closing a mid-body "## Notes" the way an
+			// unindented one does — the whole body stays content.
+			name:    "an indented heading below a mid-body Notes heading is content",
+			body:    "# Task\n\n## Notes\n\nWe keep decisions here, in prose.\n\n ## Acceptance\n\n- ships",
+			content: "# Task\n\n## Notes\n\nWe keep decisions here, in prose.\n\n ## Acceptance\n\n- ships",
+		},
+		{
+			// The same allowance applies to the notes heading itself: indented
+			// by two spaces it still opens the section, so a note appends in
+			// place instead of starting a second one.
+			name:    "an indented Notes heading still opens the section",
+			body:    "Description.\n\n---\n\n  ## Notes\n\n- 2026-01-01T00:00:00Z — old note",
+			content: "Description.",
+			notes:   "- 2026-01-01T00:00:00Z — old note",
+		},
+		{
 			name:    "canonical section",
 			body:    "Content.\n\n---\n\n## Notes\n\n- a note",
 			content: "Content.", notes: "- a note",

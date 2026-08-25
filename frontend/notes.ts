@@ -27,6 +27,8 @@ export const NOTES_RULE = "---";
 const FENCE_PATTERN = /^(```|~~~)/;
 const HEADING_PATTERN = /^#{1,6}\s/;
 const INDENT_PATTERN = /^[ \t]/;
+/** Opens a Markdown list item, so indented lines below it are its content. */
+const LIST_MARKER_PATTERN = /^([-*+]|\d{1,9}[.)])\s/;
 const BULLET_PATTERN = /^[-*]\s+/;
 /** A bullet tq wrote: "<timestamp> — <text>", once the marker is stripped. */
 const NOTE_PATTERN = /^(\S+)\s+—\s+([\s\S]*)$/;
@@ -88,6 +90,7 @@ function notesStart(lines: string[]): number {
 function scanNotesStart(lines: string[], honourFences: boolean): [start: number, balanced: boolean] {
   let start = -1;
   let fenced = false;
+  let inItem = false;
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
@@ -95,10 +98,14 @@ function scanNotesStart(lines: string[], honourFences: boolean): [start: number,
       fenced = !fenced;
       continue;
     }
-    // Only an unindented heading opens a section. An indented one belongs to
-    // the list item above it — a multi-line note may carry one — and must not
-    // cut the notes section short.
-    if (fenced || INDENT_PATTERN.test(lines[i]) || !HEADING_PATTERN.test(trimmed)) continue;
+    // An indented heading is ambiguous: a note's continuation lines are
+    // indented under their bullet and may carry one, but CommonMark also
+    // allows a real heading up to three spaces in. What separates them is the
+    // list item — inside one the heading is the note's own text, and outside
+    // one it is a heading like any other. A blank line does not end an item.
+    const isIndented = INDENT_PATTERN.test(lines[i]);
+    if (!isIndented && trimmed !== "") inItem = LIST_MARKER_PATTERN.test(trimmed);
+    if (fenced || (isIndented && inItem) || !HEADING_PATTERN.test(trimmed)) continue;
     start = trimmed === NOTES_HEADING ? i : -1;
   }
   return [start, !fenced];

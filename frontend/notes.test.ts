@@ -223,3 +223,18 @@ describe("round trip", () => {
     );
   });
 });
+
+test("splitBody keeps an indented heading below a mid-body Notes heading as content", () => {
+  // CommonMark still reads a heading indented 1-3 spaces as a heading, so it
+  // closes a mid-body "## Notes" and the whole body stays content.
+  const body = "# Task\n\n## Notes\n\nProse.\n\n ## Acceptance\n\n- ships";
+  const split = splitBody(body);
+  expect(split.content).toBe(body);
+  expect(split.notes).toEqual([]);
+});
+
+test("splitBody opens the section on an indented Notes heading", () => {
+  const split = splitBody("Description.\n\n---\n\n  ## Notes\n\n- 2026-01-01T00:00:00Z — old");
+  expect(split.content).toBe("Description.");
+  expect(split.notes.length).toBe(1);
+});

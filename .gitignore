@@ -1,5 +1,5 @@
-# Go binary
-tq
+# Go binary (anchored: a bare `tq` would also ignore cmd/tq/)
+/tq
 dist/
 
 # Task data of projects that use tq (never the tool's own repo)

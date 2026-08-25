@@ -6,7 +6,7 @@ priority: normal
 labels:
   - component/cli
 created: 2026-08-25T13:56:09+02:00
-updated: 2026-08-25T14:18:27+02:00
+updated: 2026-08-25T14:47:40+02:00
 ---
 
 ## Finding
@@ -56,3 +56,4 @@ point; each becomes a single line") as a stopgap. Found by `/code-review`.
 
   make test, make lint, make frontend and make build all pass.
 - 2026-08-25T14:18:09+02:00 — Third note lands under the multi-line one, in the same section — the round trip holds.
+- 2026-08-25T14:47:40+02:00 — Regression: the unconditional indented() skip in scanNotesStart reclassifies a body's Notes section in both directions — content swallowed into notes, or a second Notes section opened. Filed as TQ-0051 (urgent). Existing tasks in this repo are unaffected, verified by diffing every file's parsed body across both binaries.

@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T14:47:28+02:00
 ---
 
 ## Finding
@@ -25,3 +25,9 @@ I reproduced it. An AGENTS.md containing `## Task management` / `We track work i
 Rewrite a section only when tq authored it (look for the generated marker or an existing link into the task directory); otherwise leave it alone and say so. Write the file atomically.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T14:47:28+02:00 — Widened by TQ-0045 (commit 004aa72), confirmed by /code-review: the pointer guard was narrowed from the whole document to only the lines inside the found section, so a document that links to the guide from anywhere else — an intro paragraph, a reference-style link, a ./-prefixed path — now falls through to the rewrite branch and loses the entire body of a hand-written Task management section. Those documents were protected by the old whole-document guard and are not now. Recording here rather than as a new ticket, since this ticket already covers the shape.

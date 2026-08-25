@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T13:55:55+02:00
-updated: 2026-08-25T14:02:50+02:00
+updated: 2026-08-25T14:47:40+02:00
 ---
 
 ## Finding
@@ -76,3 +76,4 @@ Found by `/code-review` on TQ-0041; both cases reproduced by hand.
 - 2026-08-25T14:02:48+02:00 — The heading level chosen for an appended section now comes from the same levels slice, so a hash comment in a fence no longer demotes a new section to level two.
 - 2026-08-25T14:02:48+02:00 — Six new tests in agents_test.go, each confirmed failing first: fenced block past the section end, a later fence untouched, a fenced heading ignored, a fenced pointer ignored, an include kept, a pointer outside the section ignored, and the fenced-hash heading level.
 - 2026-08-25T14:02:48+02:00 — taskGuide is untouched and the generated .tasks/AGENTS.md is byte-identical. make test, make lint (0 issues) and make build all pass.
+- 2026-08-25T14:47:40+02:00 — Regression: headingLevels has no unbalanced-fence fallback and fenceDelimiter ignores tab indentation, so a stray fence makes tq init append a duplicate Task management section on every run. Filed as TQ-0052. Narrowing the pointer guard to the section also widened TQ-0014; noted there.

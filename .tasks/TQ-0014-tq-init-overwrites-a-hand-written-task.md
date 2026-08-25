@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T16:09:21+02:00
+updated: 2026-08-25T16:19:26+02:00
 ---
 
 ## Finding
@@ -35,3 +35,4 @@ Filed from a `/code-review` pass at max effort.
 - 2026-08-25T16:09:20+02:00 — SyncAgentsDocs returns a SyncReport with Written and Skipped, and tq init names the skipped files on stderr so the refusal is visible without polluting --json stdout. The JSON gains a skipped key alongside written, which is additive and keeps the agent API compatible.
 - 2026-08-25T16:09:20+02:00 — Two other halves of the ticket: the blank line before the following heading is put back when the section is spliced, and root docs are now written through writeAtomic, the same CreateTemp/Chmod/Sync/Rename dance Store.write already used for task files. The fenced-block half was already fixed by TQ-0045.
 - 2026-08-25T16:09:20+02:00 — Deliberate contract change: TQ-0045 asserted that a fence inside the section is destroyed with the rest of it, since the section was regenerated wholesale. A fence is something a person wrote, so it now makes the section off limits instead. That test was rewritten to assert the document is left untouched.
+- 2026-08-25T16:19:26+02:00 — Superseded by TQ-0055: the authorship guard is deleted along with all root-document handling, so a hand-written Task management section is safe because tq never opens the file. The atomic write introduced here is kept for the guide.

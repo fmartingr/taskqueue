@@ -1,13 +1,14 @@
 ---
 id: TQ-0043
 title: tq init ignores TQ_DIR when locating agent docs, rewriting an unrelated repo's AGENTS.md
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/cli
+  - wontfix
 created: 2026-08-25T13:44:56+02:00
-updated: 2026-08-25T14:12:27+02:00
+updated: 2026-08-25T16:19:12+02:00
 ---
 
 ## Finding
@@ -72,3 +73,5 @@ one fires even when the pointer syntax is a plain Markdown link.
 ## Notes
 
 - 2026-08-25T14:12:27+02:00 — Adjacent case found while verifying TQ-0047 (cad90f9): SyncAgentsDocs derives its doc root from the working directory, not from the discovered task directory, so init in proj/backend of a non-Git project still creates a pointer at backend/AGENTS.md. It is now a correct pointer (../.tasks/AGENTS.md) rather than one aimed at a forked queue, so the harm is reduced, but the root cause is the same docRoot() question this ticket covers.
+- 2026-08-25T16:19:12+02:00 — Rejected by TQ-0055: docRoot is deleted along with the rest of the root-document handling. tq init writes only inside the task directory, so it can no longer write a pointer into whatever repository the shell happens to be in, with TQ_DIR set or otherwise.
+- 2026-08-25T16:19:12+02:00 — The doc-root residue noted here while verifying TQ-0047 — a stray pointer AGENTS.md left in a subdirectory — goes away with the same change.

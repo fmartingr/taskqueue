@@ -73,9 +73,9 @@ Usage:
   tq <command> [arguments]
 
 Commands:
-  init                            Create the %s directory and refresh the agent
-                                  instructions (%s and the pointer to it from
-                                  AGENTS.md/CLAUDE.md)
+  init                            Create the %s directory and write the agent
+                                  guide (%s); prints the line to add to your
+                                  own AGENTS.md/CLAUDE.md
   add <title> [flags]             Create a task
   list [flags]                    List tasks
   show <id> [--json]              Show one task
@@ -132,7 +132,7 @@ func (c *cli) runInit(args []string) int {
 
 	// Keep the agent instructions current: the guide inside the task directory
 	// and the pointer to it from the repository's own AGENTS.md/CLAUDE.md.
-	report, err := SyncAgentsDocs(store, c.dir)
+	written, err := SyncAgentsDocs(store)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -141,8 +141,8 @@ func (c *cli) runInit(args []string) int {
 		return c.printJSON(map[string]any{
 			"task_dir": store.Dir,
 			"created":  store.Created,
-			"written":  report.Written,
-			"skipped":  report.Skipped,
+			"written":  written,
+			"pointer":  GuidePointer(store),
 		})
 	}
 	if store.Created {
@@ -150,13 +150,12 @@ func (c *cli) runInit(args []string) int {
 	} else {
 		fmt.Fprintf(c.stdout, "Task queue already initialized in %s\n", store.Dir)
 	}
-	for _, path := range report.Written {
+	for _, path := range written {
 		fmt.Fprintf(c.stdout, "Wrote %s\n", path)
 	}
-	// A warning, not data: the file still has no pointer at the guide.
-	for _, path := range report.Skipped {
-		fmt.Fprintf(c.stderr, "Left %s alone: its %q section is not the stub tq writes\n", path, taskSectionTitle)
-	}
+	// tq does not edit the repository's own agent instructions, so say what to
+	// put there. One line, written once, and the guide comes with it.
+	fmt.Fprintf(c.stdout, "\nAdd this line to your AGENTS.md or CLAUDE.md so agents read the guide:\n\n    %s\n", GuidePointer(store))
 	return exitOK
 }
 

@@ -54,18 +54,18 @@ does not scatter task directories around the tree) and says so on stderr.
 `tq init` is still worth running once, and is harmless to repeat: besides
 creating the directory it writes `.tasks/AGENTS.md` — a short CLI cheat sheet
 for coding agents, generated from the statuses, priorities and exit codes the
-binary actually implements — and adds a pointer to it from the repository's
-`AGENTS.md`/`CLAUDE.md`:
+binary actually implements.
+
+Point your agents at it yourself, by adding one line to your `AGENTS.md`,
+`CLAUDE.md` or whatever your tool reads:
 
 ```md
-## Task management
-
-See [AGENTS.md](.tasks/AGENTS.md)
+@.tasks/AGENTS.md
 ```
 
-Existing files are only appended to, an existing pointer is refreshed when the
-task directory moves, and nothing is rewritten when it is already correct. If
-the repository has neither file, `AGENTS.md` is created.
+`tq init` prints that line every time, so you never have to remember the path.
+It does not edit those files: they are yours, they are committed, and a tool
+that rewrites a document it did not author eventually destroys something.
 
 Commit `.tasks/` with your code — task history lives in the same repository as
 the work it describes.

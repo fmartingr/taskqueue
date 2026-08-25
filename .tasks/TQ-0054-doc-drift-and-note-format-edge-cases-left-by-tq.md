@@ -7,7 +7,7 @@ labels:
   - docs
   - component/cli
 created: 2026-08-25T14:47:28+02:00
-updated: 2026-08-25T14:47:28+02:00
+updated: 2026-08-25T16:19:27+02:00
 ---
 
 ## Finding
@@ -59,3 +59,9 @@ Two further items were reported as PLAUSIBLE and are not verified here: the
 `HEADING_PATTERN` regex in `frontend/notes.ts` matches a tab where Go's
 `isATXHeading` requires a literal space, and `AppendNote`'s new empty-note
 no-op is a silent success that its two callers happen to make unreachable.
+
+---
+
+## Notes
+
+- 2026-08-25T16:19:27+02:00 — Partly overtaken by TQ-0055. The headingLevel strictness item is moot, since headingLevel is deleted. The tq init help text and README are corrected as part of that change. The notes items stand: README still documents the old one-line-per-note form, Go and TS still normalise differently, and noteLines still mishandles a lone CR and a uniformly indented paste.

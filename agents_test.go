@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -11,14 +10,14 @@ import (
 func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 	store := newTestStore(t)
 
-	report, err := SyncAgentsDocs(store, filepath.Dir(store.Dir))
+	written, err := SyncAgentsDocs(store)
 	if err != nil {
 		t.Fatalf("SyncAgentsDocs: %v", err)
 	}
 
 	guide, err := os.ReadFile(filepath.Join(store.Dir, AgentsFileName))
 	if err != nil {
-		t.Fatalf("guide not report.Written: %v", err)
+		t.Fatalf("guide not written: %v", err)
 	}
 	for _, want := range []string{
 		"tq ready --json", "tq show <id> --json", "tq move <id> in-progress",
@@ -30,8 +29,8 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 			t.Errorf("guide is missing %q", want)
 		}
 	}
-	if len(report.Written) == 0 || report.Written[0] != filepath.Join(store.Dir, AgentsFileName) {
-		t.Errorf("written = %v, want it to start with the guide", report.Written)
+	if len(written) == 0 || written[0] != filepath.Join(store.Dir, AgentsFileName) {
+		t.Errorf("written = %v, want it to start with the guide", written)
 	}
 
 	// The guide is not a task and must not disturb the store.
@@ -41,12 +40,12 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 	}
 
 	// Running again rewrites nothing.
-	report, err = SyncAgentsDocs(store, filepath.Dir(store.Dir))
+	written, err = SyncAgentsDocs(store)
 	if err != nil {
 		t.Fatalf("second SyncAgentsDocs: %v", err)
 	}
-	if len(report.Written) != 0 {
-		t.Errorf("written = %v, want nothing on a second run", report.Written)
+	if len(written) != 0 {
+		t.Errorf("written = %v, want nothing on a second run", written)
 	}
 }
 
@@ -57,7 +56,7 @@ func TestSyncAgentsDocsRefreshesAStaleGuide(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := SyncAgentsDocs(store, filepath.Dir(store.Dir)); err != nil {
+	if _, err := SyncAgentsDocs(store); err != nil {
 		t.Fatalf("SyncAgentsDocs: %v", err)
 	}
 	guide, err := os.ReadFile(path)
@@ -69,105 +68,7 @@ func TestSyncAgentsDocsRefreshesAStaleGuide(t *testing.T) {
 	}
 }
 
-func TestSyncAgentsDocsCreatesRootDocWhenMissing(t *testing.T) {
-	root := t.TempDir()
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-
-	doc, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if err != nil {
-		t.Fatalf("root AGENTS.md not created: %v", err)
-	}
-	want := "# Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n"
-	if string(doc) != want {
-		t.Errorf("root doc =\n%q\nwant\n%q", doc, want)
-	}
-}
-
-func TestSyncAgentsDocsUpdatesExistingDocs(t *testing.T) {
-	root := t.TempDir()
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	existing := "# Project\n\nSome instructions.\n"
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(existing), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
-		doc, err := os.ReadFile(filepath.Join(root, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.HasPrefix(string(doc), existing) {
-			t.Errorf("%s lost its original content:\n%s", name, doc)
-		}
-		// The file already has a level-one heading, so the section is nested.
-		if !strings.Contains(string(doc), "## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)") {
-			t.Errorf("%s is missing the task section:\n%s", name, doc)
-		}
-	}
-
-	// A second run leaves the documents untouched.
-	before, _ := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatal(err)
-	}
-	after, _ := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if string(before) != string(after) {
-		t.Errorf("the section was added twice:\n%s", after)
-	}
-}
-
-func TestSyncAgentsDocsRewritesAStaleSection(t *testing.T) {
-	root := t.TempDir()
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	stale := "# Project\n\n## Task management\n\nSee [AGENTS.md](old/place/AGENTS.md)\n\n## Other\n\nKeep me.\n"
-	path := filepath.Join(root, "AGENTS.md")
-	if err := os.WriteFile(path, []byte(stale), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-	doc, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(doc), "old/place") {
-		t.Errorf("the stale link should be gone:\n%s", doc)
-	}
-	if !strings.Contains(string(doc), "See [AGENTS.md](.tasks/AGENTS.md)") {
-		t.Errorf("the section should point at the task directory:\n%s", doc)
-	}
-	if !strings.Contains(string(doc), "## Other\n\nKeep me.") {
-		t.Errorf("the following section should survive:\n%s", doc)
-	}
-	if strings.Count(string(doc), "Task management") != 1 {
-		t.Errorf("the section should not be duplicated:\n%s", doc)
-	}
-}
-
-func TestSyncAgentsDocsLinksToTheConfiguredTaskDir(t *testing.T) {
+func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 	root := t.TempDir()
 	elsewhere := filepath.Join(root, "docs", "queue")
 	t.Setenv(EnvTaskDir, elsewhere)
@@ -176,161 +77,34 @@ func TestSyncAgentsDocsLinksToTheConfiguredTaskDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("instructions\n"), 0o644); err != nil {
+	instructions := "instructions\n"
+	doc := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(doc, []byte(instructions), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-	doc, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The link follows TQ_DIR, not the default .tasks path.
-	if !strings.Contains(string(doc), "See [AGENTS.md](docs/queue/AGENTS.md)") {
-		t.Errorf("link should point at the configured directory:\n%s", doc)
-	}
-}
-
-// A task directory that is the repository root makes the guide and the root
-// document one and the same file. Pointing a document at itself would both
-// bury the guide under a self-referential section and never settle: the guide
-// write drops the section, the pointer write puts it back, forever.
-func TestSyncAgentsDocsSkipsARootDocThatIsTheGuide(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv(EnvTaskDir, root)
-
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if store.Dir != root {
-		t.Fatalf("store.Dir = %q, want the repository root %q", store.Dir, root)
-	}
-
-	guide := filepath.Join(root, AgentsFileName)
-	report, err := SyncAgentsDocs(store, root)
+	written, err := SyncAgentsDocs(store)
 	if err != nil {
 		t.Fatalf("SyncAgentsDocs: %v", err)
 	}
-	if len(report.Written) != 1 || report.Written[0] != guide {
-		t.Errorf("written = %v, want the guide %q once", report.Written, guide)
+	if want := filepath.Join(elsewhere, AgentsFileName); len(written) != 1 || written[0] != want {
+		t.Errorf("written = %v, want just %s", written, want)
 	}
 
-	doc, err := os.ReadFile(guide)
+	// The repository's own instructions are none of tq's business.
+	got, err := os.ReadFile(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(doc) != string(taskGuide(store.Dir)) {
-		t.Errorf("the guide should not gain a pointer to itself:\n%s", doc)
+	if string(got) != instructions {
+		t.Errorf("AGENTS.md was touched:\ngot:\n%s\nwant:\n%s", got, instructions)
 	}
-
-	// Run 2 has nothing left to do.
-	report, err = SyncAgentsDocs(store, root)
-	if err != nil {
-		t.Fatalf("second SyncAgentsDocs: %v", err)
-	}
-	if len(report.Written) != 0 {
-		t.Errorf("written = %v, want nothing on a second run", report.Written)
+	if pointer := GuidePointer(store); !strings.HasSuffix(pointer, "queue/AGENTS.md") {
+		t.Errorf("GuidePointer() = %q, want it to name the configured guide", pointer)
 	}
 }
 
-// The same file can be reached by two different paths, so the identity check
-// cannot be a string comparison: here TQ_DIR goes through a symlink and the
-// doc root does not.
-func TestSyncAgentsDocsSkipsARootDocReachedThroughASymlink(t *testing.T) {
-	root := t.TempDir()
-	link := filepath.Join(t.TempDir(), "queue")
-	if err := os.Symlink(root, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	t.Setenv(EnvTaskDir, link)
-
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-	doc, err := os.ReadFile(filepath.Join(root, AgentsFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(doc), taskSectionTitle) {
-		t.Errorf("the guide should not gain a pointer to itself:\n%s", doc)
-	}
-
-	report, err := SyncAgentsDocs(store, root)
-	if err != nil {
-		t.Fatalf("second SyncAgentsDocs: %v", err)
-	}
-	if len(report.Written) != 0 {
-		t.Errorf("written = %v, want nothing on a second run", report.Written)
-	}
-}
-
-// Only the guide itself is exempt: a second root document beside it is still
-// pointed at the guide, and by the path it actually sits at.
-func TestSyncAgentsDocsPointsASiblingDocAtAGuideInTheRoot(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv(EnvTaskDir, root)
-
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	existing := "# Project\n\nSome instructions.\n"
-	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(existing), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-	doc, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(string(doc), existing) {
-		t.Errorf("CLAUDE.md lost its original content:\n%s", doc)
-	}
-	if !strings.Contains(string(doc), "## Task management\n\nSee [AGENTS.md](AGENTS.md)") {
-		t.Errorf("CLAUDE.md should point at the guide beside it:\n%s", doc)
-	}
-}
-
-func TestSyncAgentsDocsUsesTheRepositoryRoot(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	nested := filepath.Join(root, "backend")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(EnvTaskDir, filepath.Join(nested, ".tasks"))
-
-	store, err := InitStore(nested)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := SyncAgentsDocs(store, nested); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-
-	doc, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if err != nil {
-		t.Fatalf("the pointer belongs at the repository root: %v", err)
-	}
-	if !strings.Contains(string(doc), "See [AGENTS.md](backend/.tasks/AGENTS.md)") {
-		t.Errorf("link should be relative to the repository root:\n%s", doc)
-	}
-}
-
-func TestCLIInitWritesAgentDocs(t *testing.T) {
+func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 	tc := newBareCLI(t)
 
 	out := tc.mustRun("init")
@@ -339,22 +113,31 @@ func TestCLIInitWritesAgentDocs(t *testing.T) {
 		t.Errorf("init should report the guide it wrote, got %q", out)
 	}
 	if _, err := os.Stat(guide); err != nil {
-		t.Fatalf("guide not report.Written: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(tc.root, "AGENTS.md")); err != nil {
-		t.Fatalf("root AGENTS.md not report.Written: %v", err)
+		t.Fatalf("guide not written: %v", err)
 	}
 
-	// Re-running refreshes without reporting spurious writes.
+	// tq no longer manages the repository's own agent instructions: it says
+	// what to add instead of writing the file.
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if _, err := os.Stat(filepath.Join(tc.root, name)); !os.IsNotExist(err) {
+			t.Errorf("init created %s; it must leave those files to the user", name)
+		}
+	}
+	if !strings.Contains(out, "@"+TaskDirName+"/"+AgentsFileName) {
+		t.Errorf("init should print the line to add, got %q", out)
+	}
+
+	// Re-running refreshes without reporting spurious writes, but still says
+	// what to add — the file it names may not exist yet.
 	out = tc.mustRun("init")
 	if strings.Contains(out, "Wrote ") {
 		t.Errorf("nothing should be rewritten on a second init, got %q", out)
 	}
+	if !strings.Contains(out, "@"+TaskDirName+"/"+AgentsFileName) {
+		t.Errorf("the second init should still print the line to add, got %q", out)
+	}
 }
 
-// The guide has to read as a workflow, not a menu: an agent that follows it
-// top to bottom claims a task before editing and closes it before reporting
-// the work done. Numbering the commands is what carries that.
 func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
 	guide := string(taskGuide(filepath.Join("project", ".tasks")))
 
@@ -392,247 +175,5 @@ func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
 			t.Errorf("step %q is out of lifecycle order", step)
 		}
 		at = i
-	}
-}
-
-// A shell fence whose first line is a `#` comment is the commonest construct
-// in an instructions file: it must not read as the heading that ends the
-// section. It used to be enough that the fence was not cut in half — the
-// section was regenerated wholesale, so the fence went with it. TQ-0014
-// tightened that: a fence is something a person wrote, so its presence now
-// makes the whole section off limits and the document is left untouched.
-func TestWithTaskSectionRefusesASectionHoldingAFence(t *testing.T) {
-	doc := "# Project\n\n## Task management\n\nSee [AGENTS.md](old/path.md)\n\n```bash\n# how to run\ntq list\n```\n\n## Other\n\nKeep me.\n"
-
-	updated, changed, refused := withTaskSection(doc, ".tasks/AGENTS.md")
-	if changed {
-		t.Error("a section holding a hand-written fence must not be rewritten")
-	}
-	if !refused {
-		t.Error("refusing to touch the section should be reported")
-	}
-	if updated != doc {
-		t.Errorf("the document should be untouched:\ngot:\n%s\nwant:\n%s", updated, doc)
-	}
-}
-
-// The section boundary is the next real heading, so a fenced block that
-// belongs to a later section is none of tq's business.
-func TestWithTaskSectionLeavesALaterFenceAlone(t *testing.T) {
-	doc := "# Project\n\n## Task management\n\nSee [AGENTS.md](old/path.md)\n\n## Other\n\n```bash\n# how to run\ntq list\n```\n"
-
-	updated, changed, _ := withTaskSection(doc, ".tasks/AGENTS.md")
-	if !changed {
-		t.Fatal("a stale link should be rewritten")
-	}
-	if !strings.Contains(updated, "## Other\n\n```bash\n# how to run\ntq list\n```") {
-		t.Errorf("a fence in another section should survive intact:\n%s", updated)
-	}
-}
-
-// A heading inside a fence is an example, not structure.
-func TestWithTaskSectionIgnoresAFencedHeading(t *testing.T) {
-	doc := "# Project\n\n~~~md\n## Task management\n\nSee [AGENTS.md](example/AGENTS.md)\n~~~\n"
-
-	updated, changed, _ := withTaskSection(doc, ".tasks/AGENTS.md")
-	if !changed {
-		t.Fatal("a document whose only mention is an example needs a real section")
-	}
-	if !strings.Contains(updated, "~~~md\n## Task management\n\nSee [AGENTS.md](example/AGENTS.md)\n~~~") {
-		t.Errorf("the example should survive untouched:\n%s", updated)
-	}
-	if !strings.HasSuffix(updated, "## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n") {
-		t.Errorf("a real section should be appended:\n%s", updated)
-	}
-}
-
-// README-style snippets showing the convention must not make a project opt
-// itself out of the pointer.
-func TestWithTaskSectionIgnoresAFencedPointer(t *testing.T) {
-	doc := "# Project\n\nThe convention looks like this:\n\n```md\nSee [AGENTS.md](.tasks/AGENTS.md)\n```\n"
-
-	updated, changed, _ := withTaskSection(doc, ".tasks/AGENTS.md")
-	if !changed {
-		t.Fatal("a pointer inside an example does not point anywhere")
-	}
-	if !strings.Contains(updated, "## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n") {
-		t.Errorf("the document should gain a section:\n%s", updated)
-	}
-}
-
-// The pointer may be an `@`-include: that is how Claude-style docs pull the
-// guide in, and rewriting it as a Markdown link would break the include.
-func TestWithTaskSectionKeepsAnIncludePointer(t *testing.T) {
-	doc := "# Project\n\n## Task management\n\n@.tasks/AGENTS.md\n"
-
-	updated, changed, _ := withTaskSection(doc, ".tasks/AGENTS.md")
-	if changed || updated != doc {
-		t.Errorf("an include already points at the guide, got changed=%v:\n%s", changed, updated)
-	}
-}
-
-// A pointer only counts where it is: inside the section that is supposed to
-// carry it.
-func TestWithTaskSectionIgnoresAPointerOutsideTheSection(t *testing.T) {
-	doc := "# Project\n\nTasks live in [AGENTS.md](.tasks/AGENTS.md), by the way.\n"
-
-	updated, changed, _ := withTaskSection(doc, ".tasks/AGENTS.md")
-	if !changed {
-		t.Fatal("a passing mention is not a Task management section")
-	}
-	if !strings.HasSuffix(updated, "## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n") {
-		t.Errorf("the document should gain a section:\n%s", updated)
-	}
-}
-
-// The level of an appended heading follows the document's real headings, not a
-// `#` comment that happens to sit in a fence.
-func TestWithTaskSectionIgnoresAFencedHashWhenChoosingItsLevel(t *testing.T) {
-	doc := "Instructions.\n\n```sh\n# not a heading\ntq list\n```\n"
-
-	updated, _, _ := withTaskSection(doc, ".tasks/AGENTS.md")
-	if !strings.Contains(updated, "\n# Task management\n") {
-		t.Errorf("the document has no level-one heading, so the section is one:\n%s", updated)
-	}
-}
-
-// An unclosed fence would otherwise hide every line below it, including a real
-// Task management section — and withTaskSection would then append another one
-// on every run, growing a committed file without bound.
-func TestHeadingLevelsFallsBackOnAnUnbalancedFence(t *testing.T) {
-	lines := []string{"# Project", "", "## Setup", "", "```sh", "make build", "", "## Task management"}
-	levels := headingLevels(lines)
-	if got := levels[len(levels)-1]; got != 2 {
-		t.Errorf("level of the trailing heading = %d, want 2 (the stray fence must not hide it)", got)
-	}
-	if levels[0] != 1 {
-		t.Errorf("level of the first heading = %d, want 1", levels[0])
-	}
-}
-
-func TestWithTaskSectionConvergesPastAStrayFence(t *testing.T) {
-	for _, tc := range []struct{ name, doc string }{
-		{"unclosed fence", "# Project\n\n## Setup\n\n```sh\nmake build\n\n## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n"},
-		{"tab-indented fence", "# Doc\n\n\t```bash\n\techo hi\n```\n\n## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			doc := tc.doc
-			for pass := 1; pass <= 3; pass++ {
-				updated, ok, _ := withTaskSection(doc, ".tasks/AGENTS.md")
-				if ok {
-					t.Fatalf("pass %d rewrote a document that already points at the guide", pass)
-				}
-				doc = updated
-			}
-			if got := strings.Count(doc, taskSectionTitle); got != 1 {
-				t.Errorf("%q appears %d times after three passes, want 1", taskSectionTitle, got)
-			}
-		})
-	}
-}
-
-// A level-one heading hidden behind a stray fence must still be seen, or a
-// second one gets appended to a document that already has one.
-func TestWithTaskSectionSeesAnH1PastAStrayFence(t *testing.T) {
-	updated, ok, _ := withTaskSection("Intro\n\n```\nstuff\n\n# Real Title\n", ".tasks/AGENTS.md")
-	if !ok {
-		t.Fatal("withTaskSection made no change, want a section appended")
-	}
-	if strings.Contains(updated, "\n# "+taskSectionTitle) {
-		t.Errorf("appended a second level-one heading:\n%s", updated)
-	}
-}
-
-// A "Task management" section a person wrote is not tq's to replace. tq only
-// owns the stub it writes itself, so anything else is left alone and reported.
-func TestSyncAgentsDocsLeavesAHandWrittenSectionAlone(t *testing.T) {
-	root := t.TempDir()
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	policy := "# Project\n\n## Task management\n\nWe track work in Jira. Never file tickets here.\n\nSee the runbook at docs/process.md for the escalation path.\n\n## Build\n\nmake all\n"
-	path := filepath.Join(root, "AGENTS.md")
-	if err := os.WriteFile(path, []byte(policy), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	report, err := SyncAgentsDocs(store, root)
-	if err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-	doc, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(doc) != policy {
-		t.Errorf("a hand-report.Written section was rewritten:\ngot:\n%s\nwant:\n%s", doc, policy)
-	}
-	if !slices.Contains(report.Skipped, path) {
-		t.Errorf("Skipped = %v, want it to name %s", report.Skipped, path)
-	}
-	if slices.Contains(report.Written, path) {
-		t.Errorf("Written = %v, should not name a file left alone", report.Written)
-	}
-}
-
-// The stub tq writes is still tq's to update when the task directory moves,
-// including the @-include form.
-func TestSyncAgentsDocsRewritesItsOwnStaleStub(t *testing.T) {
-	for _, tc := range []struct{ name, section string }{
-		{"markdown link", "See [AGENTS.md](old/place/AGENTS.md)"},
-		{"include", "@old/place/AGENTS.md"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			store, err := InitStore(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(root, "AGENTS.md")
-			if err := os.WriteFile(path, []byte("# P\n\n## Task management\n\n"+tc.section+"\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			report, err := SyncAgentsDocs(store, root)
-			if err != nil {
-				t.Fatalf("SyncAgentsDocs: %v", err)
-			}
-			doc, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(doc), "old/place") {
-				t.Errorf("a stale stub should be updated:\n%s", doc)
-			}
-			if !slices.Contains(report.Written, path) {
-				t.Errorf("Written = %v, want it to name %s", report.Written, path)
-			}
-		})
-	}
-}
-
-// The separator before the next heading sits inside the replaced range, so it
-// has to be put back or the headings collide.
-func TestSyncAgentsDocsKeepsTheBlankLineBeforeTheNextHeading(t *testing.T) {
-	root := t.TempDir()
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(root, "AGENTS.md")
-	stale := "# P\n\n## Task management\n\nSee [AGENTS.md](old/AGENTS.md)\n\n## Other\n\nKeep me.\n"
-	if err := os.WriteFile(path, []byte(stale), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := SyncAgentsDocs(store, root); err != nil {
-		t.Fatalf("SyncAgentsDocs: %v", err)
-	}
-	doc, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(doc), "See [AGENTS.md](.tasks/AGENTS.md)\n\n## Other") {
-		t.Errorf("the blank line before the next heading was eaten:\n%q", doc)
 	}
 }

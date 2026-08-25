@@ -7,7 +7,7 @@ labels:
   - component/cli
   - feature
 created: 2026-08-25T10:33:50+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T16:19:26+02:00
 ---
 
 ## Proposal
@@ -23,3 +23,9 @@ See [AGENTS.md](.tasks/AGENTS.md)
 ```
 
 Ensure the path to the tasks folder is the correct one by retrieving it from the settings.
+
+---
+
+## Notes
+
+- 2026-08-25T16:19:26+02:00 — Reverted by TQ-0055. The feature this ticket added — tq init pointing the repository's AGENTS.md/CLAUDE.md at the guide — is removed. Editing a document tq did not author produced seven separate defects (TQ-0014, TQ-0042, TQ-0043, TQ-0045, TQ-0046, TQ-0049, TQ-0052), and the value was one line a person can write once. tq init now prints that line instead.

@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T14:08:39+02:00
-updated: 2026-08-25T14:08:39+02:00
+updated: 2026-08-25T16:19:27+02:00
 ---
 
 ## Finding
@@ -52,3 +52,9 @@ unexpected root in the first place.
 
 Split out of TQ-0046, whose title covered this case but whose Suggested fix
 addressed only the convergence half. Found by verifying that ticket's fix.
+
+---
+
+## Notes
+
+- 2026-08-25T16:19:27+02:00 — Survives TQ-0055 and is now the only remaining way tq can damage a hand-written file. Re-verified after the removal: with TQ_DIR making the task directory the repository root, the guide write still lands on the root AGENTS.md and replaces it. The surrounding machinery is gone, so the fix is now small — refuse to render the guide over a path that already holds a file tq did not write.

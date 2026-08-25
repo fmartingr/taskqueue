@@ -1,3 +1,35 @@
+// frontend/board.ts
+var STATUSES = ["backlog", "todo", "in-progress", "done"];
+function indexTasks(tasks) {
+  return new Map(tasks.map((task) => [task.id, task]));
+}
+function pendingDependencies(task, index) {
+  return (task.depends_on ?? []).filter((id) => index.get(id)?.status !== "done");
+}
+function isReady(task, index) {
+  if (task.status === "done" || task.status === "in-progress")
+    return false;
+  return pendingDependencies(task, index).length === 0;
+}
+function visibleTasks(tasks, filters) {
+  const { status, priority, assignee, label, ready } = filters;
+  const index = indexTasks(tasks);
+  const matches = (haystack, needle) => haystack.toLowerCase().includes(needle.trim().toLowerCase());
+  return tasks.filter((task) => {
+    if (status && task.status !== status)
+      return false;
+    if (priority && task.priority !== priority)
+      return false;
+    if (assignee && !matches(task.assignee ?? "", assignee))
+      return false;
+    if (label && !(task.labels ?? []).some((l) => matches(l, label)))
+      return false;
+    if (ready && !isReady(task, index))
+      return false;
+    return true;
+  });
+}
+
 // frontend/notes.ts
 var NOTES_HEADING = "## Notes";
 var NOTES_RULE = "---";
@@ -103,7 +135,6 @@ function formatNote(note) {
 }
 
 // frontend/app.ts
-var STATUSES = ["backlog", "todo", "in-progress", "done"];
 var POLL_INTERVAL_MS = 3000;
 var state = {
   tasks: [],
@@ -152,35 +183,6 @@ var fetchTasks = () => api("/api/tasks");
 var createTask = (input) => api("/api/tasks", "POST", input);
 var patchTask = (id, patch) => api(`/api/tasks/${id}`, "PATCH", patch);
 var addNote = (id, text) => api(`/api/tasks/${id}/notes`, "POST", { text });
-function indexTasks(tasks) {
-  return new Map(tasks.map((task) => [task.id, task]));
-}
-function pendingDependencies(task, index) {
-  return (task.depends_on ?? []).filter((id) => index.get(id)?.status !== "done");
-}
-function isReady(task, index) {
-  if (task.status === "done" || task.status === "in-progress")
-    return false;
-  return pendingDependencies(task, index).length === 0;
-}
-function visibleTasks() {
-  const { status, priority, assignee, label, ready } = state.filters;
-  const index = indexTasks(state.tasks);
-  const matches = (haystack, needle) => haystack.toLowerCase().includes(needle.trim().toLowerCase());
-  return state.tasks.filter((task) => {
-    if (status && task.status !== status)
-      return false;
-    if (priority && task.priority !== priority)
-      return false;
-    if (assignee && !matches(task.assignee ?? "", assignee))
-      return false;
-    if (label && !(task.labels ?? []).some((l) => matches(l, label)))
-      return false;
-    if (ready && !isReady(task, index))
-      return false;
-    return true;
-  });
-}
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className)
@@ -190,7 +192,7 @@ function element(tag, className, text) {
   return node;
 }
 function render() {
-  const tasks = visibleTasks();
+  const tasks = visibleTasks(state.tasks, state.filters);
   const index = indexTasks(state.tasks);
   board.replaceChildren(...STATUSES.map((status) => renderColumn(status, tasks.filter((task) => task.status === status), index)));
   const total = state.tasks.length;

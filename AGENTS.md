@@ -29,7 +29,7 @@ internal/cli/      Commands, flags, human/JSON output, exit codes
 internal/fsx/      Atomic file write, shared by the two generators
 internal/tqtest/   Test fixtures shared across packages
 internal/integration/ Tests that drive the compiled binary (build tag)
-frontend/          app.ts, notes.ts, index.html, style.css, build.ts (Bun)
+frontend/          app.ts, board.ts, notes.ts, index.html, style.css, build.ts (Bun)
 ```
 
 Dependencies run one way: `task` <- `config` <- `store` <- `guide`, `web`, `cli`.
@@ -52,7 +52,7 @@ make dev            # Bun watch + DEV=1 server
 - Run `make test` after backend changes.
 - Run `make frontend` after frontend changes and commit the `public/` output,
   and `make test-frontend` when the change touches logic that is unit-tested
-  (the pure helpers in `frontend/`, currently `notes.ts`).
+  (the pure helpers in `frontend/`, currently `notes.ts` and `board.ts`).
 - Run `make build` before completing a task.
 - Do not add a database, an index file, a cache or a filesystem watcher. Markdown
   files are the source of truth and every read hits the disk — that is what makes
@@ -91,8 +91,11 @@ make dev            # Bun watch + DEV=1 server
 `go test ./...` covers frontmatter parsing/rendering, the store (with
 `t.TempDir()`), dependency/ready logic, the CLI (through `runCLI`, without
 spawning a binary) and the HTTP API (through `httptest`). Frontend logic that is
-pure — the notes split/join in `frontend/notes.ts` — has `bun test` unit tests
-next to it (`make test-frontend`).
+pure — the notes split/join in `frontend/notes.ts`, and the indexing, dependency
+and filter rules in `frontend/board.ts` — has `bun test` unit tests next to it
+(`make test-frontend`). `board.ts` keeps `app.ts` down to the DOM, and its
+`isReady` is checked against the same cases as `task.IsReady`, since the two are
+separate implementations of one rule.
 
 `make test-integration` is a separate layer behind a build tag, so `go test ./...`
 stays fast. It builds `tq` once and runs it as a process: real exit codes through

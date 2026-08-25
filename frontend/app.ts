@@ -6,26 +6,17 @@
  * tasks created or moved by an agent show up on their own.
  */
 
+import {
+  indexTasks,
+  isReady,
+  pendingDependencies,
+  visibleTasks,
+  STATUSES,
+  type Filters,
+  type Status,
+  type Task,
+} from "./board";
 import { joinBody, splitBody, type Note, type SplitBody } from "./notes";
-
-const STATUSES = ["backlog", "todo", "in-progress", "done"] as const;
-const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
-
-type Status = (typeof STATUSES)[number];
-type Priority = (typeof PRIORITIES)[number];
-
-interface Task {
-  id: string;
-  title: string;
-  status: Status;
-  priority?: Priority;
-  assignee?: string;
-  labels?: string[];
-  depends_on?: string[];
-  created: string;
-  updated: string;
-  body: string;
-}
 
 interface TaskInput {
   title: string;
@@ -42,14 +33,6 @@ interface ServerStatus {
   task_count: number;
   task_dir: string;
   version: string;
-}
-
-interface Filters {
-  status: string;
-  priority: string;
-  assignee: string;
-  label: string;
-  ready: boolean;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -115,43 +98,6 @@ const createTask = (input: TaskInput) => api<Task>("/api/tasks", "POST", input);
 const patchTask = (id: string, patch: Partial<TaskInput>) => api<Task>(`/api/tasks/${id}`, "PATCH", patch);
 const addNote = (id: string, text: string) => api<Task>(`/api/tasks/${id}/notes`, "POST", { text });
 
-// ── Dependencies ────────────────────────────────────────────────
-
-function indexTasks(tasks: Task[]): Map<string, Task> {
-  return new Map(tasks.map((task) => [task.id, task]));
-}
-
-/** Returns the dependencies that are missing or not done yet. */
-function pendingDependencies(task: Task, index: Map<string, Task>): string[] {
-  return (task.depends_on ?? []).filter((id) => index.get(id)?.status !== "done");
-}
-
-function isReady(task: Task, index: Map<string, Task>): boolean {
-  if (task.status === "done" || task.status === "in-progress") return false;
-  return pendingDependencies(task, index).length === 0;
-}
-
-// ── Filtering ───────────────────────────────────────────────────
-
-function visibleTasks(): Task[] {
-  const { status, priority, assignee, label, ready } = state.filters;
-  const index = indexTasks(state.tasks);
-
-  // The assignee and label boxes are search fields, so they match substrings:
-  // typing "agent" keeps agent-api and agent-ui.
-  const matches = (haystack: string, needle: string) =>
-    haystack.toLowerCase().includes(needle.trim().toLowerCase());
-
-  return state.tasks.filter((task) => {
-    if (status && task.status !== status) return false;
-    if (priority && task.priority !== priority) return false;
-    if (assignee && !matches(task.assignee ?? "", assignee)) return false;
-    if (label && !(task.labels ?? []).some((l) => matches(l, label))) return false;
-    if (ready && !isReady(task, index)) return false;
-    return true;
-  });
-}
-
 // ── Rendering ───────────────────────────────────────────────────
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -166,7 +112,7 @@ function element<K extends keyof HTMLElementTagNameMap>(
 }
 
 function render(): void {
-  const tasks = visibleTasks();
+  const tasks = visibleTasks(state.tasks, state.filters);
   const index = indexTasks(state.tasks);
 
   board.replaceChildren(

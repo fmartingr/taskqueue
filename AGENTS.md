@@ -1,0 +1,65 @@
+# AGENTS.md — tq
+
+## Project summary
+
+`tq` is a local-first task queue for agentic development. Each task is a
+Markdown file with YAML frontmatter in `.tasks/`. A CLI serves agents, a Kanban
+board serves humans, and both go through the same Go store, so the Markdown
+files are the only source of truth.
+
+## Tech stack
+
+- **Backend**: Go (standard library, plus `gopkg.in/yaml.v3` for frontmatter)
+- **Frontend**: vanilla TypeScript + CSS, built with Bun, embedded via `go:embed`
+  (no JavaScript dependencies at all, so there is no lockfile to commit)
+- **Layout**: one `package main` at the repository root, flat files by responsibility
+
+```text
+main.go        CLI entry point and version variable
+cli.go         Commands, flags, human/JSON output, exit codes
+server.go      net/http server, REST API, static serving, tq serve
+store.go       Filesystem store: discovery, atomic writes, ID allocation
+task.go        Task model, validation, filters, dependencies, notes
+frontmatter.go YAML frontmatter parse/render
+embed.go       go:embed public/
+frontend/      app.ts, index.html, style.css, build.ts (Bun)
+public/        Built frontend (committed; regenerate with `make frontend`)
+```
+
+## Commands
+
+```bash
+make test       # run after backend changes
+make frontend   # run after frontend changes (updates public/, which is committed)
+make build      # run before completing a task
+make lint       # golangci-lint
+make format     # go fmt + go mod tidy
+make dev        # Bun watch + DEV=1 server
+```
+
+## Rules
+
+- Run `make test` after backend changes.
+- Run `make frontend` after frontend changes and commit the `public/` output.
+- Run `make build` before completing a task.
+- Do not add a database, an index file, a cache or a filesystem watcher. Markdown
+  files are the source of truth and every read hits the disk — that is what makes
+  CLI edits visible to a running server.
+- Do not introduce a frontend framework, a bundler other than Bun, or a Node
+  runtime without an explicit architecture change.
+- Do not have the HTTP layer shell out to the `tq` binary. Both surfaces call the
+  same store functions.
+- Preserve JSON CLI output compatibility; it is the stable agent API.
+- Keep stdout clean when `--json` is active: data on stdout, everything else on
+  stderr.
+- Keep exit codes stable: 0 success, 1 general/validation, 2 task not found,
+  3 no `.tasks` directory.
+- Prefer the Go standard library where practical.
+- Keep the flat `package main` architecture; no `cmd/`, `internal/` or `pkg/`.
+
+## Testing
+
+`go test ./...` covers frontmatter parsing/rendering, the store (with
+`t.TempDir()`), dependency/ready logic, the CLI (through `runCLI`, without
+spawning a binary) and the HTTP API (through `httptest`). There is deliberately
+no browser test stack; the board is verified manually.

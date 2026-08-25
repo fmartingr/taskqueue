@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  format:
+    runs-on: docker
+    container: git.nakama.town/fmartingr/ci-images/ci-base:1.1.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make format
+      - run: git diff --exit-code
+
+  goreleaser-lint:
+    runs-on: docker
+    container: git.nakama.town/fmartingr/ci-images/ci-base:1.1.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/goreleaser-action@v6.4.0
+        with:
+          args: check
+
+  lint:
+    runs-on: docker
+    container: git.nakama.town/fmartingr/ci-images/ci-base:1.1.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make ci-lint
+
+  test:
+    runs-on: docker
+    container: git.nakama.town/fmartingr/ci-images/ci-base:1.1.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make test
+
+  build:
+    runs-on: docker
+    container: git.nakama.town/fmartingr/ci-images/ci-base:1.1.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make build-go
+
+  frontend:
+    # public/ is committed so releases need no Bun; this job fails if it is stale.
+    runs-on: docker
+    container: git.nakama.town/fmartingr/ci-images/ci-base:1.1.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: make frontend
+      - run: git diff --exit-code -- public

@@ -1,0 +1,60 @@
+version: 2
+
+project_name: tq
+
+gitea_urls:
+  api: https://git.nakama.town/api/v1
+  download: https://git.nakama.town
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - binary: tq
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - name_template: >-
+      {{ .ProjectName }}_
+      {{- if eq .Os "darwin" }}Darwin{{- else }}Linux{{- end }}_
+      {{- if eq .Arch "amd64" }}x86_64{{- else }}{{ .Arch }}{{- end }}_{{ .Version }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  groups:
+    - title: Features
+      regexp: "^.*feat.*$"
+      order: 0
+    - title: Bug Fixes
+      regexp: "^.*fix.*$"
+      order: 1
+    - title: Performance
+      regexp: "^.*perf.*$"
+      order: 2
+    - title: Documentation
+      regexp: "^.*docs.*$"
+      order: 3
+    - title: CI/CD
+      regexp: "^.*ci.*$"
+      order: 4
+    - title: Others
+      order: 999
+
+release:
+  gitea:
+    owner: fmartingr
+    name: task-queue
+  prerelease: auto

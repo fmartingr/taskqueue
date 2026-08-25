@@ -1,0 +1,27 @@
+# Go binary
+tq
+task-queue
+dist/
+
+# Task data of projects that use tq (never the tool's own repo)
+# .tasks/ is meant to be committed in *your* project.
+
+# JavaScript
+node_modules/
+
+# Environment
+.env
+
+# Coverage
+coverage.html
+coverage.out
+
+# AI tools
+.claude/
+.cursor/
+
+# macOS
+.DS_Store
+
+# Playwright MCP output
+.playwright-mcp/

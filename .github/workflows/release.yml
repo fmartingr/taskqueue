@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: docker
+    container: git.nakama.town/fmartingr/ci-images/ci-base:1.1.0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run GoReleaser
+        uses: actions/goreleaser-action@v6.4.0
+        with:
+          args: release --clean
+        env:
+          GORELEASER_FORCE_TOKEN: gitea
+          GITEA_TOKEN: ${{ secrets.FORGEJO_TOKEN }}

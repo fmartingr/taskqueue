@@ -12,7 +12,15 @@ import { watch } from "node:fs";
 
 const SOURCE_DIR = "frontend";
 const OUTPUT_DIR = "public";
-const COPIES = ["index.html", "style.css", "icon.png"];
+// favicon.png is a downscaled derivative of the full-size artwork in
+// frontend/icon.png, which stays out of the binary and is used by the README.
+// Bun has no image pipeline and this project takes no JavaScript dependencies,
+// so it is generated once and committed. To regenerate after changing the
+// artwork:
+//
+//   magick frontend/icon.png -resize 256x256 -strip -colors 256 \
+//     -define png:compression-level=9 frontend/favicon.png
+const COPIES = ["index.html", "style.css", "favicon.png"];
 
 async function build(): Promise<void> {
   const started = performance.now();

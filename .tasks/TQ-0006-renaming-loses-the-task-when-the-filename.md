@@ -1,13 +1,13 @@
 ---
 id: TQ-0006
 title: Renaming loses the task when the filename differs only in case
-status: todo
+status: done
 priority: urgent
 labels:
   - bug
   - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T13:18:53+02:00
 ---
 
 ## Finding
@@ -25,3 +25,9 @@ Reproduced on this machine (default case-insensitive APFS): `tq add "Fix bug"` c
 Compare the old and new paths with `os.SameFile` (stat both) instead of `written != current`, and remove the old file only when it is genuinely a different file.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T13:18:53+02:00 — Fixed in Store.Update: the old file is now retired through retireOldFile, which compares the two directory entries with os.SameFile (via Lstat, matching os.Remove) instead of comparing filenames. An entry both names resolve to is renamed into the canonical spelling rather than removed, so a hand-renamed file still converges as readFile documents. Covered by TestRetireOldFile, which runs on every filesystem, and TestUpdateKeepsTheTaskWhenTheFilenameDiffersOnlySpelling, which skips where names cannot alias.

@@ -476,3 +476,164 @@ func TestDiscoverTaskDirEnvOverride(t *testing.T) {
 		t.Errorf("DiscoverTaskDir with a missing %s = %v, want ErrProjectNotFound", EnvTaskDir, err)
 	}
 }
+
+// aliasOnDisk renames a task's file to a name that differs only in spelling.
+// It reports whether the filesystem folded the two names into one entry, which
+// is what makes the alias dangerous: on a case-sensitive, byte-exact
+// filesystem they are simply two files and there is nothing to test.
+func aliasOnDisk(t *testing.T, store *Store, id, alias string) bool {
+	t.Helper()
+	current, err := store.locate(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(store.Dir, current), filepath.Join(store.Dir, alias)); err != nil {
+		t.Fatal(err)
+	}
+	aliased, err := store.locate(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return aliased == alias && alias != current
+}
+
+func TestUpdateKeepsTheTaskWhenTheFilenameDiffersOnlySpelling(t *testing.T) {
+	// A hand-rename, or a checkout of a directory committed from a machine
+	// that folds case or decomposes accents, leaves a name the store accepts
+	// but that the filesystem treats as the same entry as the canonical one.
+	tests := []struct {
+		name      string
+		title     string
+		canonical string
+		alias     string
+	}{
+		{"case", "Fix bug", "TQ-0001-fix-bug.md", "TQ-0001-Fix-Bug.md"},
+		{"normalization", "Caf\u00e9 fix", "TQ-0001-caf\u00e9-fix.md", "TQ-0001-cafe\u0301-fix.md"}, // NFC vs NFD
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t)
+			task := mustCreate(t, store, CreateTaskInput{Title: tt.title})
+			if got := TaskFileName(task); got != tt.canonical {
+				t.Fatalf("TaskFileName = %q, want %q", got, tt.canonical)
+			}
+			if !aliasOnDisk(t, store, task.ID, tt.alias) {
+				t.Skipf("this filesystem keeps %q and %q apart, so there is no alias to lose", tt.canonical, tt.alias)
+			}
+
+			task.Status = StatusInProgress
+			if _, err := store.Update(task); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+
+			reloaded, err := store.Get(task.ID)
+			if err != nil {
+				t.Fatalf("the task should have survived the update: %v", err)
+			}
+			if reloaded.Status != StatusInProgress {
+				t.Errorf("Status = %q, want %q", reloaded.Status, StatusInProgress)
+			}
+			// The alias is a stale title suffix like any other: it converges.
+			entries, err := os.ReadDir(store.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != tt.canonical {
+				t.Errorf("directory contains %v, want only %s", names(entries), tt.canonical)
+			}
+		})
+	}
+}
+
+func names(entries []os.DirEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Name())
+	}
+	return out
+}
+
+// The aliasing tests above only bite on a folding filesystem, so the decision
+// retireOldFile makes is pinned down here on every platform: hard links give
+// two names for one entry anywhere.
+func TestRetireOldFile(t *testing.T) {
+	write := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("task"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The one entry both names resolve to on a folding filesystem, expressed
+	// so that every filesystem can run it: one entry, reached twice.
+	t.Run("a single entry is never removed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "task.md")
+		write(t, path)
+		if err := retireOldFile(path, path); err != nil {
+			t.Fatalf("retireOldFile: %v", err)
+		}
+		if _, err := os.Lstat(path); err != nil {
+			t.Errorf("the written task must survive: %v", err)
+		}
+	})
+
+	// Hard links are two entries sharing one file, so the rename POSIX makes
+	// a no-op leaves both. That is the store's loud "claimed by 2 files"
+	// state, which is recoverable; deleting the task would not be.
+	t.Run("hard links keep the written task", func(t *testing.T) {
+		dir := t.TempDir()
+		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
+		write(t, newPath)
+		if err := os.Link(newPath, oldPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := retireOldFile(oldPath, newPath); err != nil {
+			t.Fatalf("retireOldFile: %v", err)
+		}
+		if _, err := os.Lstat(newPath); err != nil {
+			t.Errorf("the written task must survive: %v", err)
+		}
+	})
+
+	t.Run("a genuinely different file is removed", func(t *testing.T) {
+		dir := t.TempDir()
+		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
+		write(t, oldPath)
+		write(t, newPath)
+		if err := retireOldFile(oldPath, newPath); err != nil {
+			t.Fatalf("retireOldFile: %v", err)
+		}
+		if _, err := os.Lstat(oldPath); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the old file should be gone, got %v", err)
+		}
+		if _, err := os.Lstat(newPath); err != nil {
+			t.Errorf("the written task must survive: %v", err)
+		}
+	})
+
+	t.Run("a dangling symlink is unlinked", func(t *testing.T) {
+		dir := t.TempDir()
+		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
+		write(t, newPath)
+		if err := os.Symlink(filepath.Join(dir, "gone.md"), oldPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := retireOldFile(oldPath, newPath); err != nil {
+			t.Fatalf("retireOldFile: %v", err)
+		}
+		// Left behind, it would be a second file claiming the same task ID.
+		if _, err := os.Lstat(oldPath); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the dangling link should be gone, got %v", err)
+		}
+	})
+
+	t.Run("an already removed old file is not an error", func(t *testing.T) {
+		dir := t.TempDir()
+		newPath := filepath.Join(dir, "new.md")
+		write(t, newPath)
+		if err := retireOldFile(filepath.Join(dir, "old.md"), newPath); err != nil {
+			t.Errorf("retireOldFile: %v", err)
+		}
+	})
+}

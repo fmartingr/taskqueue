@@ -334,14 +334,44 @@ func (s *Store) Update(task Task) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	// A retitled task moves to a new filename; drop the old one only once the
-	// new file is safely on disk.
+	// A retitled task moves to a new filename; the task itself is now safely
+	// on disk either way, and only the file it used to live in is left.
 	if written != current {
-		if err := os.Remove(filepath.Join(s.Dir, current)); err != nil {
-			return Task{}, fmt.Errorf("renaming %s to %s: %w", current, written, err)
+		if err := retireOldFile(filepath.Join(s.Dir, current), filepath.Join(s.Dir, written)); err != nil {
+			return Task{}, fmt.Errorf("saved %s but could not retire %s: %w", written, current, err)
 		}
 	}
 	return task, nil
+}
+
+// retireOldFile disposes of the file a task used to live in, now that it has
+// been written under a new name. Comparing the two names would not do: on a
+// case-insensitive or normalizing filesystem they can be one directory entry,
+// and removing it would delete the task that was just written. Such an entry
+// is renamed into the canonical spelling instead, so a hand-renamed file
+// converges like any other stale name.
+func retireOldFile(oldPath, newPath string) error {
+	// Lstat rather than Stat, to match os.Remove: both act on the directory
+	// entry itself, so a symlink is compared as a symlink and a dangling one
+	// still gets unlinked.
+	oldInfo, err := os.Lstat(oldPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // another writer already removed it
+		}
+		return err
+	}
+	newInfo, err := os.Lstat(newPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return os.Remove(oldPath) // the new file is gone; the old one is stale
+	}
+	if os.SameFile(oldInfo, newInfo) {
+		return os.Rename(oldPath, newPath)
+	}
+	return os.Remove(oldPath)
 }
 
 // Delete removes a task file.

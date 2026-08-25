@@ -67,6 +67,7 @@ make dev            # Bun watch + DEV=1 server
   merely because a project has not been initialised.
 - Prefer the Go standard library where practical.
 - Keep the flat `package main` architecture; no `cmd/`, `internal/` or `pkg/`.
+- Use this project for task management. See [Task management](#task-management).
 
 ## Testing
 
@@ -79,4 +80,4 @@ that touches the DOM is verified manually.
 
 ## Task management
 
-See [AGENTS.md](.tasks/AGENTS.md)
+@.tasks/AGENTS.md

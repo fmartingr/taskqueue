@@ -71,6 +71,24 @@ func (tc *testCLI) mustRunJSON(target any, args ...string) {
 	}
 }
 
+// in returns a CLI, with its own output buffers, running from a subdirectory
+// of tc's project — what an agent working inside the tree sees.
+func (tc *testCLI) in(elem ...string) *testCLI {
+	tc.t.Helper()
+	dir := filepath.Join(append([]string{tc.root}, elem...)...)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		tc.t.Fatal(err)
+	}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	return &testCLI{
+		cli:    &cli{stdout: stdout, stderr: stderr, dir: dir},
+		t:      tc.t,
+		stdout: stdout,
+		stderr: stderr,
+		root:   tc.root,
+	}
+}
+
 func TestCLIInit(t *testing.T) {
 	tc := newBareCLI(t)
 
@@ -88,6 +106,64 @@ func TestCLIInit(t *testing.T) {
 	out = tc.mustRun("init")
 	if !strings.Contains(out, "already initialized") {
 		t.Errorf("second init output = %q, want it to say the queue already exists", out)
+	}
+}
+
+// A project that is not a Git repository has nothing to anchor the task
+// directory to, so init has to walk up for one exactly like every other
+// command: creating a second queue in a subdirectory would hide the work
+// already in the parent.
+func TestCLIInitFindsTheQueueAbove(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Existing work")
+
+	sub := tc.in("backend")
+	var result struct {
+		TaskDir string `json:"task_dir"`
+		Created bool   `json:"created"`
+	}
+	sub.mustRunJSON(&result, "init", "--json")
+
+	if want := filepath.Join(tc.root, TaskDirName); result.TaskDir != want {
+		t.Errorf("task_dir = %q, want the queue above at %q", result.TaskDir, want)
+	}
+	if result.Created {
+		t.Error("created = true, but the queue already existed above")
+	}
+	if _, err := os.Stat(filepath.Join(tc.root, "backend", TaskDirName)); err == nil {
+		t.Errorf("init created a second %s in the subdirectory", TaskDirName)
+	}
+
+	var tasks []Task
+	sub.mustRunJSON(&tasks, "list", "--json")
+	if len(tasks) != 1 || tasks[0].Title != "Existing work" {
+		t.Errorf("list from the subdirectory = %+v, want the task from the queue above", tasks)
+	}
+}
+
+// Discovery must not cost the documented placement of a *new* queue: with
+// nothing to find, it still belongs at the root of the enclosing repository.
+func TestCLIInitCreatesAtTheRepositoryRoot(t *testing.T) {
+	tc := newBareCLI(t)
+	if err := os.MkdirAll(filepath.Join(tc.root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	sub := tc.in("src", "deep")
+	var result struct {
+		TaskDir string `json:"task_dir"`
+		Created bool   `json:"created"`
+	}
+	sub.mustRunJSON(&result, "init", "--json")
+
+	if want := filepath.Join(tc.root, TaskDirName); result.TaskDir != want {
+		t.Errorf("task_dir = %q, want %q", result.TaskDir, want)
+	}
+	if !result.Created {
+		t.Error("created = false, but this init made the queue")
+	}
+	if _, err := os.Stat(filepath.Join(tc.root, "src", "deep", TaskDirName)); err == nil {
+		t.Errorf("init created a %s in the subdirectory", TaskDirName)
 	}
 }
 

@@ -125,7 +125,11 @@ func (c *cli) runInit(args []string) int {
 		return code
 	}
 
-	store, err := InitStore(c.dir)
+	// Discovery first, exactly like every other command: an existing queue
+	// above the working directory is the project's queue, and a second one
+	// here would hide it from everything run below this point. Only when
+	// there is nothing to find does this create one, at the repository root.
+	store, err := OpenStore(c.dir)
 	if err != nil {
 		return c.fail(err)
 	}

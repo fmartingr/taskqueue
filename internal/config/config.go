@@ -1,4 +1,4 @@
-package taskqueue
+package config
 
 import (
 	"errors"
@@ -66,7 +66,7 @@ func FindConfig(startDir string) (*Config, error) {
 		return nil, err
 	}
 
-	stopAt := walkBoundary(dir)
+	stopAt := WalkBoundary(dir)
 	for {
 		path := filepath.Join(dir, ConfigFileName)
 		switch _, err := os.Stat(path); {
@@ -127,16 +127,16 @@ func configTarget(startDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if root, ok := repositoryRoot(dir); ok {
+	if root, ok := RepositoryRoot(dir); ok {
 		dir = root
 	}
 	return filepath.Join(dir, ConfigFileName), nil
 }
 
-// writeConfigIfMissing writes the marker for a task directory that has none,
+// WriteConfigIfMissing writes the marker for a task directory that has none,
 // and reports the path when it wrote one. Unlike the generated guide, this file
 // is the user's: an existing one is never touched, whatever it says.
-func writeConfigIfMissing(startDir, taskDir string) (string, error) {
+func WriteConfigIfMissing(startDir, taskDir string) (string, error) {
 	existing, err := FindConfig(startDir)
 	if err != nil || existing != nil {
 		return "", err

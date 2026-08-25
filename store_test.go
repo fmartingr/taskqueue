@@ -10,6 +10,10 @@ import (
 	"testing"
 
 	"github.com/fmartingr/taskqueue/internal/task"
+
+	"github.com/fmartingr/taskqueue/internal/config"
+
+	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
 
 // TestMain clears the environment the whole suite runs under. TQ_DIR is the
@@ -25,7 +29,7 @@ func TestMain(m *testing.M) {
 // temp directory. Individual tests still set these with t.Setenv when that is
 // what they are testing.
 func isolate() {
-	for _, name := range []string{EnvTaskDir, EnvWalkForever} {
+	for _, name := range []string{config.EnvTaskDir, config.EnvWalkForever} {
 		_ = os.Unsetenv(name)
 	}
 }
@@ -49,8 +53,8 @@ func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	// Belt and braces: TestMain cleared the ambient values, this clears
 	// anything a test set before reaching for a fixture.
-	t.Setenv(EnvTaskDir, "")
-	t.Setenv(EnvWalkForever, "")
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
 	root := testRoot(t)
 	store, err := InitStore(root)
 	if err != nil {
@@ -74,7 +78,7 @@ func TestInitStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	if want := filepath.Join(root, TaskDirName); store.Dir != want {
+	if want := filepath.Join(root, config.TaskDirName); store.Dir != want {
 		t.Errorf("Dir = %q, want %q", store.Dir, want)
 	}
 	if info, err := os.Stat(store.Dir); err != nil || !info.IsDir() {
@@ -101,7 +105,7 @@ func TestOpenStoreCreatesTaskDirOnDemand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	if want := filepath.Join(root, TaskDirName); store.Dir != want {
+	if want := filepath.Join(root, config.TaskDirName); store.Dir != want {
 		t.Errorf("Dir = %q, want %q", store.Dir, want)
 	}
 	if !store.Created {
@@ -137,11 +141,11 @@ func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	if want := filepath.Join(root, TaskDirName); store.Dir != want {
+	if want := filepath.Join(root, config.TaskDirName); store.Dir != want {
 		t.Errorf("Dir = %q, want %q", store.Dir, want)
 	}
-	if _, err := os.Stat(filepath.Join(nested, TaskDirName)); err == nil {
-		t.Errorf("no %s should have been created in the subdirectory", TaskDirName)
+	if _, err := os.Stat(filepath.Join(nested, config.TaskDirName)); err == nil {
+		t.Errorf("no %s should have been created in the subdirectory", config.TaskDirName)
 	}
 }
 
@@ -487,7 +491,7 @@ func TestDiscoverTaskDirWalksUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
-	if want := filepath.Join(root, TaskDirName); dir != want {
+	if want := filepath.Join(root, config.TaskDirName); dir != want {
 		t.Errorf("dir = %q, want %q", dir, want)
 	}
 }
@@ -507,20 +511,20 @@ func TestDiscoverTaskDirEnvOverride(t *testing.T) {
 	}
 	elsewhere := testRoot(t)
 
-	t.Setenv(EnvTaskDir, store.Dir)
+	t.Setenv(config.EnvTaskDir, store.Dir)
 	dir, err := DiscoverTaskDir(elsewhere)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
 	if dir != store.Dir {
-		t.Errorf("dir = %q, want the %s override %q", dir, EnvTaskDir, store.Dir)
+		t.Errorf("dir = %q, want the %s override %q", dir, config.EnvTaskDir, store.Dir)
 	}
 
 	// A missing override is "not there yet", which is what lets OpenStore
 	// create it.
-	t.Setenv(EnvTaskDir, filepath.Join(elsewhere, "missing"))
+	t.Setenv(config.EnvTaskDir, filepath.Join(elsewhere, "missing"))
 	if _, err := DiscoverTaskDir(elsewhere); !errors.Is(err, ErrProjectNotFound) {
-		t.Errorf("DiscoverTaskDir with a missing %s = %v, want ErrProjectNotFound", EnvTaskDir, err)
+		t.Errorf("DiscoverTaskDir with a missing %s = %v, want ErrProjectNotFound", config.EnvTaskDir, err)
 	}
 }
 
@@ -703,7 +707,7 @@ func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
 	}
 	// The message has to explain itself: the queue is plainly there, one level
 	// up, so "not found" alone reads as a bug.
-	for _, want := range []string{"repository root", EnvWalkForever} {
+	for _, want := range []string{"repository root", config.EnvWalkForever} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to mention %q", err, want)
 		}
@@ -719,13 +723,13 @@ func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(EnvWalkForever, "true")
+	t.Setenv(config.EnvWalkForever, "true")
 
 	dir, err := DiscoverTaskDir(repo)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
-	if want := filepath.Join(outer, TaskDirName); dir != want {
+	if want := filepath.Join(outer, config.TaskDirName); dir != want {
 		t.Errorf("dir = %q, want %q", dir, want)
 	}
 }
@@ -740,7 +744,7 @@ func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(EnvWalkForever, "1")
+	t.Setenv(config.EnvWalkForever, "1")
 
 	if _, err := DiscoverTaskDir(repo); !errors.Is(err, ErrProjectNotFound) {
 		t.Errorf("err = %v, want the bound to hold for a value other than \"true\"", err)
@@ -766,7 +770,7 @@ func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
-	if want := filepath.Join(repo, TaskDirName); dir != want {
+	if want := filepath.Join(repo, config.TaskDirName); dir != want {
 		t.Errorf("dir = %q, want %q", dir, want)
 	}
 }
@@ -775,15 +779,15 @@ func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
 // them to use — must still get an isolated suite. Without this the whole suite
 // operates on their real queue, and one test deletes it.
 func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
-	outside := filepath.Join(testRoot(t), "real", TaskDirName)
+	outside := filepath.Join(testRoot(t), "real", config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(EnvTaskDir, outside)
+	t.Setenv(config.EnvTaskDir, outside)
 
 	store := newTestStore(t)
 	if store.Dir == outside {
-		t.Fatalf("newTestStore used the ambient %s: %s", EnvTaskDir, store.Dir)
+		t.Fatalf("newTestStore used the ambient %s: %s", config.EnvTaskDir, store.Dir)
 	}
 	mustCreate(t, store, CreateTaskInput{Title: "fixture task"})
 
@@ -792,7 +796,7 @@ func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Errorf("the fixture wrote into the directory %s names: %d entries", EnvTaskDir, len(entries))
+		t.Errorf("the fixture wrote into the directory %s names: %d entries", config.EnvTaskDir, len(entries))
 	}
 }
 
@@ -801,12 +805,12 @@ func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 // rather than on a walk, because there is nowhere above testRoot(t) a test can
 // safely plant a queue to walk into.
 func TestFixturesNeutraliseAmbientConfiguration(t *testing.T) {
-	t.Setenv(EnvTaskDir, "/somewhere/real/.tasks")
-	t.Setenv(EnvWalkForever, "true")
+	t.Setenv(config.EnvTaskDir, "/somewhere/real/.tasks")
+	t.Setenv(config.EnvWalkForever, "true")
 
 	newTestStore(t)
 
-	for _, name := range []string{EnvTaskDir, EnvWalkForever} {
+	for _, name := range []string{config.EnvTaskDir, config.EnvWalkForever} {
 		if got := os.Getenv(name); got != "" {
 			t.Errorf("%s = %q after newTestStore, want it cleared", name, got)
 		}
@@ -829,7 +833,7 @@ func TestFixturesStayInsideTempDirWhenTMPDIRIsInARepository(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	real := filepath.Join(repo, TaskDirName)
+	real := filepath.Join(repo, config.TaskDirName)
 	if err := os.MkdirAll(real, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +995,7 @@ func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
 // tasks live, from anywhere in the project.
 func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
 	root := testRoot(t)
-	writeConfig(t, root, "version: 1\npath: docs/queue\n")
+	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
 	want := filepath.Join(root, "docs", "queue")
 	if err := os.MkdirAll(want, 0o755); err != nil {
 		t.Fatal(err)
@@ -1014,7 +1018,7 @@ func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
 // queue is created where it says.
 func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
 	root := testRoot(t)
-	writeConfig(t, root, "version: 1\npath: docs/queue\n")
+	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
 
 	store, err := InitStore(filepath.Join(root, "src"))
 	if err != nil {
@@ -1028,12 +1032,12 @@ func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
 // TQ_DIR is the task directory, full stop — the config's path is ignored.
 func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
 	root := testRoot(t)
-	writeConfig(t, root, "version: 1\npath: from-config\n")
+	tqtest.WriteConfig(t, root, "version: 1\npath: from-config\n")
 	override := filepath.Join(root, "from-env")
 	if err := os.MkdirAll(override, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(EnvTaskDir, override)
+	t.Setenv(config.EnvTaskDir, override)
 
 	dir, err := DiscoverTaskDir(root)
 	if err != nil {
@@ -1049,7 +1053,7 @@ func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
 // guessing it would take to claim it is what the marker replaces.
 func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
 	root := testRoot(t)
-	if err := os.MkdirAll(filepath.Join(root, TaskDirName), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, config.TaskDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1057,7 +1061,7 @@ func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Errorf("err = %v, want ErrProjectNotFound", err)
 	}
-	if err != nil && !strings.Contains(err.Error(), ConfigFileName) {
+	if err != nil && !strings.Contains(err.Error(), config.ConfigFileName) {
 		t.Errorf("err = %q, want it to name the file tq looks for", err)
 	}
 }
@@ -1066,11 +1070,11 @@ func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
 // their file is wrong, not have a queue created somewhere else.
 func TestDiscoverTaskDirReportsABrokenConfig(t *testing.T) {
 	root := testRoot(t)
-	writeConfig(t, root, "version: 99\n")
+	tqtest.WriteConfig(t, root, "version: 99\n")
 
 	_, err := DiscoverTaskDir(root)
-	if !errors.Is(err, ErrConfig) {
-		t.Errorf("err = %v, want it to wrap ErrConfig", err)
+	if !errors.Is(err, config.ErrConfig) {
+		t.Errorf("err = %v, want it to wrap config.ErrConfig", err)
 	}
 	if errors.Is(err, ErrProjectNotFound) {
 		t.Errorf("err = %v, must not be reported as a missing task directory", err)
@@ -1086,9 +1090,9 @@ func TestInitStoreWritesTheConfigMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	cfg, err := FindConfig(root)
+	cfg, err := config.FindConfig(root)
 	if err != nil {
-		t.Fatalf("FindConfig: %v", err)
+		t.Fatalf("config.FindConfig: %v", err)
 	}
 	if cfg == nil {
 		t.Fatal("no config written")
@@ -1096,8 +1100,8 @@ func TestInitStoreWritesTheConfigMarker(t *testing.T) {
 	if cfg.TaskDir() != store.Dir {
 		t.Errorf("config points at %q, want the created %q", cfg.TaskDir(), store.Dir)
 	}
-	if cfg.Version != ConfigVersion {
-		t.Errorf("Version = %d, want %d", cfg.Version, ConfigVersion)
+	if cfg.Version != config.ConfigVersion {
+		t.Errorf("Version = %d, want %d", cfg.Version, config.ConfigVersion)
 	}
 }
 
@@ -1105,7 +1109,7 @@ func TestInitStoreWritesTheConfigMarker(t *testing.T) {
 func TestInitStoreLeavesAnExistingConfigAlone(t *testing.T) {
 	root := testRoot(t)
 	body := "version: 1\npath: mine\n# hand written\n"
-	path := writeConfig(t, root, body)
+	path := tqtest.WriteConfig(t, root, body)
 
 	if _, err := InitStore(root); err != nil {
 		t.Fatalf("InitStore: %v", err)

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fmartingr/taskqueue/internal/config"
 )
 
 func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
@@ -23,7 +25,7 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 		"tq ready --json", "tq show <id> --json", "tq move <id> in-progress",
 		"tq note <id>", "tq done <id>", "tq add \"Title\"", "tq list --json",
 		"backlog, todo, in-progress, done", "urgent, high, normal, low",
-		store.Dir, EnvTaskDir, generatedNotice,
+		store.Dir, config.EnvTaskDir, generatedNotice,
 	} {
 		if !strings.Contains(string(guide), want) {
 			t.Errorf("guide is missing %q", want)
@@ -71,7 +73,7 @@ func TestSyncAgentsDocsRefreshesAStaleGuide(t *testing.T) {
 func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 	root := testRoot(t)
 	elsewhere := filepath.Join(root, "docs", "queue")
-	t.Setenv(EnvTaskDir, elsewhere)
+	t.Setenv(config.EnvTaskDir, elsewhere)
 
 	store, err := InitStore(root)
 	if err != nil {
@@ -108,7 +110,7 @@ func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 	tc := newBareCLI(t)
 
 	out := tc.mustRun("init")
-	guide := filepath.Join(tc.root, TaskDirName, AgentsFileName)
+	guide := filepath.Join(tc.root, config.TaskDirName, AgentsFileName)
 	if !strings.Contains(out, guide) {
 		t.Errorf("init should report the guide it wrote, got %q", out)
 	}
@@ -123,7 +125,7 @@ func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 			t.Errorf("init created %s; it must leave those files to the user", name)
 		}
 	}
-	if !strings.Contains(out, "@"+TaskDirName+"/"+AgentsFileName) {
+	if !strings.Contains(out, "@"+config.TaskDirName+"/"+AgentsFileName) {
 		t.Errorf("init should print the line to add, got %q", out)
 	}
 
@@ -133,7 +135,7 @@ func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 	if strings.Contains(out, "Wrote ") {
 		t.Errorf("nothing should be rewritten on a second init, got %q", out)
 	}
-	if !strings.Contains(out, "@"+TaskDirName+"/"+AgentsFileName) {
+	if !strings.Contains(out, "@"+config.TaskDirName+"/"+AgentsFileName) {
 		t.Errorf("the second init should still print the line to add, got %q", out)
 	}
 }

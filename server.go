@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/fmartingr/taskqueue/internal/task"
+
+	"github.com/fmartingr/taskqueue/internal/config"
 )
 
 const (
@@ -199,14 +201,14 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 // effective values are returned whether or not a config file exists, so the
 // board never has to know the defaults; file is empty when there is none.
 func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
-	cfg, err := FindConfig(s.store.Dir)
+	cfg, err := config.FindConfig(s.store.Dir)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	out := map[string]any{
-		"version":  ConfigVersion,
-		"path":     TaskDirName,
+		"version":  config.ConfigVersion,
+		"path":     config.TaskDirName,
 		"task_dir": s.store.Dir,
 		"file":     "",
 	}

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/fmartingr/taskqueue/internal/task"
+
+	"github.com/fmartingr/taskqueue/internal/config"
 )
 
 // Exit codes are part of the agent-facing contract and must stay stable.
@@ -111,11 +113,11 @@ Exit codes:
 
 func (c *cli) usage(w io.Writer) {
 	fmt.Fprintf(w, usageText,
-		TaskDirName, filepath.Join(TaskDirName, AgentsFileName),
+		config.TaskDirName, filepath.Join(config.TaskDirName, AgentsFileName),
 		strings.Join(task.Statuses, ", "),
 		strings.Join(task.Priorities, ", "), task.PriorityNormal,
-		EnvTaskDir, TaskDirName,
-		TaskDirName)
+		config.EnvTaskDir, config.TaskDirName,
+		config.TaskDirName)
 }
 
 // ── Commands ────────────────────────────────────────────────────
@@ -148,7 +150,7 @@ func (c *cli) runInit(args []string) int {
 		// that says "this project uses tq", and the file is what later
 		// commands find.
 		if store.ConfigWritten == "" {
-			config, err := writeConfigIfMissing(c.dir, store.Dir)
+			config, err := config.WriteConfigIfMissing(c.dir, store.Dir)
 			if err != nil {
 				return c.fail(err)
 			}
@@ -198,7 +200,7 @@ func withinInvokedTree(taskDir, workingDir string) bool {
 	if err != nil {
 		return false
 	}
-	if root, ok := repositoryRoot(base); ok {
+	if root, ok := config.RepositoryRoot(base); ok {
 		base = root
 	}
 	rel, err := filepath.Rel(base, taskDir)
@@ -540,7 +542,7 @@ func (c *cli) store() (*Store, error) {
 		// stderr, so --json output stays machine-readable.
 		fmt.Fprintf(c.stderr, "note: created %s\n", store.Dir)
 		if shadowed, ok := ShadowedTaskDir(c.dir); ok {
-			fmt.Fprintf(c.stderr, "note: %s is above this repository and was not used; set %s=true to search past the repository root\n", shadowed, EnvWalkForever)
+			fmt.Fprintf(c.stderr, "note: %s is above this repository and was not used; set %s=true to search past the repository root\n", shadowed, config.EnvWalkForever)
 		}
 	}
 	return store, nil

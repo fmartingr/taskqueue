@@ -13,24 +13,13 @@ import (
 	"time"
 
 	"github.com/fmartingr/taskqueue/internal/task"
+
+	"github.com/fmartingr/taskqueue/internal/config"
 )
-
-// TaskDirName is the directory, relative to the project root, that holds one
-// Markdown file per task. It is meant to be committed to Git.
-const TaskDirName = ".tasks"
-
-// EnvTaskDir overrides task directory discovery, which is useful for
-// automation and tests: TQ_DIR=/repo/.tasks tq list
-const EnvTaskDir = "TQ_DIR"
-
-// EnvWalkForever lifts the bound on the search: set to "true", discovery walks
-// past the repository root to the filesystem root, for a queue deliberately
-// kept above several repositories.
-const EnvWalkForever = "TQ_WALK_FOREVER"
 
 var (
 	ErrTaskNotFound    = errors.New("task not found")
-	ErrProjectNotFound = errors.New("no " + TaskDirName + " directory found")
+	ErrProjectNotFound = errors.New("no " + config.TaskDirName + " directory found")
 )
 
 // Store owns every filesystem interaction. Both the CLI and the HTTP server go
@@ -80,7 +69,7 @@ func InitStore(root string) (*Store, error) {
 	}
 	// A queue without its marker is the ambiguity the marker exists to remove,
 	// so making one writes both.
-	config, err := writeConfigIfMissing(root, dir)
+	config, err := config.WriteConfigIfMissing(root, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -112,11 +101,11 @@ func OpenStore(startDir string) (*Store, error) {
 // startDir itself. Preferring the repository root keeps an agent working in a
 // subdirectory from scattering task directories around the tree.
 func taskDirTarget(startDir string) (string, error) {
-	if override := os.Getenv(EnvTaskDir); override != "" {
+	if override := os.Getenv(config.EnvTaskDir); override != "" {
 		return filepath.Abs(override)
 	}
 
-	cfg, err := FindConfig(startDir)
+	cfg, err := config.FindConfig(startDir)
 	if err != nil {
 		return "", err
 	}
@@ -128,59 +117,30 @@ func taskDirTarget(startDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if root, ok := repositoryRoot(dir); ok {
+	if root, ok := config.RepositoryRoot(dir); ok {
 		dir = root
 	}
-	return filepath.Join(dir, TaskDirName), nil
-}
-
-// repositoryRoot returns the nearest directory at or above dir that holds .git.
-// walkBoundary is where a search up the tree stops: the repository root, so a
-// queue or a config above a project cannot capture it. Creation has always
-// stopped there, and finding should agree. Returns "" when there is no
-// repository to anchor to, or when the walk-forever escape hatch is set, in
-// which case the walk runs to the filesystem root.
-func walkBoundary(dir string) string {
-	if os.Getenv(EnvWalkForever) == "true" {
-		return ""
-	}
-	if root, ok := repositoryRoot(dir); ok {
-		return root
-	}
-	return ""
-}
-
-func repositoryRoot(dir string) (string, bool) {
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
+	return filepath.Join(dir, config.TaskDirName), nil
 }
 
 // ShadowedTaskDir reports a task directory that discovery deliberately walked
 // past — one above the enclosing repository. Creating a fresh queue while that
 // exists is when a caller's tasks appear to vanish, so the CLI names it.
 func ShadowedTaskDir(startDir string) (string, bool) {
-	if os.Getenv(EnvTaskDir) != "" || os.Getenv(EnvWalkForever) == "true" {
+	if os.Getenv(config.EnvTaskDir) != "" || os.Getenv(config.EnvWalkForever) == "true" {
 		return "", false // nothing was excluded: the search was not bounded
 	}
 	abs, err := filepath.Abs(startDir)
 	if err != nil {
 		return "", false
 	}
-	root, ok := repositoryRoot(abs)
+	root, ok := config.RepositoryRoot(abs)
 	if !ok {
 		return "", false
 	}
 
 	for dir := filepath.Dir(root); ; {
-		candidate := filepath.Join(dir, TaskDirName)
+		candidate := filepath.Join(dir, config.TaskDirName)
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate, true
 		}
@@ -198,7 +158,7 @@ func ShadowedTaskDir(startDir string) (string, bool) {
 // repository. It reports ErrProjectNotFound when there is nothing yet, which is
 // what makes OpenStore create one.
 func DiscoverTaskDir(startDir string) (string, error) {
-	if override := os.Getenv(EnvTaskDir); override != "" {
+	if override := os.Getenv(config.EnvTaskDir); override != "" {
 		abs, err := filepath.Abs(override)
 		if err != nil {
 			return "", err
@@ -206,18 +166,18 @@ func DiscoverTaskDir(startDir string) (string, error) {
 		info, err := os.Stat(abs)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			return "", fmt.Errorf("%w: %s=%s does not exist yet", ErrProjectNotFound, EnvTaskDir, override)
+			return "", fmt.Errorf("%w: %s=%s does not exist yet", ErrProjectNotFound, config.EnvTaskDir, override)
 		case err != nil:
-			return "", fmt.Errorf("%s=%s: %w", EnvTaskDir, override, err)
+			return "", fmt.Errorf("%s=%s: %w", config.EnvTaskDir, override, err)
 		case !info.IsDir():
-			return "", fmt.Errorf("%s=%s is not a directory", EnvTaskDir, override)
+			return "", fmt.Errorf("%s=%s is not a directory", config.EnvTaskDir, override)
 		}
 		return abs, nil
 	}
 
 	// The marker decides, when there is one: one file to find, and it says
 	// where the tasks live.
-	cfg, err := FindConfig(startDir)
+	cfg, err := config.FindConfig(startDir)
 	if err != nil {
 		return "", err
 	}
@@ -239,13 +199,13 @@ func DiscoverTaskDir(startDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if stopAt := walkBoundary(abs); stopAt != "" {
+	if stopAt := config.WalkBoundary(abs); stopAt != "" {
 		// Say where the search stopped. The project the caller means may be
 		// one directory further up and plainly visible to them.
 		return "", fmt.Errorf("%w (no %s in %s up to the repository root %s; set %s=true to look past it)",
-			ErrProjectNotFound, ConfigFileName, startDir, stopAt, EnvWalkForever)
+			ErrProjectNotFound, config.ConfigFileName, startDir, stopAt, config.EnvWalkForever)
 	}
-	return "", fmt.Errorf("%w (no %s in %s or any parent directory)", ErrProjectNotFound, ConfigFileName, startDir)
+	return "", fmt.Errorf("%w (no %s in %s or any parent directory)", ErrProjectNotFound, config.ConfigFileName, startDir)
 }
 
 // CreateTaskInput carries the fields a caller may set when creating a task.

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/fmartingr/taskqueue/internal/task"
+
+	"github.com/fmartingr/taskqueue/internal/config"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *Store) {
@@ -347,7 +349,7 @@ func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 	viaCLI := newTestCLI(t)
 	viaCLI.mustRun("add", "Implement REST API", "--priority", "high", "--label", "backend")
 	viaCLI.mustRun("move", "TQ-0001", "in-progress")
-	cliFile, err := os.ReadFile(filepath.Join(viaCLI.root, TaskDirName, "TQ-0001-implement-rest-api.md"))
+	cliFile, err := os.ReadFile(filepath.Join(viaCLI.root, config.TaskDirName, "TQ-0001-implement-rest-api.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,8 +429,8 @@ func TestAPIConfig(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != ConfigVersion {
-		t.Errorf("version = %d, want %d", got.Version, ConfigVersion)
+	if got.Version != config.ConfigVersion {
+		t.Errorf("version = %d, want %d", got.Version, config.ConfigVersion)
 	}
 	if got.TaskDir != store.Dir {
 		t.Errorf("task_dir = %q, want %q", got.TaskDir, store.Dir)

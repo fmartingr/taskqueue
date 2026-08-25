@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/fmartingr/taskqueue/internal/task"
+
+	"github.com/fmartingr/taskqueue/internal/config"
 )
 
 type testCLI struct {
@@ -27,8 +29,8 @@ type testCLI struct {
 func requireNoQueueAbove(t *testing.T, dir string) {
 	t.Helper()
 	for cur := filepath.Dir(dir); ; {
-		if info, err := os.Stat(filepath.Join(cur, TaskDirName)); err == nil && info.IsDir() {
-			t.Skipf("%s sits above the fixture, so a notice about it is correct", filepath.Join(cur, TaskDirName))
+		if info, err := os.Stat(filepath.Join(cur, config.TaskDirName)); err == nil && info.IsDir() {
+			t.Skipf("%s sits above the fixture, so a notice about it is correct", filepath.Join(cur, config.TaskDirName))
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
@@ -62,8 +64,8 @@ func newTestCLI(t *testing.T) *testCLI {
 func newBareCLI(t *testing.T) *testCLI {
 	t.Helper()
 	// Same isolation the store fixtures take: never reach a real queue.
-	t.Setenv(EnvTaskDir, "")
-	t.Setenv(EnvWalkForever, "")
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
 	root := testRoot(t)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	return &testCLI{
@@ -107,7 +109,7 @@ func TestCLIInit(t *testing.T) {
 	tc := newBareCLI(t)
 
 	out := tc.mustRun("init")
-	dir := filepath.Join(tc.root, TaskDirName)
+	dir := filepath.Join(tc.root, config.TaskDirName)
 	if !strings.Contains(out, dir) {
 		t.Errorf("init output %q should mention %q", out, dir)
 	}
@@ -273,7 +275,7 @@ func TestCLIShowDescribesDependencies(t *testing.T) {
 func TestCLIShowSurvivesUnreadableSiblingTask(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "Readable", "--depends-on", "TQ-0002")
-	if err := os.WriteFile(filepath.Join(tc.root, TaskDirName, "TQ-0002-broken.md"), []byte("not a task"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tc.root, config.TaskDirName, "TQ-0002-broken.md"), []byte("not a task"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -361,7 +363,7 @@ func TestCLIUpdate(t *testing.T) {
 func TestCLIUpdateRenamesTheFile(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "Original title")
-	dir := filepath.Join(tc.root, TaskDirName)
+	dir := filepath.Join(tc.root, config.TaskDirName)
 	if _, err := os.Stat(filepath.Join(dir, "TQ-0001-original-title.md")); err != nil {
 		t.Fatalf("add should name the file after the title: %v", err)
 	}
@@ -486,7 +488,7 @@ func TestCLICreatesTaskDirOnDemand(t *testing.T) {
 	if !strings.Contains(out, "Created TQ-0001") {
 		t.Errorf("add output = %q", out)
 	}
-	dir := filepath.Join(tc.root, TaskDirName)
+	dir := filepath.Join(tc.root, config.TaskDirName)
 	if _, err := os.Stat(filepath.Join(dir, "TQ-0001-first-task.md")); err != nil {
 		t.Fatalf("task file not written: %v", err)
 	}
@@ -510,8 +512,8 @@ func TestCLIReadCommandsCreateAnEmptyQueue(t *testing.T) {
 	if len(tasks) != 0 {
 		t.Errorf("ready = %+v, want an empty list", tasks)
 	}
-	if _, err := os.Stat(filepath.Join(tc.root, TaskDirName)); err != nil {
-		t.Errorf("%s should have been created: %v", TaskDirName, err)
+	if _, err := os.Stat(filepath.Join(tc.root, config.TaskDirName)); err != nil {
+		t.Errorf("%s should have been created: %v", config.TaskDirName, err)
 	}
 }
 
@@ -535,8 +537,8 @@ func TestCLIReportsUncreatableTaskDir(t *testing.T) {
 		if code := tc.run(args...); code != exitProjectNotFound {
 			t.Errorf("tq %s = exit %d, want %d", strings.Join(args, " "), code, exitProjectNotFound)
 		}
-		if !strings.Contains(tc.stderr.String(), TaskDirName) {
-			t.Errorf("stderr should mention %s, got %q", TaskDirName, tc.stderr)
+		if !strings.Contains(tc.stderr.String(), config.TaskDirName) {
+			t.Errorf("stderr should mention %s, got %q", config.TaskDirName, tc.stderr)
 		}
 	}
 }
@@ -601,12 +603,12 @@ func TestCLIEnvTaskDirOverride(t *testing.T) {
 	tc.mustRun("add", "task.Task in the project")
 
 	elsewhere := newBareCLI(t)
-	elsewhere.t.Setenv(EnvTaskDir, filepath.Join(tc.root, TaskDirName))
+	elsewhere.t.Setenv(config.EnvTaskDir, filepath.Join(tc.root, config.TaskDirName))
 
 	var tasks []task.Task
 	elsewhere.mustRunJSON(&tasks, "list", "--json")
 	if len(tasks) != 1 || tasks[0].Title != "task.Task in the project" {
-		t.Errorf("%s override ignored, got %+v", EnvTaskDir, tasks)
+		t.Errorf("%s override ignored, got %+v", config.EnvTaskDir, tasks)
 	}
 }
 
@@ -628,7 +630,7 @@ func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
 	tc.mustRun("list")
 
 	notice := stderr.String()
-	for _, want := range []string{filepath.Join(outer, TaskDirName), EnvWalkForever} {
+	for _, want := range []string{filepath.Join(outer, config.TaskDirName), config.EnvWalkForever} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("stderr = %q, want it to mention %q", notice, want)
 		}
@@ -641,8 +643,8 @@ func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
 	requireNoQueueAbove(t, tc.root)
 	tc.mustRun("list")
 
-	if strings.Contains(tc.stderr.String(), EnvWalkForever) {
-		t.Errorf("stderr = %q, want no mention of %s when nothing was excluded", tc.stderr, EnvWalkForever)
+	if strings.Contains(tc.stderr.String(), config.EnvWalkForever) {
+		t.Errorf("stderr = %q, want no mention of %s when nothing was excluded", tc.stderr, config.EnvWalkForever)
 	}
 }
 
@@ -655,7 +657,7 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 	if _, err := InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadDir(filepath.Join(outer, TaskDirName))
+	before, err := os.ReadDir(filepath.Join(outer, config.TaskDirName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,7 +673,7 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 	tc.mustRun("init")
 	tc.mustRun("add", "fixture task")
 
-	after, err := os.ReadDir(filepath.Join(outer, TaskDirName))
+	after, err := os.ReadDir(filepath.Join(outer, config.TaskDirName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,10 +700,10 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 	// the repository root, and the point here is a queue the project owns.
 	// The marker is what makes it the project's queue rather than a directory
 	// that happens to be named .tasks.
-	if err := os.MkdirAll(filepath.Join(project, TaskDirName), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(project, config.TaskDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ConfigFileName), []byte("version: 1\npath: "+TaskDirName+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(project, config.ConfigFileName), []byte("version: 1\npath: "+config.TaskDirName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -718,16 +720,16 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 	}
 	sub.mustRunJSON(&out, "init", "--json")
 
-	if want := filepath.Join(project, TaskDirName); out.TaskDir != want {
+	if want := filepath.Join(project, config.TaskDirName); out.TaskDir != want {
 		t.Errorf("task_dir = %q, want the project's queue %q", out.TaskDir, want)
 	}
 	if out.Created {
 		t.Error("created = true, want false: the queue already existed")
 	}
-	if _, err := os.Stat(filepath.Join(nested, TaskDirName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(nested, config.TaskDirName)); !os.IsNotExist(err) {
 		t.Error("init forked a second queue in the subdirectory")
 	}
-	if _, err := os.Stat(filepath.Join(outer, TaskDirName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(outer, config.TaskDirName)); !os.IsNotExist(err) {
 		t.Error("init created a queue at the enclosing repository root")
 	}
 	sub.reset()
@@ -756,7 +758,7 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 	}
 	tc.mustRunJSON(&out, "init", "--json")
 
-	if want := filepath.Join(repo, TaskDirName); out.TaskDir != want {
+	if want := filepath.Join(repo, config.TaskDirName); out.TaskDir != want {
 		t.Errorf("task_dir = %q, want the repository's own queue %q", out.TaskDir, want)
 	}
 	if !out.Created {
@@ -767,11 +769,11 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 // The CLI fixtures build their own store, so they need the same isolation the
 // store fixtures have.
 func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
-	outside := filepath.Join(testRoot(t), "real", TaskDirName)
+	outside := filepath.Join(testRoot(t), "real", config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(EnvTaskDir, outside)
+	t.Setenv(config.EnvTaskDir, outside)
 
 	tc := newTestCLI(t)
 	tc.mustRun("add", "fixture task")
@@ -781,7 +783,7 @@ func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Errorf("the CLI fixture wrote into the directory %s names: %d entries", EnvTaskDir, len(entries))
+		t.Errorf("the CLI fixture wrote into the directory %s names: %d entries", config.EnvTaskDir, len(entries))
 	}
 }
 
@@ -790,17 +792,17 @@ func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 // repository root is the shape where discovery has no bound; a queue at the
 // temp root stops the walk inside the fixture, so nothing escapes it.
 func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
-	t.Setenv(EnvTaskDir, "")
-	t.Setenv(EnvWalkForever, "")
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
 	root := t.TempDir()
 
-	outside := filepath.Join(root, TaskDirName)
+	outside := filepath.Join(root, config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// With a marker above it, the deep directory discovers this queue — which
 	// is the situation the guide must not be written into.
-	if err := os.WriteFile(filepath.Join(root, ConfigFileName), []byte("version: 1\npath: "+TaskDirName+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, config.ConfigFileName), []byte("version: 1\npath: "+config.TaskDirName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	deep := filepath.Join(root, "projects", "foo")
@@ -827,7 +829,7 @@ func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
 // init anywhere inside a repository.
 func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
 	tc := newTestCLI(t)
-	guide := filepath.Join(tc.root, TaskDirName, AgentsFileName)
+	guide := filepath.Join(tc.root, config.TaskDirName, AgentsFileName)
 	if _, err := os.Stat(guide); err != nil {
 		t.Fatalf("guide not written at the project root: %v", err)
 	}
@@ -876,19 +878,19 @@ func TestCLIInitWritesTheConfigMarker(t *testing.T) {
 	tc := newBareCLI(t)
 	out := tc.mustRun("init")
 
-	path := filepath.Join(tc.root, ConfigFileName)
+	path := filepath.Join(tc.root, config.ConfigFileName)
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("%s not written: %v", ConfigFileName, err)
+		t.Fatalf("%s not written: %v", config.ConfigFileName, err)
 	}
 	if !strings.Contains(out, path) {
 		t.Errorf("init should report the config it wrote, got %q", out)
 	}
 
-	cfg, err := FindConfig(tc.root)
+	cfg, err := config.FindConfig(tc.root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.TaskDir() != filepath.Join(tc.root, TaskDirName) {
+	if cfg.TaskDir() != filepath.Join(tc.root, config.TaskDirName) {
 		t.Errorf("config points at %q", cfg.TaskDir())
 	}
 
@@ -902,7 +904,7 @@ func TestCLIInitWritesTheConfigMarker(t *testing.T) {
 // A config naming a path is what moves the queue, from any subdirectory.
 func TestCLIFollowsTheConfigPath(t *testing.T) {
 	tc := newBareCLI(t)
-	if err := os.WriteFile(filepath.Join(tc.root, ConfigFileName), []byte("version: 1\npath: docs/queue\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tc.root, config.ConfigFileName), []byte("version: 1\npath: docs/queue\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	tc.mustRun("add", "configured")
@@ -910,7 +912,7 @@ func TestCLIFollowsTheConfigPath(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tc.root, "docs", "queue")); err != nil {
 		t.Fatalf("the task directory should follow the config: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tc.root, TaskDirName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tc.root, config.TaskDirName)); !os.IsNotExist(err) {
 		t.Error("the default directory should not have been created")
 	}
 }
@@ -918,7 +920,7 @@ func TestCLIFollowsTheConfigPath(t *testing.T) {
 // A broken config is reported as a config problem, not as a missing queue.
 func TestCLIReportsABrokenConfig(t *testing.T) {
 	tc := newBareCLI(t)
-	if err := os.WriteFile(filepath.Join(tc.root, ConfigFileName), []byte("version: 99\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tc.root, config.ConfigFileName), []byte("version: 99\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

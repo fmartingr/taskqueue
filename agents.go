@@ -9,6 +9,8 @@ import (
 	"github.com/fmartingr/taskqueue/internal/task"
 
 	"github.com/fmartingr/taskqueue/internal/fsx"
+
+	"github.com/fmartingr/taskqueue/internal/config"
 )
 
 // AgentsFileName is the guide `tq init` keeps inside the task directory, and
@@ -46,7 +48,7 @@ func GuidePointer(store *Store) string {
 	guide := filepath.Join(store.Dir, AgentsFileName)
 
 	from := filepath.Dir(store.Dir)
-	if root, ok := repositoryRoot(store.Dir); ok {
+	if root, ok := config.RepositoryRoot(store.Dir); ok {
 		from = root
 	}
 	if rel, err := filepath.Rel(from, guide); err == nil {
@@ -153,6 +155,6 @@ repository root.
 		strings.Join(task.Statuses, ", "),
 		strings.Join(task.Priorities, ", "), task.PriorityNormal,
 		taskDir,
-		ConfigFileName, EnvTaskDir, EnvWalkForever,
+		config.ConfigFileName, config.EnvTaskDir, config.EnvWalkForever,
 	)
 }

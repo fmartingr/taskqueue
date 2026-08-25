@@ -8,10 +8,46 @@ import (
 	"testing"
 )
 
+// TestMain clears the environment the whole suite runs under. TQ_DIR is the
+// documented way to point tq at a queue, so a developer may well have it
+// exported; without this every test would operate on their real one, and one
+// of them deletes the directory it is given.
+func TestMain(m *testing.M) {
+	isolate()
+	os.Exit(m.Run())
+}
+
+// isolate removes the configuration that could send a test outside its own
+// temp directory. Individual tests still set these with t.Setenv when that is
+// what they are testing.
+func isolate() {
+	for _, name := range []string{EnvTaskDir, EnvWalkForever} {
+		_ = os.Unsetenv(name)
+	}
+}
+
+// testRoot returns a temp directory that discovery cannot climb out of.
+// testRoot(t) alone is not an isolation barrier: it honours TMPDIR, and the
+// walk up looks for .git and .tasks in every parent, so with TMPDIR inside a
+// repository the fixtures would bind to that repository's committed queue.
+// Marking the root as a repository root stops the walk here.
+func testRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 // newTestStore returns a store backed by a fresh .tasks directory.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	root := t.TempDir()
+	// Belt and braces: TestMain cleared the ambient values, this clears
+	// anything a test set before reaching for a fixture.
+	t.Setenv(EnvTaskDir, "")
+	t.Setenv(EnvWalkForever, "")
+	root := testRoot(t)
 	store, err := InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -29,7 +65,7 @@ func mustCreate(t *testing.T, s *Store, in CreateTaskInput) Task {
 }
 
 func TestInitStore(t *testing.T) {
-	root := t.TempDir()
+	root := testRoot(t)
 	store, err := InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -55,7 +91,7 @@ func TestInitStore(t *testing.T) {
 }
 
 func TestOpenStoreCreatesTaskDirOnDemand(t *testing.T) {
-	root := t.TempDir()
+	root := testRoot(t)
 
 	store, err := OpenStore(root)
 	if err != nil {
@@ -82,7 +118,7 @@ func TestOpenStoreCreatesTaskDirOnDemand(t *testing.T) {
 }
 
 func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
-	root := t.TempDir()
+	root := testRoot(t)
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +142,17 @@ func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
 }
 
 func TestOpenStoreReportsUncreatableDir(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "not-a-directory")
+	root := testRoot(t)
+	file := filepath.Join(root, "not-a-directory")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The root is anchored, so creation would otherwise fall back to it:
+	// make that unwritable too, leaving nothing creatable to report on.
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
 
 	// Nothing can be created below a regular file, so this is still "no usable
 	// task directory" rather than a filesystem error nobody can act on.
@@ -427,7 +470,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestDiscoverTaskDirWalksUp(t *testing.T) {
-	root := t.TempDir()
+	root := testRoot(t)
 	if _, err := InitStore(root); err != nil {
 		t.Fatal(err)
 	}
@@ -446,19 +489,19 @@ func TestDiscoverTaskDirWalksUp(t *testing.T) {
 }
 
 func TestDiscoverTaskDirNotFound(t *testing.T) {
-	_, err := DiscoverTaskDir(t.TempDir())
+	_, err := DiscoverTaskDir(testRoot(t))
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Errorf("err = %v, want ErrProjectNotFound", err)
 	}
 }
 
 func TestDiscoverTaskDirEnvOverride(t *testing.T) {
-	root := t.TempDir()
+	root := testRoot(t)
 	store, err := InitStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	elsewhere := t.TempDir()
+	elsewhere := testRoot(t)
 
 	t.Setenv(EnvTaskDir, store.Dir)
 	dir, err := DiscoverTaskDir(elsewhere)
@@ -567,7 +610,7 @@ func TestRetireOldFile(t *testing.T) {
 	// The one entry both names resolve to on a folding filesystem, expressed
 	// so that every filesystem can run it: one entry, reached twice.
 	t.Run("a single entry is never removed", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := testRoot(t)
 		path := filepath.Join(dir, "task.md")
 		write(t, path)
 		if err := retireOldFile(path, path); err != nil {
@@ -582,7 +625,7 @@ func TestRetireOldFile(t *testing.T) {
 	// a no-op leaves both. That is the store's loud "claimed by 2 files"
 	// state, which is recoverable; deleting the task would not be.
 	t.Run("hard links keep the written task", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := testRoot(t)
 		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
 		write(t, newPath)
 		if err := os.Link(newPath, oldPath); err != nil {
@@ -597,7 +640,7 @@ func TestRetireOldFile(t *testing.T) {
 	})
 
 	t.Run("a genuinely different file is removed", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := testRoot(t)
 		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
 		write(t, oldPath)
 		write(t, newPath)
@@ -613,7 +656,7 @@ func TestRetireOldFile(t *testing.T) {
 	})
 
 	t.Run("a dangling symlink is unlinked", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := testRoot(t)
 		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
 		write(t, newPath)
 		if err := os.Symlink(filepath.Join(dir, "gone.md"), oldPath); err != nil {
@@ -629,7 +672,7 @@ func TestRetireOldFile(t *testing.T) {
 	})
 
 	t.Run("an already removed old file is not an error", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := testRoot(t)
 		newPath := filepath.Join(dir, "new.md")
 		write(t, newPath)
 		if err := retireOldFile(filepath.Join(dir, "old.md"), newPath); err != nil {
@@ -641,7 +684,7 @@ func TestRetireOldFile(t *testing.T) {
 // A queue above a project must not capture it: a developer who once ran tq in
 // their home directory would otherwise have every new repository file into it.
 func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
-	outer := t.TempDir()
+	outer := testRoot(t)
 	if _, err := InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +707,7 @@ func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
 }
 
 func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
-	outer := t.TempDir()
+	outer := testRoot(t)
 	if _, err := InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +728,7 @@ func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
 
 // Only "true" lifts the bound; anything else leaves the default in place.
 func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
-	outer := t.TempDir()
+	outer := testRoot(t)
 	if _, err := InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +746,7 @@ func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
 // The bound is the repository root, not the starting directory: a queue at the
 // root is still found from a subdirectory of the same repository.
 func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
-	repo := t.TempDir()
+	repo := testRoot(t)
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -721,5 +764,88 @@ func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
 	}
 	if want := filepath.Join(repo, TaskDirName); dir != want {
 		t.Errorf("dir = %q, want %q", dir, want)
+	}
+}
+
+// A developer with TQ_DIR exported — which the README and the guide both tell
+// them to use — must still get an isolated suite. Without this the whole suite
+// operates on their real queue, and one test deletes it.
+func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
+	outside := filepath.Join(testRoot(t), "real", TaskDirName)
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvTaskDir, outside)
+
+	store := newTestStore(t)
+	if store.Dir == outside {
+		t.Fatalf("newTestStore used the ambient %s: %s", EnvTaskDir, store.Dir)
+	}
+	mustCreate(t, store, CreateTaskInput{Title: "fixture task"})
+
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the fixture wrote into the directory %s names: %d entries", EnvTaskDir, len(entries))
+	}
+}
+
+// The same for the walk-forever escape hatch: an exported value must not let a
+// fixture climb out of its own temp directory. Asserted on the environment
+// rather than on a walk, because there is nowhere above testRoot(t) a test can
+// safely plant a queue to walk into.
+func TestFixturesNeutraliseAmbientConfiguration(t *testing.T) {
+	t.Setenv(EnvTaskDir, "/somewhere/real/.tasks")
+	t.Setenv(EnvWalkForever, "true")
+
+	newTestStore(t)
+
+	for _, name := range []string{EnvTaskDir, EnvWalkForever} {
+		if got := os.Getenv(name); got != "" {
+			t.Errorf("%s = %q after newTestStore, want it cleared", name, got)
+		}
+	}
+}
+
+// testRoot(t) is not an isolation barrier: it honours TMPDIR, and discovery
+// walks up out of it. With TMPDIR inside a git repository — normal in Nix,
+// Bazel and containerised CI — the fixtures would otherwise bind to that
+// repository's committed queue and write into it.
+func TestFixturesStayInsideTempDirWhenTMPDIRIsInARepository(t *testing.T) {
+	// Not testRoot(t): it fixes its base directory on first use, so calling
+	// it here would pin the base before TMPDIR changes and the fixture
+	// would never see the repository.
+	repo, mkErr := os.MkdirTemp("", "tq-tmpdir-repo-*")
+	if mkErr != nil {
+		t.Fatal(mkErr)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(repo) })
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(repo, TaskDirName)
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(repo, "tmp")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmp)
+
+	store := newTestStore(t)
+	if store.Dir == real {
+		t.Fatalf("the fixture bound to the enclosing repository's queue: %s", store.Dir)
+	}
+	mustCreate(t, store, CreateTaskInput{Title: "fixture task"})
+
+	entries, err := os.ReadDir(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the fixture wrote into the repository's queue: %d entries", len(entries))
 	}
 }

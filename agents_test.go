@@ -69,7 +69,7 @@ func TestSyncAgentsDocsRefreshesAStaleGuide(t *testing.T) {
 }
 
 func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
-	root := t.TempDir()
+	root := testRoot(t)
 	elsewhere := filepath.Join(root, "docs", "queue")
 	t.Setenv(EnvTaskDir, elsewhere)
 

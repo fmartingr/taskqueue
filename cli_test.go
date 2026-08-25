@@ -19,8 +19,25 @@ type testCLI struct {
 
 // newTestCLI returns a CLI rooted in a temporary project that already has a
 // task directory.
+// requireNoQueueAbove skips a test whose premise is that nothing was excluded,
+// when the machine it runs on says otherwise: TMPDIR may sit inside a project
+// that has its own queue, and the notice under test would then be correct.
+func requireNoQueueAbove(t *testing.T, dir string) {
+	t.Helper()
+	for cur := filepath.Dir(dir); ; {
+		if info, err := os.Stat(filepath.Join(cur, TaskDirName)); err == nil && info.IsDir() {
+			t.Skipf("%s sits above the fixture, so a notice about it is correct", filepath.Join(cur, TaskDirName))
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return
+		}
+		cur = parent
+	}
+}
+
 // anchorProject marks a directory as a repository root, so task directory
-// discovery stops there. Without it a fixture walks out of t.TempDir() and can
+// discovery stops there. Without it a fixture walks out of testRoot(t) and can
 // reach — and write into — a developer's own queue (TQ-0053).
 func anchorProject(t *testing.T, dir string) {
 	t.Helper()
@@ -42,8 +59,10 @@ func newTestCLI(t *testing.T) *testCLI {
 // newBareCLI returns a CLI rooted in a temporary directory with no project.
 func newBareCLI(t *testing.T) *testCLI {
 	t.Helper()
-	root := t.TempDir()
-	anchorProject(t, root)
+	// Same isolation the store fixtures take: never reach a real queue.
+	t.Setenv(EnvTaskDir, "")
+	t.Setenv(EnvWalkForever, "")
+	root := testRoot(t)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	return &testCLI{
 		cli:    &cli{stdout: stdout, stderr: stderr, dir: root},
@@ -593,7 +612,7 @@ func TestCLIEnvTaskDirOverride(t *testing.T) {
 // developer's tasks appear to vanish, so that is where tq should name the
 // variable that would have found them.
 func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
-	outer := t.TempDir()
+	outer := testRoot(t)
 	if _, err := InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
@@ -617,9 +636,7 @@ func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
 // With nothing above it, the notice stays a single line.
 func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
 	tc := newBareCLI(t)
-	if err := os.MkdirAll(filepath.Join(tc.root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	requireNoQueueAbove(t, tc.root)
 	tc.mustRun("list")
 
 	if strings.Contains(tc.stderr.String(), EnvWalkForever) {
@@ -628,11 +645,11 @@ func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
 }
 
 // The reason this fix was reverted once: with init discovering, an unanchored
-// fixture walks out of t.TempDir(). TQ-0017's bound does not help here, since
+// fixture walks out of testRoot(t). TQ-0017's bound does not help here, since
 // a bare temp directory has no repository root to stop at, so the fixtures
 // carry their own anchor.
 func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
-	outer := t.TempDir()
+	outer := testRoot(t)
 	if _, err := InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +684,7 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 // stops at it and init lands in the right place by accident. The enclosing
 // temp directory carries the .git anchor so the walk cannot escape it.
 func TestCLIInitFindsTheQueueAbove(t *testing.T) {
-	outer := t.TempDir()
+	outer := testRoot(t)
 	anchorProject(t, outer)
 
 	project := filepath.Join(outer, "project")
@@ -715,7 +732,7 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 // The bound TQ-0017 added is what makes the above safe: discovery must not
 // reach a queue outside the repository, or init adopts it and creates nothing.
 func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
-	outer := t.TempDir()
+	outer := testRoot(t)
 	if _, err := InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
@@ -737,5 +754,26 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 	}
 	if !out.Created {
 		t.Error("created = false, want true: the repository had no queue")
+	}
+}
+
+// The CLI fixtures build their own store, so they need the same isolation the
+// store fixtures have.
+func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
+	outside := filepath.Join(testRoot(t), "real", TaskDirName)
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvTaskDir, outside)
+
+	tc := newTestCLI(t)
+	tc.mustRun("add", "fixture task")
+
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the CLI fixture wrote into the directory %s names: %d entries", EnvTaskDir, len(entries))
 	}
 }

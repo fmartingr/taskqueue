@@ -4,11 +4,11 @@ title: Push board updates over an event stream instead of polling
 status: todo
 priority: normal
 labels:
-  - api
-  - frontend
-  - ux
+  - component/api
+  - component/frontend
+  - feature
 created: 2026-08-25T12:07:30+02:00
-updated: 2026-08-25T12:07:30+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## How the board updates today

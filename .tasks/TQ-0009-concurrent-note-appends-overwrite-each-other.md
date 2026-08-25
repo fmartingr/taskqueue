@@ -4,11 +4,10 @@ title: Concurrent note appends overwrite each other
 status: todo
 priority: high
 labels:
-  - review
-  - concurrency
-  - api
+  - bug
+  - component/api
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

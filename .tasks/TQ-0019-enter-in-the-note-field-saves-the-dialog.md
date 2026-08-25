@@ -4,11 +4,10 @@ title: Enter in the note field saves the dialog instead of adding the note
 status: todo
 priority: high
 labels:
-  - review
-  - frontend
-  - ux
+  - bug
+  - component/frontend
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

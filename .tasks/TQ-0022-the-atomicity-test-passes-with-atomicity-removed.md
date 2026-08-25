@@ -4,10 +4,10 @@ title: The atomicity test passes with atomicity removed
 status: todo
 priority: high
 labels:
-  - review
   - tests
+  - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

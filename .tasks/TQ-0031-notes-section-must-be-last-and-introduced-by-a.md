@@ -4,11 +4,11 @@ title: Notes section must be last and introduced by a horizontal rule
 status: todo
 priority: urgent
 labels:
-  - data-loss
-  - frontend
-  - cli
+  - bug
+  - component/frontend
+  - component/store
 created: 2026-08-25T11:57:34+02:00
-updated: 2026-08-25T11:57:34+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Symptom

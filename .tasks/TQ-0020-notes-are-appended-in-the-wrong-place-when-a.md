@@ -4,10 +4,10 @@ title: Notes are appended in the wrong place when a heading follows
 status: todo
 priority: normal
 labels:
-  - review
-  - store
+  - bug
+  - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

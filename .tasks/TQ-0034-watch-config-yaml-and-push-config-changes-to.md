@@ -4,14 +4,14 @@ title: Watch config.yaml and push config changes to the board
 status: todo
 priority: normal
 labels:
-  - config
-  - api
-  - frontend
+  - component/api
+  - component/config
+  - feature
 depends_on:
   - TQ-0029
   - TQ-0033
 created: 2026-08-25T12:07:30+02:00
-updated: 2026-08-25T12:07:30+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Proposal

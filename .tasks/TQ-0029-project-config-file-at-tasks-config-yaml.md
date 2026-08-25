@@ -4,11 +4,10 @@ title: Project config file at .tasks/config.yaml
 status: todo
 priority: normal
 labels:
-  - config
-  - store
-  - cli
+  - component/config
+  - feature
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-25T11:53:19+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Proposal

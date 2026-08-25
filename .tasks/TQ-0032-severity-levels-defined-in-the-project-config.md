@@ -4,13 +4,12 @@ title: Severity levels defined in the project config
 status: todo
 priority: normal
 labels:
-  - config
-  - cli
-  - frontend
+  - component/config
+  - feature
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:59:41+02:00
-updated: 2026-08-25T12:12:37+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Proposal

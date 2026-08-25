@@ -3,8 +3,11 @@ id: TQ-0002
 title: '`tq init` should handle AGENTS.md'
 status: done
 priority: normal
+labels:
+  - component/cli
+  - feature
 created: 2026-08-25T10:33:50+02:00
-updated: 2026-08-25T10:42:46+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Proposal

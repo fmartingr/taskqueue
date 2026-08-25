@@ -3,8 +3,11 @@ id: TQ-0004
 title: Quick add
 status: done
 priority: normal
+labels:
+  - component/frontend
+  - feature
 created: 2026-08-25T10:37:28+02:00
-updated: 2026-08-25T10:46:04+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Proposal

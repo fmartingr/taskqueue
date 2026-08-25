@@ -4,11 +4,10 @@ title: Clicking a second note's pencil does nothing while one is being edited
 status: todo
 priority: normal
 labels:
-  - review
-  - frontend
-  - ux
+  - bug
+  - component/frontend
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

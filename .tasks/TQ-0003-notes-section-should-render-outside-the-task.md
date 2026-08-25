@@ -3,8 +3,11 @@ id: TQ-0003
 title: Notes section should render outside the task content
 status: done
 priority: normal
+labels:
+  - component/frontend
+  - feature
 created: 2026-08-25T10:36:04+02:00
-updated: 2026-08-25T10:49:17+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Proposal

@@ -4,11 +4,10 @@ title: A 1 MB PNG serves as the favicon and ships in every binary
 status: todo
 priority: low
 labels:
-  - review
-  - frontend
-  - build
+  - component/build
+  - performance
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

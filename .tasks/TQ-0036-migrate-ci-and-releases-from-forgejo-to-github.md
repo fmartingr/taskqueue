@@ -4,12 +4,12 @@ title: Migrate CI and releases from Forgejo to GitHub Actions
 status: todo
 priority: high
 labels:
-  - ci
-  - build
+  - chore
+  - component/ci
 depends_on:
   - TQ-0037
 created: 2026-08-25T12:13:06+02:00
-updated: 2026-08-25T12:16:50+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Why

@@ -4,13 +4,13 @@ title: Fixed label set defined in the project config
 status: todo
 priority: normal
 labels:
-  - config
-  - frontend
-  - cli
+  - component/config
+  - component/frontend
+  - feature
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-25T12:12:30+02:00
+updated: 2026-08-25T12:20:09+02:00
 ---
 
 ## Proposal
@@ -73,17 +73,34 @@ in this repository divide up. Colours are a starting point, not a decision.
 | `component/store` | Store | `#5319e7` |
 | `component/ci` | CI | `#bfd4f2` |
 | `component/build` | Build | `#d4c5f9` |
+| `component/config` | Config | `#c2e0c6` |
 
 ## Migration
 
-This repository currently uses, by frequency: `review` (23), `store` (9),
-`data-loss` (5), `frontend` (5), `concurrency` (4), `tests` (3), `ux` (3),
-`ci` (3), `api` (2), `cli` (2), `security` (1), `build` (1). Most map onto the
-set above (`store` to `component/store`, and so on); `review`, `data-loss`,
-`concurrency` and `ux` are genuinely useful and should either join the base set
-or be dropped deliberately. Decide before turning validation on, and mention
-whether a rename helper is worth it (there is no `tq delete`, and renaming a
-label today means editing frontmatter by hand).
+**Already done.** Every ticket (TQ-0001 to TQ-0037) was relabelled onto this
+set, so the vocabulary in `.tasks/` is now exactly the table above: each ticket
+carries one type and at least one component, and nothing else is in use.
+
+The mapping applied:
+
+- `store`, `frontend`, `cli`, `api`, `ci`, `build` became `component/*`.
+- `tests` and `security` were already type labels and stayed.
+- `config` became `component/config`, which is why the table gained a row.
+- Types were added where there were none: `bug` for the review findings,
+  `feature` for the config and board work, `chore` for the GitHub migration,
+  `performance` for the favicon, `docs` for the identity move.
+
+Four labels were **dropped**: `review` (23 tickets), `data-loss` (5),
+`concurrency` (4) and `ux` (3). They carried real signal — provenance for the
+code-review batch, and impact class for the destructive bugs — so if any of them
+is worth keeping, add it to the table and relabel; the review findings are the
+contiguous range TQ-0006 to TQ-0028 and each one says so in its body, and the
+destructive ones are the tickets already marked urgent.
+
+Doing this by hand showed the gap: relabelling meant scripting
+`tq update --add-label/--remove-label` per ticket, because there is no way to
+set a label set outright and no rename. A `tq label rename old new` would have
+made this one command.
 
 ## Open questions
 

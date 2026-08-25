@@ -4,10 +4,11 @@ title: Move the module path and identity to github.com/fmartingr/taskqueue
 status: todo
 priority: high
 labels:
-  - build
   - docs
+  - chore
+  - component/build
 created: 2026-08-25T12:16:11+02:00
-updated: 2026-08-25T12:16:11+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Why

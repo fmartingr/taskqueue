@@ -4,11 +4,11 @@ title: go test destroys the real task directory when TQ_DIR is set
 status: todo
 priority: urgent
 labels:
-  - review
   - tests
-  - data-loss
+  - bug
+  - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

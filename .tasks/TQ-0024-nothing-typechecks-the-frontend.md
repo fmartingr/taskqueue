@@ -4,11 +4,11 @@ title: Nothing typechecks the frontend
 status: todo
 priority: normal
 labels:
-  - review
-  - ci
-  - frontend
+  - component/ci
+  - component/frontend
+  - tests
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

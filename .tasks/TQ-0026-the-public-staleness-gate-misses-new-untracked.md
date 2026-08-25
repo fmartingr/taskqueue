@@ -4,10 +4,10 @@ title: The public/ staleness gate misses new untracked files
 status: todo
 priority: normal
 labels:
-  - review
-  - ci
+  - bug
+  - component/ci
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

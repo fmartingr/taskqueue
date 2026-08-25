@@ -4,10 +4,10 @@ title: The -- terminator only protects the first argument
 status: todo
 priority: high
 labels:
-  - review
-  - cli
+  - bug
+  - component/cli
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

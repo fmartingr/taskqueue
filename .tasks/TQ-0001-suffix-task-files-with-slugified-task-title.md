@@ -3,8 +3,11 @@ id: TQ-0001
 title: Suffix task files with slugified task title
 status: done
 priority: normal
+labels:
+  - component/store
+  - feature
 created: 2026-08-25T10:24:04+02:00
-updated: 2026-08-25T10:30:08+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Proposal

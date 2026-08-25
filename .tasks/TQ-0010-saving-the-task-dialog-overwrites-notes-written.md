@@ -4,11 +4,10 @@ title: Saving the task dialog overwrites notes written while it was open
 status: todo
 priority: high
 labels:
-  - review
-  - data-loss
-  - frontend
+  - bug
+  - component/frontend
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T11:30:21+02:00
+updated: 2026-08-25T12:19:31+02:00
 ---
 
 ## Finding

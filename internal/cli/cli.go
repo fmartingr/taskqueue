@@ -127,7 +127,7 @@ Common flags:
 Environment:
   %s      task.Task directory to use instead of discovering %s
   TQ_HOST, TQ_PORT   Defaults for tq serve
-  DEV                Serve frontend assets from ./public instead of the embedded copy
+  DEV                Serve frontend assets from disk instead of the embedded copy
 
 Exit codes:
   0 success   1 general/validation error   2 task not found

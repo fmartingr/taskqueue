@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T18:55:16+02:00
-updated: 2026-08-25T19:52:32+02:00
+updated: 2026-08-25T22:54:05+02:00
 ---
 
 ## Why now
@@ -124,3 +124,5 @@ those two, the better.
 - 2026-08-25T19:52:32+02:00 — Two things had to change to compile rather than merely move, both called out in their commits: the serve command was a cli method living in server.go and moved to cli.go, and the store and cli packages needed exported entry points, Run and NewRouter, for callers across the boundary.
 - 2026-08-25T19:52:32+02:00 — store keeps its own test fixtures instead of using tqtest. Its tests reach its internals, so importing a helper package that builds one of its stores would be an import cycle. config's tests went external for the same reason.
 - 2026-08-25T19:52:32+02:00 — TQ-0038 was not done first, as this ticket recommended. Compensated by exercising the built binary after every package: CLI commands, embedded serving, DEV=1 disk serving, a goreleaser snapshot and the frontend build.
+- 2026-08-25T22:54:05+02:00 — Left a mess this ticket caused: commit 1cad1e5 re-added the root public/ directory, including the 1 MB icon.png that TQ-0028 had deleted. A make dev watcher started before the refactor was still running the pre-refactor build.ts, writing to public/, and git add -A swept it in.
+- 2026-08-25T22:54:05+02:00 — Removed now, with the watcher stopped. The binary was never affected — go:embed reads internal/web/public — so this was repository weight, not shipped weight. The DEV help text still said ./public and now does not name a path.

@@ -32,7 +32,6 @@ only needed at build time.
 
 ```bash
 cd your-project
-tq init                                        # creates .tasks/
 tq add "Implement REST API" --priority high --label backend
 tq add "Build Kanban board" --label frontend --depends-on TQ-0001
 tq ready                                       # what can be picked up right now
@@ -41,6 +40,12 @@ tq note TQ-0001 "CRUD endpoints implemented; tests remain."
 tq done TQ-0001
 tq serve                                       # board on http://127.0.0.1:7331
 ```
+
+There is no setup step: the first command that needs `.tasks/` creates it (at
+the root of the enclosing Git repository, so running `tq` from a subdirectory
+does not scatter task directories around the tree) and says so on stderr. `tq
+init` still exists if you would rather create it up front, and is harmless to
+run twice.
 
 Commit `.tasks/` with your code — task history lives in the same repository as
 the work it describes.
@@ -79,8 +84,9 @@ in `depends_on` exists and is `done`. A missing dependency blocks a task rather
 than silently making it ready, so a typo shows up as blocked work.
 
 `tq` finds `.tasks/` by walking up from the current directory, so agents can run
-it from any subdirectory. `TQ_DIR=/path/to/.tasks` overrides the search (and is
-where `tq init` creates the directory when it is set).
+it from any subdirectory, and creates it at the repository root when it does not
+exist yet. `TQ_DIR=/path/to/.tasks` overrides both the search and where the
+directory is created.
 
 ### Exit codes
 
@@ -89,12 +95,13 @@ where `tq init` creates the directory when it is set).
 | `0` | success |
 | `1` | general or validation error |
 | `2` | task not found |
-| `3` | no `.tasks` directory found |
+| `3` | the `.tasks` directory is missing and could not be created |
 
 ## CLI reference
 
 ```text
-tq init                            Create .tasks/ in the current directory
+tq init                            Create the .tasks/ directory (optional: every
+                                   command creates it on demand)
 tq add <title> [flags]             --priority --assignee --label --depends-on --body --status --json
 tq list [flags]                    --status --priority --label --assignee --json
 tq show <id> [--json]              Frontmatter fields followed by the Markdown body

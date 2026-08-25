@@ -69,9 +69,6 @@ func (tc *testCLI) mustRunJSON(target any, args ...string) {
 	if err := json.Unmarshal([]byte(out), target); err != nil {
 		tc.t.Fatalf("tq %s produced invalid JSON: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	if tc.stderr.Len() != 0 {
-		tc.t.Errorf("stderr should stay empty in JSON mode, got %q", tc.stderr)
-	}
 }
 
 func TestCLIInit(t *testing.T) {
@@ -86,11 +83,11 @@ func TestCLIInit(t *testing.T) {
 		t.Fatalf("init did not create %s: %v", dir, err)
 	}
 
-	if code := tc.run("init"); code != exitError {
-		t.Errorf("second init = exit %d, want %d", code, exitError)
-	}
-	if tc.stderr.Len() == 0 {
-		t.Error("the second init should explain itself on stderr")
+	// Initialising twice is not an error: every command creates the directory
+	// on demand anyway.
+	out = tc.mustRun("init")
+	if !strings.Contains(out, "already initialized") {
+		t.Errorf("second init output = %q, want it to say the queue already exists", out)
 	}
 }
 
@@ -175,6 +172,9 @@ func TestCLIListAndFilters(t *testing.T) {
 	tc.mustRunJSON(&tasks, "list", "--json")
 	if len(tasks) != 2 {
 		t.Fatalf("list --json returned %d tasks, want 2", len(tasks))
+	}
+	if tc.stderr.Len() != 0 {
+		t.Errorf("a successful JSON command should print nothing on stderr, got %q", tc.stderr)
 	}
 
 	tc.mustRunJSON(&tasks, "list", "--status", "done", "--json")
@@ -390,14 +390,52 @@ func TestCLIReady(t *testing.T) {
 	}
 }
 
-func TestCLIWithoutProject(t *testing.T) {
+func TestCLICreatesTaskDirOnDemand(t *testing.T) {
 	tc := newBareCLI(t)
-	for _, args := range [][]string{
-		{"list"},
-		{"add", "x"},
-		{"show", "TQ-0001"},
-		{"ready"},
-	} {
+
+	// No `tq init` first: the directory appears when it is needed.
+	out := tc.mustRun("add", "First task")
+	if !strings.Contains(out, "Created TQ-0001") {
+		t.Errorf("add output = %q", out)
+	}
+	dir := filepath.Join(tc.root, TaskDirName)
+	if _, err := os.Stat(filepath.Join(dir, "TQ-0001.md")); err != nil {
+		t.Fatalf("task file not written: %v", err)
+	}
+	if !strings.Contains(tc.stderr.String(), dir) {
+		t.Errorf("stderr should note the created directory, got %q", tc.stderr)
+	}
+
+	// Reading commands work the same way, and say nothing once it exists.
+	var tasks []Task
+	tc.mustRunJSON(&tasks, "list", "--json")
+	if len(tasks) != 1 {
+		t.Errorf("list returned %d tasks, want 1", len(tasks))
+	}
+}
+
+func TestCLIReadCommandsCreateAnEmptyQueue(t *testing.T) {
+	tc := newBareCLI(t)
+
+	var tasks []Task
+	tc.mustRunJSON(&tasks, "ready", "--json")
+	if len(tasks) != 0 {
+		t.Errorf("ready = %+v, want an empty list", tasks)
+	}
+	if _, err := os.Stat(filepath.Join(tc.root, TaskDirName)); err != nil {
+		t.Errorf("%s should have been created: %v", TaskDirName, err)
+	}
+}
+
+func TestCLIReportsUncreatableTaskDir(t *testing.T) {
+	tc := newBareCLI(t)
+	file := filepath.Join(tc.root, "not-a-directory")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tc.dir = filepath.Join(file, "sub")
+
+	for _, args := range [][]string{{"list"}, {"add", "x"}, {"ready"}} {
 		if code := tc.run(args...); code != exitProjectNotFound {
 			t.Errorf("tq %s = exit %d, want %d", strings.Join(args, " "), code, exitProjectNotFound)
 		}

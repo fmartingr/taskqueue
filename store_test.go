@@ -40,28 +40,82 @@ func TestInitStore(t *testing.T) {
 	if info, err := os.Stat(store.Dir); err != nil || !info.IsDir() {
 		t.Fatalf("task directory not created: %v", err)
 	}
-	if _, err := InitStore(root); err == nil {
-		t.Error("InitStore should fail when the directory already exists")
+	if !store.Created {
+		t.Error("Created should be true the first time")
+	}
+
+	// Initialising again is harmless and reports that nothing was created.
+	again, err := InitStore(root)
+	if err != nil {
+		t.Fatalf("second InitStore: %v", err)
+	}
+	if again.Dir != store.Dir || again.Created {
+		t.Errorf("second InitStore = %+v, want the same directory with Created=false", again)
 	}
 }
 
-func TestInitStoreHonoursEnvOverride(t *testing.T) {
+func TestOpenStoreCreatesTaskDirOnDemand(t *testing.T) {
 	root := t.TempDir()
-	target := filepath.Join(t.TempDir(), "tasks-elsewhere")
-	t.Setenv(EnvTaskDir, target)
 
-	store, err := InitStore(root)
+	store, err := OpenStore(root)
 	if err != nil {
-		t.Fatalf("InitStore: %v", err)
+		t.Fatalf("OpenStore: %v", err)
 	}
-	if store.Dir != target {
-		t.Errorf("Dir = %q, want the %s override %q", store.Dir, EnvTaskDir, target)
+	if want := filepath.Join(root, TaskDirName); store.Dir != want {
+		t.Errorf("Dir = %q, want %q", store.Dir, want)
 	}
-	if info, err := os.Stat(target); err != nil || !info.IsDir() {
-		t.Fatalf("override directory not created: %v", err)
+	if !store.Created {
+		t.Error("Created should report that OpenStore made the directory")
 	}
-	if _, err := os.Stat(filepath.Join(root, TaskDirName)); err == nil {
-		t.Errorf("%s should not have been created when %s is set", TaskDirName, EnvTaskDir)
+	if info, err := os.Stat(store.Dir); err != nil || !info.IsDir() {
+		t.Fatalf("task directory not created: %v", err)
+	}
+
+	// Opening it again finds the existing directory instead of recreating it.
+	again, err := OpenStore(root)
+	if err != nil {
+		t.Fatalf("second OpenStore: %v", err)
+	}
+	if again.Dir != store.Dir || again.Created {
+		t.Errorf("second OpenStore = %+v, want the same directory with Created=false", again)
+	}
+}
+
+func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "src", "deep")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new task directory belongs next to .git, not in whichever
+	// subdirectory the agent happened to be standing in.
+	store, err := OpenStore(nested)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	if want := filepath.Join(root, TaskDirName); store.Dir != want {
+		t.Errorf("Dir = %q, want %q", store.Dir, want)
+	}
+	if _, err := os.Stat(filepath.Join(nested, TaskDirName)); err == nil {
+		t.Errorf("no %s should have been created in the subdirectory", TaskDirName)
+	}
+}
+
+func TestOpenStoreReportsUncreatableDir(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing can be created below a regular file, so this is still "no usable
+	// task directory" rather than a filesystem error nobody can act on.
+	_, err := OpenStore(filepath.Join(file, "sub"))
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("err = %v, want ErrProjectNotFound", err)
 	}
 }
 
@@ -321,8 +375,10 @@ func TestDiscoverTaskDirEnvOverride(t *testing.T) {
 		t.Errorf("dir = %q, want the %s override %q", dir, EnvTaskDir, store.Dir)
 	}
 
+	// A missing override is "not there yet", which is what lets OpenStore
+	// create it.
 	t.Setenv(EnvTaskDir, filepath.Join(elsewhere, "missing"))
-	if _, err := DiscoverTaskDir(elsewhere); err == nil {
-		t.Errorf("a %s pointing at a missing directory should fail", EnvTaskDir)
+	if _, err := DiscoverTaskDir(elsewhere); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("DiscoverTaskDir with a missing %s = %v, want ErrProjectNotFound", EnvTaskDir, err)
 	}
 }

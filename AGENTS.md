@@ -53,7 +53,10 @@ make dev        # Bun watch + DEV=1 server
 - Keep stdout clean when `--json` is active: data on stdout, everything else on
   stderr.
 - Keep exit codes stable: 0 success, 1 general/validation, 2 task not found,
-  3 no `.tasks` directory.
+  3 `.tasks` missing and uncreatable.
+- The task directory is created on demand by any command that needs it, at the
+  root of the enclosing Git repository (or `TQ_DIR`). Commands must not fail
+  merely because a project has not been initialised.
 - Prefer the Go standard library where practical.
 - Keep the flat `package main` architecture; no `cmd/`, `internal/` or `pkg/`.
 

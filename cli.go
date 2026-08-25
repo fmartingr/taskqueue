@@ -72,7 +72,8 @@ Usage:
   tq <command> [arguments]
 
 Commands:
-  init                            Create a %s directory in the current directory
+  init                            Create the %s directory (every command creates
+                                  it on demand, so this is optional)
   add <title> [flags]             Create a task
   list [flags]                    List tasks
   show <id> [--json]              Show one task
@@ -100,7 +101,8 @@ Environment:
   DEV                Serve frontend assets from ./public instead of the embedded copy
 
 Exit codes:
-  0 success   1 general/validation error   2 task not found   3 %s not found
+  0 success   1 general/validation error   2 task not found
+  3 %s directory missing and could not be created
 `
 
 func (c *cli) usage(w io.Writer) {
@@ -126,7 +128,11 @@ func (c *cli) runInit(args []string) int {
 		return c.fail(err)
 	}
 	if *jsonOut {
-		return c.printJSON(map[string]string{"task_dir": store.Dir})
+		return c.printJSON(map[string]any{"task_dir": store.Dir, "created": store.Created})
+	}
+	if !store.Created {
+		fmt.Fprintf(c.stdout, "Task queue already initialized in %s\n", store.Dir)
+		return exitOK
 	}
 	fmt.Fprintf(c.stdout, "Initialized task queue in %s\n", store.Dir)
 	return exitOK
@@ -466,7 +472,15 @@ func (c *cli) runVersion(args []string) int {
 // ── Helpers ─────────────────────────────────────────────────────
 
 func (c *cli) store() (*Store, error) {
-	return OpenStore(c.dir)
+	store, err := OpenStore(c.dir)
+	if err != nil {
+		return nil, err
+	}
+	if store.Created {
+		// stderr, so --json output stays machine-readable.
+		fmt.Fprintf(c.stderr, "note: created %s\n", store.Dir)
+	}
+	return store, nil
 }
 
 func (c *cli) tasks() ([]Task, error) {

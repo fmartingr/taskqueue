@@ -31,43 +31,95 @@ var (
 // server on its next request, with no cache to invalidate.
 type Store struct {
 	Dir string
+
+	// Created reports that this call made the task directory, so the CLI can
+	// say where a queue appeared instead of creating one silently.
+	Created bool
 }
 
-// InitStore creates the task directory: the TQ_DIR override when it is set,
-// otherwise root/.tasks. Honouring the override keeps `tq init` and every other
-// command pointing at the same place.
+// InitStore makes sure the task directory exists and returns a store for it:
+// the TQ_DIR override when set, otherwise root/.tasks. An existing directory is
+// left alone, so running it twice is harmless.
 func InitStore(root string) (*Store, error) {
-	dir := filepath.Join(root, TaskDirName)
-	if override := os.Getenv(EnvTaskDir); override != "" {
-		abs, err := filepath.Abs(override)
-		if err != nil {
-			return nil, err
-		}
-		dir = abs
-	}
-	if _, err := os.Stat(dir); err == nil {
-		return nil, fmt.Errorf("%s already exists", dir)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	return &Store{Dir: dir}, nil
-}
-
-// OpenStore discovers the task directory starting at startDir.
-func OpenStore(startDir string) (*Store, error) {
-	dir, err := DiscoverTaskDir(startDir)
+	dir, err := taskDirTarget(root)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{Dir: dir}, nil
+
+	info, err := os.Stat(dir)
+	switch {
+	case err == nil && info.IsDir():
+		return &Store{Dir: dir}, nil
+	case err == nil:
+		return nil, fmt.Errorf("%s exists and is not a directory", dir)
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, err
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return &Store{Dir: dir, Created: true}, nil
 }
 
-// DiscoverTaskDir returns the task directory to use: the TQ_DIR override when
-// set, otherwise the nearest .tasks directory at or above startDir. Walking up
-// lets an agent run tq from any subdirectory of a repository.
+// OpenStore returns the store for startDir, creating the task directory when
+// there is none: `tq add` in a fresh repository should just work rather than
+// stopping to demand `tq init`.
+func OpenStore(startDir string) (*Store, error) {
+	dir, err := DiscoverTaskDir(startDir)
+	switch {
+	case err == nil:
+		return &Store{Dir: dir}, nil
+	case errors.Is(err, ErrProjectNotFound):
+		store, createErr := InitStore(startDir)
+		if createErr != nil {
+			// Still "no usable task directory", which is exit code 3.
+			return nil, fmt.Errorf("%w: %v", ErrProjectNotFound, createErr)
+		}
+		return store, nil
+	default:
+		return nil, err
+	}
+}
+
+// taskDirTarget is where a new task directory belongs: TQ_DIR when set,
+// otherwise .tasks at the root of the enclosing Git repository, falling back to
+// startDir itself. Preferring the repository root keeps an agent working in a
+// subdirectory from scattering task directories around the tree.
+func taskDirTarget(startDir string) (string, error) {
+	if override := os.Getenv(EnvTaskDir); override != "" {
+		return filepath.Abs(override)
+	}
+
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", err
+	}
+	if root, ok := repositoryRoot(dir); ok {
+		dir = root
+	}
+	return filepath.Join(dir, TaskDirName), nil
+}
+
+// repositoryRoot returns the nearest directory at or above dir that holds .git.
+func repositoryRoot(dir string) (string, bool) {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+// DiscoverTaskDir returns the existing task directory to use: the TQ_DIR
+// override when set, otherwise the nearest .tasks directory at or above
+// startDir. Walking up lets an agent run tq from any subdirectory of a
+// repository. It reports ErrProjectNotFound when there is nothing yet, which is
+// what makes OpenStore create one.
 func DiscoverTaskDir(startDir string) (string, error) {
 	if override := os.Getenv(EnvTaskDir); override != "" {
 		abs, err := filepath.Abs(override)
@@ -75,10 +127,12 @@ func DiscoverTaskDir(startDir string) (string, error) {
 			return "", err
 		}
 		info, err := os.Stat(abs)
-		if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return "", fmt.Errorf("%w: %s=%s does not exist yet", ErrProjectNotFound, EnvTaskDir, override)
+		case err != nil:
 			return "", fmt.Errorf("%s=%s: %w", EnvTaskDir, override, err)
-		}
-		if !info.IsDir() {
+		case !info.IsDir():
 			return "", fmt.Errorf("%s=%s is not a directory", EnvTaskDir, override)
 		}
 		return abs, nil
@@ -95,7 +149,7 @@ func DiscoverTaskDir(startDir string) (string, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir { // filesystem root
-			return "", fmt.Errorf("%w (looked in %s and every parent directory; run `tq init` first)", ErrProjectNotFound, startDir)
+			return "", fmt.Errorf("%w (looked in %s and every parent directory)", ErrProjectNotFound, startDir)
 		}
 		dir = parent
 	}

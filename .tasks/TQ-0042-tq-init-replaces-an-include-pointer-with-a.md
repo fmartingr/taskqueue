@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T13:31:50+02:00
-updated: 2026-08-25T13:40:08+02:00
+updated: 2026-08-25T14:04:04+02:00
 ---
 
 ## Finding
@@ -65,3 +65,5 @@ regenerating the guide.
 ## Notes
 
 - 2026-08-25T13:40:08+02:00 — Related: TQ-0043 covers a second way tq init damages committed repo docs — docRoot() ignores TQ_DIR, so the pointer is written into the enclosing Git repo even when the task dir is elsewhere. Different root cause, separate fix.
+- 2026-08-25T14:04:04+02:00 — Half resolved by TQ-0045 (commit 004aa72): pointsAtGuide now recognises an @<link> include, so a root AGENTS.md carrying @.tasks/AGENTS.md is left alone. Verified in a throwaway repo — AGENTS.md untouched and absent from the written list.
+- 2026-08-25T14:04:04+02:00 — Still open: a CLAUDE.md that is just @AGENTS.md, and so reaches the guide transitively, still gets a redundant '# Task management' section appended. Same repro, same run. That is the remaining half of this ticket.

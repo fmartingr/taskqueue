@@ -1,6 +1,6 @@
 ---
 id: TQ-0034
-title: Watch config.yaml and push config changes to the board
+title: Watch .taskqueue.yaml and push config changes to the board
 status: todo
 priority: normal
 labels:
@@ -11,13 +11,13 @@ depends_on:
   - TQ-0029
   - TQ-0033
 created: 2026-08-25T12:07:30+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:37:14+02:00
 ---
 
 ## Proposal
 
 Once the project config exists (TQ-0029) the board fetches it once at load, so
-editing `.tasks/config.yaml` — adding a label, changing a colour, adding a
+editing `.taskqueue.yaml` — adding a label, changing a colour, adding a
 severity — only shows up after a manual reload. Extend the change detection from
 the event-stream ticket to cover the config file and push a `config` event; the
 board refetches `GET /api/config` and re-renders chips, selects and filters.
@@ -41,7 +41,7 @@ board refetches `GET /api/config` and re-renders chips, selects and filters.
 
 ## Acceptance criteria
 
-- Editing `.tasks/config.yaml` updates an open board within a second: new labels
+- Editing `.taskqueue.yaml` updates an open board within a second: new labels
   appear in the filter bar, colours change, severity options update.
 - An invalid config surfaces an error and leaves the board usable with the last
   good configuration.

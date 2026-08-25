@@ -7,7 +7,7 @@ labels:
   - bug
   - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T16:37:48+02:00
+updated: 2026-08-25T18:38:13+02:00
 ---
 
 ## Finding
@@ -80,3 +80,4 @@ Filed from a `/code-review` pass at max effort.
 - 2026-08-25T16:37:48+02:00 — Correction to this ticket's own plan: the improved not-found error is unreachable from the CLI. OpenStore is DiscoverTaskDir's only caller and it converts ErrProjectNotFound into creating a local queue, so the message never prints. It is kept and tested as the function's contract, but it is not what a user sees.
 - 2026-08-25T16:37:48+02:00 — Where the confusion actually lands is the create path: a developer with tasks above the repository suddenly gets an empty local queue. tq now prints a second stderr note there, naming the excluded directory and TQ_WALK_FOREVER. That is this ticket's intent delivered where it is visible.
 - 2026-08-25T16:37:48+02:00 — Out of scope and still open, as recorded before: the swallowed permission error on a candidate .tasks, and unresolved symlinks in the walk. Both survive inside a single repository and are untouched by the bound.
+- 2026-08-25T18:38:13+02:00 — TQ-0029 moves the config to .taskqueue.yaml at the repository root, and discovery then stops at the first marker it finds walking up. That removes most of this ticket: the unbounded walk only remains as the fallback for repositories with a .tasks directory and no marker. Re-scope or close once TQ-0029 lands.

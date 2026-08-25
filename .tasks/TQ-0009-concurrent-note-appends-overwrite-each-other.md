@@ -1,13 +1,13 @@
 ---
 id: TQ-0009
 title: Concurrent note appends overwrite each other
-status: todo
+status: in-progress
 priority: high
 labels:
   - bug
   - component/api
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:36:54+02:00
 ---
 
 ## Finding

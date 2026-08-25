@@ -10,12 +10,12 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-25T12:20:09+02:00
+updated: 2026-08-25T18:37:29+02:00
 ---
 
 ## Proposal
 
-Store the project's label set in `.tasks/config.yaml` so labels are a fixed,
+Store the project's label set in `.taskqueue.yaml` so labels are a fixed,
 reviewable vocabulary instead of whatever string was typed last.
 
 ```yaml

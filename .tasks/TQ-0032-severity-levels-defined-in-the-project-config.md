@@ -9,12 +9,12 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:59:41+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:37:29+02:00
 ---
 
 ## Proposal
 
-Move the severity vocabulary into `.tasks/config.yaml`, the same treatment
+Move the severity vocabulary into `.taskqueue.yaml`, the same treatment
 labels get in TQ-0030. Today it is hard-coded as the four `priority` values
 (`urgent`, `high`, `normal`, `low`) in `task.go:46`.
 

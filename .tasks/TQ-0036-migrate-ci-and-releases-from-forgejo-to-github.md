@@ -9,7 +9,7 @@ labels:
 depends_on:
   - TQ-0037
 created: 2026-08-25T12:13:06+02:00
-updated: 2026-08-25T18:28:32+02:00
+updated: 2026-08-25T18:33:28+02:00
 ---
 
 ## Why
@@ -101,3 +101,5 @@ line, belong to TQ-0037; this ticket owns the shape of the section.
 - 2026-08-25T18:28:32+02:00 — That required an architecture change the user approved: a thin package main in cmd/tq, with the root becoming package taskqueue. public/ and its go:embed stay at the root, because an embed cannot reach outside its own package directory. AGENTS.md's no-cmd rule is rewritten to allow exactly this one subpackage and say why.
 - 2026-08-25T18:28:32+02:00 — Knock-on fixes: ldflags now set github.com/fmartingr/taskqueue.version, make build and goreleaser build ./cmd/tq, and go run . became go run ./cmd/tq in the Makefile and the plan. goreleaser snapshot produces a binary named tq, and GOBIN=... go install ./cmd/tq installs tq.
 - 2026-08-25T18:28:32+02:00 — Not done, deliberately: pinning actions by commit SHA and adding a Dependabot config, both listed as optional hardening. SHAs cannot be resolved without network access here, and the two belong together.
+- 2026-08-25T18:33:28+02:00 — Shipped a broken commit and caught it on review: .gitignore had a bare tq for the built binary, and git matches that against any path component of that name at any depth, so cmd/tq and its main.go were never added. The commit contained no main package and a clone of it could not build.
+- 2026-08-25T18:33:28+02:00 — Fixed by anchoring the pattern to /tq. Verified the way it should have been the first time: cloned the repository to a temp directory and ran make build and go test there, rather than trusting the working tree where the file existed but was untracked.

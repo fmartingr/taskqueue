@@ -9,12 +9,12 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T12:11:41+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:37:29+02:00
 ---
 
 ## Proposal
 
-Move the board's columns into `.tasks/config.yaml`. They are the `status`
+Move the board's columns into `.taskqueue.yaml`. They are the `status`
 vocabulary, hard-coded today as `backlog`/`todo`/`in-progress`/`done` at
 `task.go:45`, and the order is the board order:
 

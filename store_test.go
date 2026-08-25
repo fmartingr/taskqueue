@@ -138,7 +138,8 @@ func TestCreateWritesMarkdownFile(t *testing.T) {
 		t.Error("timestamps should be set on create")
 	}
 
-	data, err := os.ReadFile(filepath.Join(store.Dir, "TQ-0001.md"))
+	// The filename carries a slug of the title so the directory is browsable.
+	data, err := os.ReadFile(filepath.Join(store.Dir, "TQ-0001-implement-rest-api.md"))
 	if err != nil {
 		t.Fatalf("read task file: %v", err)
 	}
@@ -185,8 +186,9 @@ func TestNextIDIsSequential(t *testing.T) {
 		}
 	}
 
-	// IDs continue past four digits without renumbering existing tasks.
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-9999.md"), []byte("---\nid: TQ-9999\ntitle: x\nstatus: todo\n---\n"), 0o644); err != nil {
+	// IDs continue past four digits without renumbering existing tasks, and the
+	// title suffix does not confuse the scan.
+	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-9999-nearly-out-of-digits.md"), []byte("---\nid: TQ-9999\ntitle: x\nstatus: todo\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	next, err := store.NextID()
@@ -282,17 +284,109 @@ func TestUpdateRewritesFileAtomically(t *testing.T) {
 		t.Errorf("reloaded = %+v", reloaded)
 	}
 
-	// The rewrite leaves exactly one valid file behind (no temp files).
+	// The rewrite leaves exactly one valid file behind (no temp files, and no
+	// leftover from the old title).
 	entries, err := os.ReadDir(store.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "TQ-0001.md" {
+	if len(entries) != 1 || entries[0].Name() != "TQ-0001-renamed.md" {
 		var names []string
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		t.Errorf("directory contains %v, want only TQ-0001.md", names)
+		t.Errorf("directory contains %v, want only TQ-0001-renamed.md", names)
+	}
+}
+
+func TestTaskFileName(t *testing.T) {
+	tests := []struct {
+		title string
+		want  string
+	}{
+		{"Implement REST API", "TQ-0001-implement-rest-api.md"},
+		{"...", "TQ-0001.md"}, // nothing slugifiable: the ID alone
+	}
+	for _, tc := range tests {
+		task := Task{ID: "TQ-0001", Title: tc.title, Status: StatusTodo}
+		if got := TaskFileName(task); got != tc.want {
+			t.Errorf("TaskFileName(%q) = %q, want %q", tc.title, got, tc.want)
+		}
+	}
+}
+
+func TestGetFindsTasksWhateverTheSuffix(t *testing.T) {
+	store := newTestStore(t)
+	// A file written before titles were part of the filename.
+	legacy := "---\nid: TQ-0001\ntitle: Written by an older version\nstatus: todo\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0001.md"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := store.Get("TQ-0001")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Title != "Written by an older version" {
+		t.Errorf("task = %+v", task)
+	}
+
+	tasks, err := store.List()
+	if err != nil || len(tasks) != 1 {
+		t.Errorf("List() = %d tasks, %v; want 1", len(tasks), err)
+	}
+
+	// Touching it adopts the new naming.
+	if _, err := store.Update(task); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "TQ-0001-written-by-an-older-version.md")); err != nil {
+		t.Errorf("update should have renamed the file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "TQ-0001.md")); err == nil {
+		t.Error("the old filename should be gone")
+	}
+}
+
+func TestUpdateKeepsTheFilenameWhenTheTitleIsUnchanged(t *testing.T) {
+	store := newTestStore(t)
+	task := mustCreate(t, store, CreateTaskInput{Title: "Stable title"})
+
+	task.Status = StatusInProgress
+	if _, err := store.Update(task); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	entries, err := os.ReadDir(store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "TQ-0001-stable-title.md" {
+		t.Errorf("directory contains %v, want only TQ-0001-stable-title.md", entries)
+	}
+}
+
+func TestDuplicateFilesForOneIDAreRejected(t *testing.T) {
+	store := newTestStore(t)
+	task := mustCreate(t, store, CreateTaskInput{Title: "Original"})
+
+	// A half-finished manual rename leaves two files claiming one ID.
+	rendered, err := RenderTask(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0001-copy.md"), rendered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.Get("TQ-0001")
+	if !errors.Is(err, ErrInvalidTaskFile) {
+		t.Errorf("Get = %v, want ErrInvalidTaskFile", err)
+	}
+	for _, name := range []string{"TQ-0001-original.md", "TQ-0001-copy.md"} {
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("error %v should name %s", err, name)
+		}
 	}
 }
 

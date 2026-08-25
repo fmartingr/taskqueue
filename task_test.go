@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func task(id, status string, deps ...string) Task {
@@ -267,4 +268,41 @@ func TestApplyPatch(t *testing.T) {
 			t.Error("a patch with a label addition should not report IsEmpty")
 		}
 	})
+}
+
+func TestSlugify(t *testing.T) {
+	tests := []struct {
+		title string
+		want  string
+	}{
+		{"Suffix tasks", "suffix-tasks"},
+		{"Implement OIDC authentication", "implement-oidc-authentication"},
+		{"Fix the /api/tasks endpoint", "fix-the-api-tasks-endpoint"},
+		{"  Trim   the   spaces  ", "trim-the-spaces"},
+		{"CamelCase AND UPPER", "camelcase-and-upper"},
+		{"Release v1.2.3", "release-v1-2-3"},
+		{"Implementar autenticación", "implementar-autenticación"},
+		{"...", ""},
+		{"", ""},
+		{"-leading and trailing-", "leading-and-trailing"},
+		{
+			"A very long title that should be cut somewhere sensible instead of mid-word",
+			"a-very-long-title-that-should-be-cut-somewhere",
+		},
+	}
+	for _, tc := range tests {
+		if got := Slugify(tc.title); got != tc.want {
+			t.Errorf("Slugify(%q) = %q, want %q", tc.title, got, tc.want)
+		}
+	}
+}
+
+func TestSlugifyStaysWithinTheLengthBudget(t *testing.T) {
+	slug := Slugify(strings.Repeat("ünicöde ", 40))
+	if got := len([]rune(slug)); got > maxSlugRunes {
+		t.Errorf("slug is %d runes, want at most %d: %q", got, maxSlugRunes, slug)
+	}
+	if !utf8.ValidString(slug) {
+		t.Errorf("slug is not valid UTF-8: %q", slug)
+	}
 }

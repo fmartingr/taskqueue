@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Task is the single domain object of the task queue. It maps one-to-one to a
@@ -307,4 +308,42 @@ func removeAll(values, remove []string) []string {
 		}
 	}
 	return out
+}
+
+// maxSlugRunes caps the title suffix of a task filename. Long enough to stay
+// recognisable, short enough to keep paths and `ls` output readable.
+const maxSlugRunes = 48
+
+// Slugify turns a task title into the filename suffix: lowercase, with runs of
+// anything that is not a letter or a digit collapsed into a single dash. It
+// returns "" when a title has nothing usable in it, in which case the file is
+// named after the ID alone.
+func Slugify(title string) string {
+	slug := make([]rune, 0, len(title))
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			slug = append(slug, r)
+		case len(slug) > 0 && slug[len(slug)-1] != '-':
+			slug = append(slug, '-')
+		}
+	}
+
+	if len(slug) > maxSlugRunes {
+		slug = slug[:maxSlugRunes]
+		// Prefer cutting at a word boundary over cutting mid-word.
+		if i := lastIndexRune(slug, '-'); i > 0 {
+			slug = slug[:i]
+		}
+	}
+	return strings.Trim(string(slug), "-")
+}
+
+func lastIndexRune(runes []rune, target rune) int {
+	for i := len(runes) - 1; i >= 0; i-- {
+		if runes[i] == target {
+			return i
+		}
+	}
+	return -1
 }

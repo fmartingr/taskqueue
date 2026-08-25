@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -167,8 +169,58 @@ type CreateTaskInput struct {
 	Body      string
 }
 
-func (s *Store) path(id string) string {
-	return filepath.Join(s.Dir, id+".md")
+// taskFilePattern matches the two shapes a task file can have: the ID alone,
+// or the ID followed by a slug of the title.
+var taskFilePattern = regexp.MustCompile(`^(TQ-[0-9]+)(?:-[^/]*)?\.md$`)
+
+// TaskFileName is the file a task belongs in: its ID, suffixed with a slug of
+// the title so the directory is browsable and greppable by name. The ID stays
+// first, so files sort and glob by ID.
+func TaskFileName(task Task) string {
+	if slug := Slugify(task.Title); slug != "" {
+		return task.ID + "-" + slug + ".md"
+	}
+	return task.ID + ".md"
+}
+
+// taskFileID reports which task a filename holds, ignoring the title suffix.
+func taskFileID(name string) (string, bool) {
+	match := taskFilePattern.FindStringSubmatch(name)
+	if match == nil {
+		return "", false
+	}
+	return match[1], true
+}
+
+// locate finds the file holding a task, whatever title suffix it carries.
+func (s *Store) locate(id string) (string, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return "", err
+	}
+
+	var matches []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if fileID, ok := taskFileID(entry.Name()); ok && fileID == id {
+			matches = append(matches, entry.Name())
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	case 1:
+		return matches[0], nil
+	default:
+		// Two files claiming one ID is ambiguous: renaming by hand or a
+		// half-finished rename can cause it, and guessing would lose an edit.
+		sort.Strings(matches)
+		return "", fmt.Errorf("%w: %s is claimed by %d files (%s); keep the one you want",
+			ErrInvalidTaskFile, id, len(matches), strings.Join(matches, ", "))
+	}
 }
 
 // List returns every task in the directory in the default order: status,
@@ -185,11 +237,10 @@ func (s *Store) List() ([]Task, error) {
 			continue
 		}
 		name := entry.Name()
-		id, ok := strings.CutSuffix(name, ".md")
-		if !ok || !ValidID(id) {
+		if _, ok := taskFileID(name); !ok {
 			continue
 		}
-		task, err := s.read(id)
+		task, err := s.readFile(name)
 		if err != nil {
 			return nil, err
 		}
@@ -205,23 +256,29 @@ func (s *Store) Get(id string) (Task, error) {
 	if !ValidID(id) {
 		return Task{}, fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
 	}
-	return s.read(id)
+	name, err := s.locate(id)
+	if err != nil {
+		return Task{}, err
+	}
+	return s.readFile(name)
 }
 
-func (s *Store) read(id string) (Task, error) {
-	name := id + ".md"
+func (s *Store) readFile(name string) (Task, error) {
 	data, err := os.ReadFile(filepath.Join(s.Dir, name))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Task{}, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+			return Task{}, fmt.Errorf("%w: %s", ErrTaskNotFound, name)
 		}
 		return Task{}, err
 	}
+
 	task, err := ParseTask(name, data)
 	if err != nil {
 		return Task{}, err
 	}
-	if task.ID != id {
+	// The ID in the frontmatter is authoritative; a stale title suffix is
+	// harmless and gets fixed on the next write.
+	if fileID, _ := taskFileID(name); task.ID != fileID {
 		return Task{}, fmt.Errorf("%w: %s: id %q does not match the filename", ErrInvalidTaskFile, name, task.ID)
 	}
 	return task, nil
@@ -250,7 +307,7 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 	if err := task.Validate(); err != nil {
 		return Task{}, err
 	}
-	if err := s.write(task); err != nil {
+	if _, err := s.write(task); err != nil {
 		return Task{}, err
 	}
 	return task, nil
@@ -259,7 +316,8 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 // Update rewrites an existing task and refreshes its updated timestamp. The
 // returned task is exactly what was written to disk.
 func (s *Store) Update(task Task) (Task, error) {
-	if _, err := s.Get(task.ID); err != nil {
+	current, err := s.locate(task.ID)
+	if err != nil {
 		return Task{}, err
 	}
 	task.Title = strings.TrimSpace(task.Title)
@@ -271,8 +329,17 @@ func (s *Store) Update(task Task) (Task, error) {
 	if err := task.Validate(); err != nil {
 		return Task{}, err
 	}
-	if err := s.write(task); err != nil {
+
+	written, err := s.write(task)
+	if err != nil {
 		return Task{}, err
+	}
+	// A retitled task moves to a new filename; drop the old one only once the
+	// new file is safely on disk.
+	if written != current {
+		if err := os.Remove(filepath.Join(s.Dir, current)); err != nil {
+			return Task{}, fmt.Errorf("renaming %s to %s: %w", current, written, err)
+		}
 	}
 	return task, nil
 }
@@ -282,13 +349,11 @@ func (s *Store) Delete(id string) error {
 	if !ValidID(id) {
 		return fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
 	}
-	if err := os.Remove(s.path(id)); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
-		}
+	name, err := s.locate(id)
+	if err != nil {
 		return err
 	}
-	return nil
+	return os.Remove(filepath.Join(s.Dir, name))
 }
 
 // NextID returns the next sequential task ID. Two processes creating a task at
@@ -302,8 +367,8 @@ func (s *Store) NextID() (string, error) {
 
 	highest := 0
 	for _, entry := range entries {
-		id, ok := strings.CutSuffix(entry.Name(), ".md")
-		if !ok || !ValidID(id) {
+		id, ok := taskFileID(entry.Name())
+		if !ok {
 			continue
 		}
 		n, err := strconv.Atoi(strings.TrimPrefix(id, "TQ-"))
@@ -316,15 +381,15 @@ func (s *Store) NextID() (string, error) {
 
 // write renders the task and replaces the destination file atomically, so a
 // crash mid-write can never leave a half-written task on disk.
-func (s *Store) write(task Task) (err error) {
+func (s *Store) write(task Task) (name string, err error) {
 	data, err := RenderTask(task)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	tmp, err := os.CreateTemp(s.Dir, ".tq-*.tmp")
 	if err != nil {
-		return err
+		return "", err
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -335,19 +400,23 @@ func (s *Store) write(task Task) (err error) {
 	}()
 
 	if _, err = tmp.Write(data); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Chmod(0o644); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Close(); err != nil {
-		return err
+		return "", err
 	}
-	err = os.Rename(tmpName, s.path(task.ID))
-	return err
+
+	name = TaskFileName(task)
+	if err = os.Rename(tmpName, filepath.Join(s.Dir, name)); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func orDefault(value, fallback string) string {

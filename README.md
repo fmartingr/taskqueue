@@ -153,8 +153,13 @@ Implement authentication using the existing OIDC provider.
 - Statuses: `backlog`, `todo`, `in-progress`, `done`.
 - Priorities: `urgent`, `high`, `normal` (default), `low` — highest first, which
   is also the order `tq list` sorts by.
-- Filenames are the stable ID (`TQ-0001.md`), so renaming a task is not a Git
-  rename and references stay short.
+- Files are named `<id>-<title-slug>.md` (`TQ-0001-implement-oidc-authentication.md`),
+  so the directory is browsable and greppable by name. The ID comes first, so
+  files still sort and glob by ID.
+- The `id` in the frontmatter is authoritative: tasks are looked up by ID
+  whatever the suffix says, files written before this naming existed keep
+  working, and retitling a task renames its file on the next write (Git records
+  it as a rename).
 - Writes are atomic (write to a temporary file, then rename), so a crash never
   leaves a half-written task behind.
 - Frontmatter is strict: unknown fields are rejected rather than silently

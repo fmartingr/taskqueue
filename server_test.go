@@ -297,13 +297,13 @@ func TestAPIUnknownRouteReturnsJSON(t *testing.T) {
 
 func TestAPIMalformedTaskFile(t *testing.T) {
 	srv, store := newTestServer(t)
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0001.md"), []byte("no frontmatter"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0001-broken.md"), []byte("no frontmatter"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	resp, payload := do(t, srv, "GET", "/api/tasks", "")
 	expectError(t, resp, payload, http.StatusInternalServerError, "invalid_task_file")
-	if !strings.Contains(decode[apiError](t, payload).Error, "TQ-0001.md") {
+	if !strings.Contains(decode[apiError](t, payload).Error, "TQ-0001-broken.md") {
 		t.Errorf("the error should name the offending file: %s", payload)
 	}
 }
@@ -345,7 +345,7 @@ func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 	viaCLI := newTestCLI(t)
 	viaCLI.mustRun("add", "Implement REST API", "--priority", "high", "--label", "backend")
 	viaCLI.mustRun("move", "TQ-0001", "in-progress")
-	cliFile, err := os.ReadFile(filepath.Join(viaCLI.root, TaskDirName, "TQ-0001.md"))
+	cliFile, err := os.ReadFile(filepath.Join(viaCLI.root, TaskDirName, "TQ-0001-implement-rest-api.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 	srv, store := newTestServer(t)
 	do(t, srv, "POST", "/api/tasks", `{"title": "Implement REST API", "priority": "high", "labels": ["backend"]}`)
 	do(t, srv, "PATCH", "/api/tasks/TQ-0001", `{"status": "in-progress"}`)
-	httpFile, err := os.ReadFile(filepath.Join(store.Dir, "TQ-0001.md"))
+	httpFile, err := os.ReadFile(filepath.Join(store.Dir, "TQ-0001-implement-rest-api.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

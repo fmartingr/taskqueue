@@ -241,7 +241,7 @@ func TestCLIShowDescribesDependencies(t *testing.T) {
 func TestCLIShowSurvivesUnreadableSiblingTask(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "Readable", "--depends-on", "TQ-0002")
-	if err := os.WriteFile(filepath.Join(tc.root, TaskDirName, "TQ-0002.md"), []byte("not a task"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tc.root, TaskDirName, "TQ-0002-broken.md"), []byte("not a task"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -326,6 +326,35 @@ func TestCLIUpdate(t *testing.T) {
 	}
 }
 
+func TestCLIUpdateRenamesTheFile(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Original title")
+	dir := filepath.Join(tc.root, TaskDirName)
+	if _, err := os.Stat(filepath.Join(dir, "TQ-0001-original-title.md")); err != nil {
+		t.Fatalf("add should name the file after the title: %v", err)
+	}
+
+	tc.mustRun("update", "TQ-0001", "--title", "A better title")
+
+	if _, err := os.Stat(filepath.Join(dir, "TQ-0001-a-better-title.md")); err != nil {
+		t.Errorf("the file should follow the new title: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory contains %d files, want 1 (the old name should be gone)", len(entries))
+	}
+
+	// The ID still addresses the task after the rename.
+	var task Task
+	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
+	if task.Title != "A better title" {
+		t.Errorf("task = %+v", task)
+	}
+}
+
 func TestCLINote(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "Implement REST API", "--body", "Description.")
@@ -399,7 +428,7 @@ func TestCLICreatesTaskDirOnDemand(t *testing.T) {
 		t.Errorf("add output = %q", out)
 	}
 	dir := filepath.Join(tc.root, TaskDirName)
-	if _, err := os.Stat(filepath.Join(dir, "TQ-0001.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "TQ-0001-first-task.md")); err != nil {
 		t.Fatalf("task file not written: %v", err)
 	}
 	if !strings.Contains(tc.stderr.String(), dir) {

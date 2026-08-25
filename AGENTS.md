@@ -49,6 +49,9 @@ make dev        # Bun watch + DEV=1 server
   runtime without an explicit architecture change.
 - Do not have the HTTP layer shell out to the `tq` binary. Both surfaces call the
   same store functions.
+- Task files are named `<id>-<title-slug>.md`, but the ID in the frontmatter is
+  what identifies a task: look tasks up by ID (`Store.locate`), never by
+  reconstructing a filename from a title.
 - Preserve JSON CLI output compatibility; it is the stable agent API.
 - Keep stdout clean when `--json` is active: data on stdout, everything else on
   stderr.

@@ -498,3 +498,50 @@ func TestWithTaskSectionIgnoresAFencedHashWhenChoosingItsLevel(t *testing.T) {
 		t.Errorf("the document has no level-one heading, so the section is one:\n%s", updated)
 	}
 }
+
+// An unclosed fence would otherwise hide every line below it, including a real
+// Task management section — and withTaskSection would then append another one
+// on every run, growing a committed file without bound.
+func TestHeadingLevelsFallsBackOnAnUnbalancedFence(t *testing.T) {
+	lines := []string{"# Project", "", "## Setup", "", "```sh", "make build", "", "## Task management"}
+	levels := headingLevels(lines)
+	if got := levels[len(levels)-1]; got != 2 {
+		t.Errorf("level of the trailing heading = %d, want 2 (the stray fence must not hide it)", got)
+	}
+	if levels[0] != 1 {
+		t.Errorf("level of the first heading = %d, want 1", levels[0])
+	}
+}
+
+func TestWithTaskSectionConvergesPastAStrayFence(t *testing.T) {
+	for _, tc := range []struct{ name, doc string }{
+		{"unclosed fence", "# Project\n\n## Setup\n\n```sh\nmake build\n\n## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n"},
+		{"tab-indented fence", "# Doc\n\n\t```bash\n\techo hi\n```\n\n## Task management\n\nSee [AGENTS.md](.tasks/AGENTS.md)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := tc.doc
+			for pass := 1; pass <= 3; pass++ {
+				updated, ok := withTaskSection(doc, ".tasks/AGENTS.md")
+				if ok {
+					t.Fatalf("pass %d rewrote a document that already points at the guide", pass)
+				}
+				doc = updated
+			}
+			if got := strings.Count(doc, taskSectionTitle); got != 1 {
+				t.Errorf("%q appears %d times after three passes, want 1", taskSectionTitle, got)
+			}
+		})
+	}
+}
+
+// A level-one heading hidden behind a stray fence must still be seen, or a
+// second one gets appended to a document that already has one.
+func TestWithTaskSectionSeesAnH1PastAStrayFence(t *testing.T) {
+	updated, ok := withTaskSection("Intro\n\n```\nstuff\n\n# Real Title\n", ".tasks/AGENTS.md")
+	if !ok {
+		t.Fatal("withTaskSection made no change, want a section appended")
+	}
+	if strings.Contains(updated, "\n# "+taskSectionTitle) {
+		t.Errorf("appended a second level-one heading:\n%s", updated)
+	}
+}

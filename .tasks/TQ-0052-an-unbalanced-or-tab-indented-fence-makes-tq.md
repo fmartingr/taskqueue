@@ -1,13 +1,13 @@
 ---
 id: TQ-0052
 title: An unbalanced or tab-indented fence makes tq init duplicate the Task management section forever
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/cli
 created: 2026-08-25T14:47:08+02:00
-updated: 2026-08-25T14:47:08+02:00
+updated: 2026-08-25T16:00:22+02:00
 ---
 
 ## Finding
@@ -44,3 +44,11 @@ has: if a fence never closes, re-scan treating it as literal text. Accept tabs
 as well as spaces in `fenceDelimiter`'s indent handling.
 
 Found by `/code-review` over 004aa72~1..HEAD.
+
+---
+
+## Notes
+
+- 2026-08-25T16:00:21+02:00 — Fixed. headingLevels now mirrors notesStart: scanHeadingLevels reports whether the fences balanced, and an unbalanced document is rescanned with fences read as ordinary lines, so a stray fence can no longer hide a real Task management section.
+- 2026-08-25T16:00:22+02:00 — Deviation from the suggested fix, deliberate: the ticket said to accept a tab-indented fence as a fence, but CommonMark expands a tab to the next four-column stop, so one leading tab already puts the line four columns in and it is an indented code block, not a fence. Added indentColumns to measure that properly instead. The tab case is fixed by the fallback — the plain closing fence below it is what opens an unbalanced fence.
+- 2026-08-25T16:00:22+02:00 — Verified end to end against both reproductions: three tq init runs on a document with an unclosed fence produced 4 Task management sections before and 1 now, with the Setup section and the fence itself preserved. The hidden-H1 case is covered too, so tq no longer appends a second level-one heading.

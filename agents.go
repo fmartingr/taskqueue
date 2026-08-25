@@ -216,10 +216,27 @@ const fencedLine = -1
 // headingLevels classifies every line of a document: the level of its ATX
 // heading, 0 for anything else, and fencedLine inside a fenced code block.
 func headingLevels(lines []string) []int {
-	levels := make([]int, len(lines))
+	if levels, balanced := scanHeadingLevels(lines, true); balanced {
+		return levels
+	}
+	// The document has an unclosed (or mismatched) fence, which would hide
+	// every line below it — including a real Task management section, so that
+	// syncing would append a second one on every run and grow a committed file
+	// without bound. Read the fences as ordinary lines instead, the way
+	// notesStart does for a task body.
+	levels, _ := scanHeadingLevels(lines, false)
+	return levels
+}
+
+func scanHeadingLevels(lines []string, honourFences bool) (levels []int, balanced bool) {
+	levels = make([]int, len(lines))
 	open := ""
 
 	for i, line := range lines {
+		if !honourFences {
+			levels[i] = headingLevel(line)
+			continue
+		}
 		fence, info := fenceDelimiter(line)
 		if open != "" {
 			levels[i] = fencedLine
@@ -237,7 +254,7 @@ func headingLevels(lines []string) []int {
 		}
 		levels[i] = headingLevel(line)
 	}
-	return levels
+	return levels, open == ""
 }
 
 // headingLevel returns the level of an ATX heading, or 0 when the line is not
@@ -253,13 +270,28 @@ func headingLevel(line string) int {
 	return hashes
 }
 
+// indentColumns measures leading whitespace the way Markdown does, with tabs
+// advancing to the next four-column stop. One leading tab is therefore already
+// four columns, which is why a tab-indented fence is an indented code block.
+func indentColumns(indent string) int {
+	columns := 0
+	for _, r := range indent {
+		if r == '\t' {
+			columns += 4 - columns%4
+		} else {
+			columns++
+		}
+	}
+	return columns
+}
+
 // fenceDelimiter splits a code fence line into its run of backticks or tildes
 // and the info string that follows. It returns an empty marker for any other
 // line, indented code blocks included.
 func fenceDelimiter(line string) (fence, info string) {
-	trimmed := strings.TrimLeft(line, " ")
-	if len(line)-len(trimmed) > 3 {
-		return "", "" // indented four spaces: a code block, not a fence
+	trimmed := strings.TrimLeft(line, " \t")
+	if indentColumns(line[:len(line)-len(trimmed)]) > 3 {
+		return "", "" // indented four columns: a code block, not a fence
 	}
 	for _, char := range "`~" {
 		if run := len(trimmed) - len(strings.TrimLeft(trimmed, string(char))); run >= 3 {

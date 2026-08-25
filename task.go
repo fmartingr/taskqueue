@@ -88,6 +88,36 @@ func (t Task) Validate() error {
 	return nil
 }
 
+// ValidateForWrite reports the first problem that would make a task file
+// unusable, or that tq must not commit to disk. It is stricter than Validate
+// on purpose: reading stays forgiving, so a file that already carries a line
+// break still loads and `tq list` keeps working while it is corrected.
+func (t Task) ValidateForWrite() error {
+	if err := t.Validate(); err != nil {
+		return err
+	}
+	switch {
+	case containsLineBreak(t.Title):
+		return fmt.Errorf("title must be a single line")
+	case containsLineBreak(t.Assignee):
+		return fmt.Errorf("assignee must be a single line")
+	}
+	for _, label := range t.Labels {
+		if containsLineBreak(label) {
+			return fmt.Errorf("label %q must be a single line", label)
+		}
+	}
+	return nil
+}
+
+// containsLineBreak reports whether a value would render as a multi-line YAML
+// block scalar. Every line of one is indented, so any line of it can look
+// like the frontmatter delimiter — and the filename is a slug of the title,
+// which a line break has no place in either.
+func containsLineBreak(s string) bool {
+	return strings.ContainsAny(s, "\n\r")
+}
+
 // IndexTasks keys tasks by ID so dependency lookups stay cheap.
 func IndexTasks(tasks []Task) map[string]Task {
 	index := make(map[string]Task, len(tasks))

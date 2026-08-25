@@ -540,3 +540,30 @@ func TestSlugifyStaysWithinTheLengthBudget(t *testing.T) {
 		t.Errorf("slug is not valid UTF-8: %q", slug)
 	}
 }
+
+// A newline in a single-line field renders as a block scalar, which is how a
+// task file grows a line that looks like the frontmatter delimiter. The
+// filename is a slug of the title too, so a line break there is a mistake.
+func TestValidateRejectsLineBreaksInSingleLineFields(t *testing.T) {
+	base := Task{ID: "TQ-0001", Title: "ok", Status: StatusTodo}
+
+	for _, tc := range []struct {
+		name string
+		task Task
+	}{
+		{"title", func() Task { t := base; t.Title = "line1\n---\nline2"; return t }()},
+		{"title with a carriage return", func() Task { t := base; t.Title = "line1\rline2"; return t }()},
+		{"assignee", func() Task { t := base; t.Assignee = "agent\n---\nx"; return t }()},
+		{"label", func() Task { t := base; t.Labels = []string{"ok", "bad\nlabel"}; return t }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.task.ValidateForWrite(); err == nil {
+				t.Error("Validate() = nil, want an error for a line break")
+			}
+		})
+	}
+
+	if err := base.ValidateForWrite(); err != nil {
+		t.Errorf("ValidateForWrite() on a clean task = %v, want nil", err)
+	}
+}

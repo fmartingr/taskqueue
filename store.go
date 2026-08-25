@@ -355,7 +355,7 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 		Updated:   now,
 		Body:      strings.Trim(in.Body, "\n"),
 	}
-	if err := task.Validate(); err != nil {
+	if err := task.ValidateForWrite(); err != nil {
 		return Task{}, err
 	}
 	if _, err := s.write(task); err != nil {
@@ -377,7 +377,7 @@ func (s *Store) Update(task Task) (Task, error) {
 	task.Body = strings.Trim(task.Body, "\n")
 	task.Updated = time.Now().Truncate(time.Second)
 
-	if err := task.Validate(); err != nil {
+	if err := task.ValidateForWrite(); err != nil {
 		return Task{}, err
 	}
 

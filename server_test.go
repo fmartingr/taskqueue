@@ -372,3 +372,32 @@ func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 		t.Errorf("CLI and HTTP produced different files:\n%s\n---\n%s", cliFile, httpFile)
 	}
 }
+
+// The HTTP surface reaches the same store, so it must refuse the same title.
+func TestAPIRejectsAMultiLineTitle(t *testing.T) {
+	srv, store := newTestServer(t)
+	created := mustCreate(t, store, CreateTaskInput{Title: "Fix the parser"})
+
+	body := strings.NewReader(`{"title":"line1\n---\nline2"}`)
+	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/api/tasks/"+created.ID, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	after, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("the task should still be readable: %v", err)
+	}
+	if after.Title != "Fix the parser" {
+		t.Errorf("Title = %q, want it unchanged", after.Title)
+	}
+}

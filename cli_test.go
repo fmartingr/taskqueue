@@ -835,3 +835,25 @@ func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
 		t.Errorf("init inside the repository should still write the guide: %v", err)
 	}
 }
+
+// tq must refuse a title that would render as a block scalar, and refuse it
+// before touching the file: the whole point is that the task survives.
+func TestCLIUpdateRejectsAMultiLineTitle(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Fix the parser")
+	tc.reset()
+
+	if code := tc.run("update", "TQ-0001", "--title", "line1\n---\nline2"); code != exitError {
+		t.Errorf("exit = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(tc.stderr.String(), "single line") {
+		t.Errorf("stderr = %q, want it to say why", tc.stderr)
+	}
+	tc.reset()
+
+	// The directory must still be readable, and the task unchanged.
+	listing := tc.mustRun("list")
+	if !strings.Contains(listing, "Fix the parser") {
+		t.Errorf("the task should be untouched, got %q", listing)
+	}
+}

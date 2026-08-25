@@ -27,9 +27,13 @@ func ParseTask(filename string, data []byte) (Task, error) {
 		return Task{}, fmt.Errorf("%w: %s: missing YAML frontmatter (file must start with %q)", ErrInvalidTaskFile, filename, fmDelimiter)
 	}
 
+	// Only an unindented delimiter closes the block. An indented one is data:
+	// YAML writes a multi-line value as an indented block scalar, and a line
+	// of it may well be "---". Trimming here would end the frontmatter inside
+	// that value, and the renderer produces exactly such a file.
 	closing := -1
 	for i := 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) == fmDelimiter {
+		if strings.TrimRight(lines[i], " \t") == fmDelimiter {
 			closing = i
 			break
 		}
@@ -60,7 +64,7 @@ func ParseTask(filename string, data []byte) (Task, error) {
 // rendering a parsed task twice yields identical bytes, which keeps Git diffs
 // limited to the fields that actually changed.
 func RenderTask(t Task) ([]byte, error) {
-	if err := t.Validate(); err != nil {
+	if err := t.ValidateForWrite(); err != nil {
 		return nil, err
 	}
 

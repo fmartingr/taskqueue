@@ -228,3 +228,29 @@ func TestParseTaskAcceptsCRLF(t *testing.T) {
 		t.Errorf("Body = %q, want %q", task.Body, "body")
 	}
 }
+
+// A YAML block scalar may contain a line that looks like the frontmatter
+// delimiter. Only an unindented "---" closes the block, so an indented one is
+// data — and tq's own renderer produces exactly that for a multi-line value.
+func TestParseTaskKeepsAnIndentedRuleInsideFrontmatter(t *testing.T) {
+	data := []byte("---\n" +
+		"id: TQ-0001\n" +
+		"title: |-\n  line1\n  ---\n  line2\n" +
+		"status: todo\n" +
+		"priority: normal\n" +
+		"---\n\nBody.\n")
+
+	task, err := ParseTask("TQ-0001-x.md", data)
+	if err != nil {
+		t.Fatalf("ParseTask: %v", err)
+	}
+	if want := "line1\n---\nline2"; task.Title != want {
+		t.Errorf("Title = %q, want %q", task.Title, want)
+	}
+	if task.Status != StatusTodo {
+		t.Errorf("Status = %q, want the frontmatter to have been read past the indented rule", task.Status)
+	}
+	if task.Body != "Body." {
+		t.Errorf("Body = %q, want %q", task.Body, "Body.")
+	}
+}

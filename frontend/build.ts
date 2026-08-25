@@ -11,7 +11,9 @@
 import { watch } from "node:fs";
 
 const SOURCE_DIR = "frontend";
-const OUTPUT_DIR = "public";
+// The built frontend lives beside the package that embeds it: go:embed cannot
+// reach outside its own directory.
+const OUTPUT_DIR = "internal/web/public";
 // favicon.png is a downscaled derivative of the full-size artwork in
 // frontend/icon.png, which stays out of the binary and is used by the README.
 // Bun has no image pipeline and this project takes no JavaScript dependencies,

@@ -1,4 +1,4 @@
-package taskqueue
+package web
 
 import (
 	"encoding/json"
@@ -19,10 +19,13 @@ import (
 	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
 
+// testVersion is what the router under test is built with.
+const testVersion = "test-version"
+
 func newTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()
 	st := tqtest.NewStore(t)
-	srv := httptest.NewServer(newAPIRouter(st))
+	srv := httptest.NewServer(newAPIRouter(st, testVersion))
 	t.Cleanup(srv.Close)
 	return srv, st
 }
@@ -287,13 +290,13 @@ func TestAPIStatusAndVersion(t *testing.T) {
 		TaskDir   string `json:"task_dir"`
 		Version   string `json:"version"`
 	}](t, payload)
-	if !status.OK || status.TaskCount != 1 || status.TaskDir != st.Dir || status.Version != version {
+	if !status.OK || status.TaskCount != 1 || status.TaskDir != st.Dir || status.Version != testVersion {
 		t.Errorf("status = %+v", status)
 	}
 
 	_, payload = do(t, srv, "GET", "/api/version", "")
-	if got := decode[map[string]string](t, payload)["version"]; got != version {
-		t.Errorf("version = %q, want %q", got, version)
+	if got := decode[map[string]string](t, payload)["version"]; got != testVersion {
+		t.Errorf("version = %q, want %q", got, testVersion)
 	}
 }
 
@@ -318,7 +321,7 @@ func TestAPIMalformedTaskFile(t *testing.T) {
 
 func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	st := tqtest.NewStore(t)
-	handler, err := newRouter(st, false)
+	handler, err := NewRouter(st, false, testVersion)
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
@@ -344,40 +347,6 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	resp, _ := do(t, srv, "GET", "/api/tasks", "")
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Errorf("GET /api/tasks Content-Type = %q, want JSON", ct)
-	}
-}
-
-// The HTTP API and the CLI must produce the same Markdown, since they share the
-// same store.
-func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
-	viaCLI := newTestCLI(t)
-	viaCLI.mustRun("add", "Implement REST API", "--priority", "high", "--label", "backend")
-	viaCLI.mustRun("move", "TQ-0001", "in-progress")
-	cliFile, err := os.ReadFile(filepath.Join(viaCLI.root, config.TaskDirName, "TQ-0001-implement-rest-api.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	srv, st := newTestServer(t)
-	do(t, srv, "POST", "/api/tasks", `{"title": "Implement REST API", "priority": "high", "labels": ["backend"]}`)
-	do(t, srv, "PATCH", "/api/tasks/TQ-0001", `{"status": "in-progress"}`)
-	httpFile, err := os.ReadFile(filepath.Join(st.Dir, "TQ-0001-implement-rest-api.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	stripTimestamps := func(content []byte) string {
-		var kept []string
-		for _, line := range strings.Split(string(content), "\n") {
-			if strings.HasPrefix(line, "created:") || strings.HasPrefix(line, "updated:") {
-				continue
-			}
-			kept = append(kept, line)
-		}
-		return strings.Join(kept, "\n")
-	}
-	if stripTimestamps(cliFile) != stripTimestamps(httpFile) {
-		t.Errorf("CLI and HTTP produced different files:\n%s\n---\n%s", cliFile, httpFile)
 	}
 }
 

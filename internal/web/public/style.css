@@ -1,0 +1,557 @@
+/* tq — vanilla CSS, no framework, no build step beyond a file copy. */
+
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-alt: #eceef2;
+  --border: #d9dce3;
+  --text: #1c1f24;
+  --muted: #6b7280;
+  --accent: #2f6feb;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+  --blocked: #b45309;
+
+  --urgent: #b42318;
+  --high: #c2410c;
+  --normal: #4b5563;
+  --low: #6b7280;
+
+  --radius: 8px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 8%), 0 1px 3px rgb(16 24 40 / 6%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c;
+    --surface: #1c2027;
+    --surface-alt: #242932;
+    --border: #333a45;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #5b8dff;
+    --accent-text: #0d1117;
+    --danger: #f97066;
+    --blocked: #fbbf24;
+
+    --urgent: #f97066;
+    --high: #fdba74;
+    --normal: #9aa3b2;
+    --low: #7d879a;
+
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  flex: 1;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  font-size: 13px;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+input[type="checkbox"] {
+  padding: 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  font: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text);
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--muted);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button.ghost {
+  background: transparent;
+}
+
+/* ── Board ───────────────────────────────────────────────────── */
+
+.board {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 16px;
+  align-items: start;
+  overflow-x: auto;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--surface-alt);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+
+.column.drop-target {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-alt));
+}
+
+.column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.column-header h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.count {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.column-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* An empty column is just its header and the composer: without this the
+   zero-height list still claims a gap on both sides. Dropping is unaffected,
+   the whole column is the drop target. */
+.column-tasks:empty {
+  display: none;
+}
+
+/* ── Quick add ───────────────────────────────────────────────── */
+
+.composer-open {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.composer-open:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.composer {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+
+.composer-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  resize: none;
+  font-weight: 600;
+}
+
+.composer-input:focus-visible {
+  outline: none;
+}
+
+/* ── Cards ───────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card:active {
+  cursor: grabbing;
+}
+
+.card.dragging {
+  opacity: 0.5;
+}
+
+.card.blocked {
+  border-left: 3px solid var(--blocked);
+}
+
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-id {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.badge,
+.label,
+.assignee {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.badge {
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 700;
+  border: none;
+}
+
+.priority-urgent {
+  color: var(--urgent);
+}
+
+.priority-high {
+  color: var(--high);
+}
+
+.priority-normal {
+  color: var(--normal);
+}
+
+.priority-low {
+  color: var(--low);
+}
+
+.assignee {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border-color: transparent;
+}
+
+.blocked-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--blocked);
+}
+
+/* ── Status bar ──────────────────────────────────────────────── */
+
+.statusbar {
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+/* ── Dialogs ─────────────────────────────────────────────────── */
+
+.dialog {
+  width: min(720px, 92vw);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0;
+  box-shadow: 0 12px 32px rgb(16 24 40 / 24%);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dialog-header .task-id {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.dialog .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.dialog textarea {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+
+/* ── Notes ───────────────────────────────────────────────────── */
+
+.note-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.notes-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.notes-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.notes-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.note {
+  background: var(--surface-alt);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-time {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+.note-text {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.note-editor {
+  width: 100%;
+  margin-top: 4px;
+  resize: vertical;
+}
+
+button.icon {
+  padding: 0 6px;
+  border-color: transparent;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+button.icon:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.note-row {
+  display: flex;
+  gap: 8px;
+}
+
+.note-row input {
+  flex: 1;
+}
+
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.timestamps {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── Toasts ──────────────────────────────────────────────────── */
+
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 10;
+}
+
+.toast {
+  max-width: 380px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+
+.toast.error {
+  border-left: 3px solid var(--danger);
+}
+
+.toast.info {
+  border-left: 3px solid var(--accent);
+}
+
+@media (max-width: 900px) {
+  .board {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}

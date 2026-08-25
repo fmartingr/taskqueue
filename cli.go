@@ -17,7 +17,15 @@ import (
 
 	"github.com/fmartingr/taskqueue/internal/store"
 
+	"context"
 	"github.com/fmartingr/taskqueue/internal/guide"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/fmartingr/taskqueue/internal/web"
 )
 
 // Exit codes are part of the agent-facing contract and must stay stable.
@@ -658,4 +666,73 @@ func (l *stringList) String() string { return strings.Join(*l, ",") }
 func (l *stringList) Set(value string) error {
 	*l = append(*l, value)
 	return nil
+}
+
+const (
+	defaultHost = "127.0.0.1"
+	defaultPort = "7331"
+)
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func (c *cli) runServe(args []string) int {
+	fs := c.flagSet("serve")
+	host := fs.String("host", envOr("TQ_HOST", defaultHost), "host to bind to")
+	port := fs.String("port", envOr("TQ_PORT", defaultPort), "port to listen on")
+	if _, code, ok := c.parse(fs, args, 0); !ok {
+		return code
+	}
+
+	st, err := c.st()
+	if err != nil {
+		return c.fail(err)
+	}
+
+	dev := os.Getenv("DEV") != ""
+	handler, err := web.NewRouter(st, dev, version)
+	if err != nil {
+		return c.fail(err)
+	}
+
+	addr := net.JoinHostPort(*host, *port)
+	httpServer := &http.Server{
+		Addr:              addr,
+		Handler:           web.RequestLogger(c.stderr, handler),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return c.fail(err)
+	}
+
+	fmt.Fprintf(c.stdout, "Serving %s on http://%s\n", st.Dir, addr)
+	if dev {
+		fmt.Fprintf(c.stdout, "DEV mode: frontend served from ./%s\n", web.DevDir)
+	}
+
+	// Ctrl-C should leave no half-served requests behind.
+	shutdown := make(chan struct{})
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-signals
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			fmt.Fprintf(c.stderr, "shutdown: %v\n", err)
+		}
+		close(shutdown)
+	}()
+
+	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return c.fail(err)
+	}
+	<-shutdown
+	return exitOK
 }

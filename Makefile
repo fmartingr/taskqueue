@@ -17,7 +17,7 @@ help:
 
 # ── Build ────────────────────────────────────────────────────────
 
-## frontend: Build the frontend into public/ with Bun
+## frontend: Build the frontend into internal/web/public/ with Bun
 .PHONY: frontend
 frontend:
 	bun run build
@@ -26,7 +26,7 @@ frontend:
 .PHONY: build
 build: frontend build-go
 
-## build-go: Build the binary from the committed public/ output (no Bun needed)
+## build-go: Build the binary from the committed frontend output (no Bun needed)
 .PHONY: build-go
 build-go:
 	CGO_ENABLED=$(CGO_ENABLED) go build -ldflags "$(LDFLAGS)" -o $(PROJECT_NAME) ./cmd/tq
@@ -80,7 +80,7 @@ lint: ci-lint
 
 # ── Cleanup ──────────────────────────────────────────────────────
 
-## clean: Remove build artifacts (public/ is committed build output and is kept)
+## clean: Remove build artifacts (the built frontend is committed and is kept)
 .PHONY: clean
 clean:
 	rm -f $(PROJECT_NAME)

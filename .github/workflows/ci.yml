@@ -62,19 +62,20 @@ jobs:
       - run: make build-go
 
   frontend:
-    # public/ is committed so releases need no Bun; this job fails if it is stale.
+    # The built frontend is committed so releases need no Bun; this job fails if
+    # it is stale.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: make test-frontend
       - run: make frontend
-      - name: public/ must match the committed output
+      - name: The built frontend must match the committed output
         # Not `git diff`: that only sees tracked files, so a newly generated
         # asset nobody committed would pass unnoticed (TQ-0026).
         run: |
-          if [ -n "$(git status --porcelain -- public)" ]; then
-            echo "public/ is stale. Run 'make frontend' and commit the result:" >&2
-            git status --porcelain -- public >&2
+          if [ -n "$(git status --porcelain -- internal/web/public)" ]; then
+            echo "internal/web/public is stale. Run 'make frontend' and commit it:" >&2
+            git status --porcelain -- internal/web/public >&2
             exit 1
           fi

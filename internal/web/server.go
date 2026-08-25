@@ -1,21 +1,16 @@
-package taskqueue
+package web
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
-	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/fmartingr/taskqueue/internal/task"
 
@@ -24,21 +19,21 @@ import (
 	"github.com/fmartingr/taskqueue/internal/store"
 )
 
-const (
-	defaultHost = "127.0.0.1"
-	defaultPort = "7331"
-)
-
 // server exposes the same store the CLI uses. Every request reads from disk, so
 // tasks created or edited by an agent show up without any synchronization.
 type server struct {
 	st *store.Store
+
+	// version is reported by /api/version and /api/status. It is passed in
+	// rather than read from a package variable, because the build stamps it on
+	// the binary and this package is not the binary.
+	version string
 }
 
 // newAPIRouter registers the REST API only. The frontend is added separately by
 // newRouter so tests can exercise the API without the embedded assets.
-func newAPIRouter(st *store.Store) *http.ServeMux {
-	s := &server{st: st}
+func newAPIRouter(st *store.Store, version string) *http.ServeMux {
+	s := &server{st: st, version: version}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/tasks", s.handleListTasks)
@@ -60,8 +55,8 @@ func newAPIRouter(st *store.Store) *http.ServeMux {
 }
 
 // newRouter is the full handler: REST API plus the Kanban frontend.
-func newRouter(st *store.Store, dev bool) (http.Handler, error) {
-	mux := newAPIRouter(st)
+func NewRouter(st *store.Store, dev bool, version string) (http.Handler, error) {
+	mux := newAPIRouter(st, version)
 	frontend, err := frontendHandler(dev)
 	if err != nil {
 		return nil, err
@@ -76,10 +71,10 @@ func frontendHandler(dev bool) (http.Handler, error) {
 	if dev {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
-			http.FileServer(http.Dir(publicDirName)).ServeHTTP(w, r)
+			http.FileServer(http.Dir(DevDir)).ServeHTTP(w, r)
 		}), nil
 	}
-	sub, err := fs.Sub(publicFS, publicDirName)
+	sub, err := fs.Sub(publicFS, embeddedDir)
 	if err != nil {
 		return nil, fmt.Errorf("embedded frontend: %w", err)
 	}
@@ -232,12 +227,12 @@ func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"ok":         true,
 		"task_count": len(tasks),
 		"task_dir":   s.st.Dir,
-		"version":    version,
+		"version":    s.version,
 	})
 }
 
 func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"version": version})
+	writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
 }
 
 // ── Responses ───────────────────────────────────────────────────
@@ -291,65 +286,8 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 
 // ── tq serve ────────────────────────────────────────────────────
 
-func (c *cli) runServe(args []string) int {
-	fs := c.flagSet("serve")
-	host := fs.String("host", envOr("TQ_HOST", defaultHost), "host to bind to")
-	port := fs.String("port", envOr("TQ_PORT", defaultPort), "port to listen on")
-	if _, code, ok := c.parse(fs, args, 0); !ok {
-		return code
-	}
-
-	st, err := c.st()
-	if err != nil {
-		return c.fail(err)
-	}
-
-	dev := os.Getenv("DEV") != ""
-	handler, err := newRouter(st, dev)
-	if err != nil {
-		return c.fail(err)
-	}
-
-	addr := net.JoinHostPort(*host, *port)
-	httpServer := &http.Server{
-		Addr:              addr,
-		Handler:           requestLogger(c.stderr, handler),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return c.fail(err)
-	}
-
-	fmt.Fprintf(c.stdout, "Serving %s on http://%s\n", st.Dir, addr)
-	if dev {
-		fmt.Fprintf(c.stdout, "DEV mode: frontend served from ./%s\n", publicDirName)
-	}
-
-	// Ctrl-C should leave no half-served requests behind.
-	shutdown := make(chan struct{})
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-signals
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(ctx); err != nil {
-			fmt.Fprintf(c.stderr, "shutdown: %v\n", err)
-		}
-		close(shutdown)
-	}()
-
-	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return c.fail(err)
-	}
-	<-shutdown
-	return exitOK
-}
-
 // requestLogger writes one line per request to stderr, keeping stdout clean.
-func requestLogger(out io.Writer, next http.Handler) http.Handler {
+func RequestLogger(out io.Writer, next http.Handler) http.Handler {
 	logger := log.New(out, "", log.LstdFlags)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -366,11 +304,4 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
-}
-
-func envOr(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }

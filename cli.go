@@ -10,6 +10,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 // Exit codes are part of the agent-facing contract and must stay stable.
@@ -88,8 +90,8 @@ Commands:
   version                         Print the version
   help                            Print this help
 
-Statuses:   %s
-Priorities: %s (highest first; default: %s)
+task.Statuses:   %s
+task.Priorities: %s (highest first; default: %s)
 
 Common flags:
   --json                          Print JSON to stdout and nothing else
@@ -98,7 +100,7 @@ Common flags:
                                   argument, even if it starts with "-"
 
 Environment:
-  %s      Task directory to use instead of discovering %s
+  %s      task.Task directory to use instead of discovering %s
   TQ_HOST, TQ_PORT   Defaults for tq serve
   DEV                Serve frontend assets from ./public instead of the embedded copy
 
@@ -110,8 +112,8 @@ Exit codes:
 func (c *cli) usage(w io.Writer) {
 	fmt.Fprintf(w, usageText,
 		TaskDirName, filepath.Join(TaskDirName, AgentsFileName),
-		strings.Join(Statuses, ", "),
-		strings.Join(Priorities, ", "), PriorityNormal,
+		strings.Join(task.Statuses, ", "),
+		strings.Join(task.Priorities, ", "), task.PriorityNormal,
 		EnvTaskDir, TaskDirName,
 		TaskDirName)
 }
@@ -176,7 +178,7 @@ func (c *cli) runInit(args []string) int {
 	if store.Created {
 		fmt.Fprintf(c.stdout, "Initialized task queue in %s\n", store.Dir)
 	} else {
-		fmt.Fprintf(c.stdout, "Task queue already initialized in %s\n", store.Dir)
+		fmt.Fprintf(c.stdout, "task.Task queue already initialized in %s\n", store.Dir)
 	}
 	for _, path := range written {
 		fmt.Fprintf(c.stdout, "Wrote %s\n", path)
@@ -208,10 +210,10 @@ func withinInvokedTree(taskDir, workingDir string) bool {
 
 func (c *cli) runAdd(args []string) int {
 	fs := c.flagSet("add")
-	priority := fs.String("priority", "", "priority: "+strings.Join(Priorities, ", "))
+	priority := fs.String("priority", "", "priority: "+strings.Join(task.Priorities, ", "))
 	assignee := fs.String("assignee", "", "assignee")
 	body := fs.String("body", "", "Markdown body")
-	status := fs.String("status", "", "initial status (default: "+StatusTodo+")")
+	status := fs.String("status", "", "initial status (default: "+task.StatusTodo+")")
 	var labels, dependsOn stringList
 	fs.Var(&labels, "label", "label (repeatable)")
 	fs.Var(&dependsOn, "depends-on", "dependency task ID (repeatable)")
@@ -226,7 +228,7 @@ func (c *cli) runAdd(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	task, err := store.Create(CreateTaskInput{
+	t, err := store.Create(CreateTaskInput{
 		Title:     positional[0],
 		Status:    *status,
 		Priority:  *priority,
@@ -240,9 +242,9 @@ func (c *cli) runAdd(args []string) int {
 	}
 
 	if *jsonOut {
-		return c.printJSON(task)
+		return c.printJSON(t)
 	}
-	fmt.Fprintf(c.stdout, "Created %s: %s\n", task.ID, task.Title)
+	fmt.Fprintf(c.stdout, "Created %s: %s\n", t.ID, t.Title)
 	return exitOK
 }
 
@@ -260,7 +262,7 @@ func (c *cli) runList(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	tasks = FilterTasks(tasks, *filter)
+	tasks = task.FilterTasks(tasks, *filter)
 
 	if *jsonOut {
 		return c.printJSON(tasks)
@@ -288,7 +290,7 @@ func (c *cli) runReady(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	tasks = FilterTasks(tasks, *filter)
+	tasks = task.FilterTasks(tasks, *filter)
 
 	if *jsonOut {
 		return c.printJSON(tasks)
@@ -313,56 +315,56 @@ func (c *cli) runShow(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	task, err := store.Get(positional[0])
+	t, err := store.Get(positional[0])
 	if err != nil {
 		return c.fail(err)
 	}
 
 	if *jsonOut {
-		return c.printJSON(task)
+		return c.printJSON(t)
 	}
 
 	w := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "ID:\t%s\n", task.ID)
-	fmt.Fprintf(w, "Title:\t%s\n", task.Title)
-	fmt.Fprintf(w, "Status:\t%s\n", task.Status)
-	fmt.Fprintf(w, "Priority:\t%s\n", task.Priority)
-	if task.Assignee != "" {
-		fmt.Fprintf(w, "Assignee:\t%s\n", task.Assignee)
+	fmt.Fprintf(w, "ID:\t%s\n", t.ID)
+	fmt.Fprintf(w, "Title:\t%s\n", t.Title)
+	fmt.Fprintf(w, "Status:\t%s\n", t.Status)
+	fmt.Fprintf(w, "Priority:\t%s\n", t.Priority)
+	if t.Assignee != "" {
+		fmt.Fprintf(w, "Assignee:\t%s\n", t.Assignee)
 	}
-	if len(task.Labels) > 0 {
-		fmt.Fprintf(w, "Labels:\t%s\n", strings.Join(task.Labels, ", "))
+	if len(t.Labels) > 0 {
+		fmt.Fprintf(w, "Labels:\t%s\n", strings.Join(t.Labels, ", "))
 	}
-	if len(task.DependsOn) > 0 {
-		fmt.Fprintf(w, "Depends on:\t%s\n", strings.Join(c.describeDeps(task), ", "))
+	if len(t.DependsOn) > 0 {
+		fmt.Fprintf(w, "Depends on:\t%s\n", strings.Join(c.describeDeps(t), ", "))
 	}
-	fmt.Fprintf(w, "Created:\t%s\n", task.Created.Format(time.RFC3339))
-	fmt.Fprintf(w, "Updated:\t%s\n", task.Updated.Format(time.RFC3339))
+	fmt.Fprintf(w, "Created:\t%s\n", t.Created.Format(time.RFC3339))
+	fmt.Fprintf(w, "Updated:\t%s\n", t.Updated.Format(time.RFC3339))
 	w.Flush()
 
-	if task.Body != "" {
-		fmt.Fprintf(c.stdout, "\n%s\n", task.Body)
+	if t.Body != "" {
+		fmt.Fprintf(c.stdout, "\n%s\n", t.Body)
 	}
 	return exitOK
 }
 
 // describeDeps annotates each dependency with its status. Resolving the other
 // tasks is best-effort: a broken sibling file must not hide this task.
-func (c *cli) describeDeps(task Task) []string {
-	index := map[string]Task{}
+func (c *cli) describeDeps(t task.Task) []string {
+	index := map[string]task.Task{}
 	if tasks, err := c.tasks(); err != nil {
 		fmt.Fprintf(c.stderr, "warning: could not resolve dependencies: %v\n", err)
 	} else {
-		index = IndexTasks(tasks)
+		index = task.IndexTasks(tasks)
 	}
 
-	out := make([]string, 0, len(task.DependsOn))
-	for _, dep := range task.DependsOn {
+	out := make([]string, 0, len(t.DependsOn))
+	for _, dep := range t.DependsOn {
 		other, ok := index[dep]
 		switch {
 		case !ok:
 			out = append(out, dep+" (missing)")
-		case other.Status == StatusDone:
+		case other.Status == task.StatusDone:
 			out = append(out, dep+" (done)")
 		default:
 			out = append(out, fmt.Sprintf("%s (%s, blocking)", dep, other.Status))
@@ -388,43 +390,43 @@ func (c *cli) runDone(args []string) int {
 	if !ok {
 		return code
 	}
-	return c.moveTask(positional[0], StatusDone, *jsonOut)
+	return c.moveTask(positional[0], task.StatusDone, *jsonOut)
 }
 
 // moveTask is the shared status transition behind `tq move` and `tq done`.
 func (c *cli) moveTask(id, status string, jsonOut bool) int {
-	if !ValidStatus(status) {
-		return c.fail(fmt.Errorf("invalid status %q (want one of %s)", status, strings.Join(Statuses, ", ")))
+	if !task.ValidStatus(status) {
+		return c.fail(fmt.Errorf("invalid status %q (want one of %s)", status, strings.Join(task.Statuses, ", ")))
 	}
 
 	store, err := c.store()
 	if err != nil {
 		return c.fail(err)
 	}
-	task, err := store.Get(id)
+	t, err := store.Get(id)
 	if err != nil {
 		return c.fail(err)
 	}
 
-	previous := task.Status
+	previous := t.Status
 	if previous == status {
 		if jsonOut {
-			return c.printJSON(task)
+			return c.printJSON(t)
 		}
-		fmt.Fprintf(c.stdout, "%s is already %s\n", task.ID, status)
+		fmt.Fprintf(c.stdout, "%s is already %s\n", t.ID, status)
 		return exitOK
 	}
 
-	task.Status = status
-	task, err = store.Update(task)
+	t.Status = status
+	t, err = store.Update(t)
 	if err != nil {
 		return c.fail(err)
 	}
 
 	if jsonOut {
-		return c.printJSON(task)
+		return c.printJSON(t)
 	}
-	fmt.Fprintf(c.stdout, "%s: %s -> %s\n", task.ID, previous, task.Status)
+	fmt.Fprintf(c.stdout, "%s: %s -> %s\n", t.ID, previous, t.Status)
 	return exitOK
 }
 
@@ -446,7 +448,7 @@ func (c *cli) runUpdate(args []string) int {
 		return code
 	}
 
-	patch := TaskPatch{
+	patch := task.TaskPatch{
 		AddLabels:    addLabels,
 		RemoveLabels: removeLabels,
 		AddDeps:      addDeps,
@@ -473,15 +475,15 @@ func (c *cli) runUpdate(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	task, err := store.Patch(positional[0], patch)
+	t, err := store.Patch(positional[0], patch)
 	if err != nil {
 		return c.fail(err)
 	}
 
 	if *jsonOut {
-		return c.printJSON(task)
+		return c.printJSON(t)
 	}
-	fmt.Fprintf(c.stdout, "Updated %s: %s\n", task.ID, task.Title)
+	fmt.Fprintf(c.stdout, "Updated %s: %s\n", t.ID, t.Title)
 	return exitOK
 }
 
@@ -502,15 +504,15 @@ func (c *cli) runNote(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	task, err := store.Note(positional[0], text)
+	t, err := store.Note(positional[0], text)
 	if err != nil {
 		return c.fail(err)
 	}
 
 	if *jsonOut {
-		return c.printJSON(task)
+		return c.printJSON(t)
 	}
-	fmt.Fprintf(c.stdout, "Note added to %s\n", task.ID)
+	fmt.Fprintf(c.stdout, "Note added to %s\n", t.ID)
 	return exitOK
 }
 
@@ -544,7 +546,7 @@ func (c *cli) store() (*Store, error) {
 	return store, nil
 }
 
-func (c *cli) tasks() ([]Task, error) {
+func (c *cli) tasks() ([]task.Task, error) {
 	store, err := c.store()
 	if err != nil {
 		return nil, err
@@ -560,8 +562,8 @@ func (c *cli) flagSet(name string) *flag.FlagSet {
 
 // filterFlags registers the shared filters. `tq ready` omits --status, since
 // readiness already implies the status.
-func (c *cli) filterFlags(fs *flag.FlagSet, withStatus bool) (*Filter, *bool) {
-	var f Filter
+func (c *cli) filterFlags(fs *flag.FlagSet, withStatus bool) (*task.Filter, *bool) {
+	var f task.Filter
 	if withStatus {
 		fs.StringVar(&f.Status, "status", "", "filter by status")
 	}

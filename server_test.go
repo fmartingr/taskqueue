@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *Store) {
@@ -74,14 +76,14 @@ func expectError(t *testing.T, resp *http.Response, payload string, status int, 
 
 func TestAPIListTasks(t *testing.T) {
 	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Add task API", Priority: PriorityHigh, Labels: []string{"backend"}, Assignee: "agent-api"})
+	mustCreate(t, store, CreateTaskInput{Title: "Add task API", Priority: task.PriorityHigh, Labels: []string{"backend"}, Assignee: "agent-api"})
 	mustCreate(t, store, CreateTaskInput{Title: "Build board", Labels: []string{"frontend"}, DependsOn: []string{"TQ-0001"}})
 
 	resp, payload := do(t, srv, "GET", "/api/tasks", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	tasks := decode[[]Task](t, payload)
+	tasks := decode[[]task.Task](t, payload)
 	if len(tasks) != 2 {
 		t.Fatalf("got %d tasks, want 2", len(tasks))
 	}
@@ -95,10 +97,10 @@ func TestAPIListTasks(t *testing.T) {
 		"?status=done":        {},
 	} {
 		_, payload := do(t, srv, "GET", "/api/tasks"+query, "")
-		tasks := decode[[]Task](t, payload)
+		tasks := decode[[]task.Task](t, payload)
 		var ids []string
-		for _, task := range tasks {
-			ids = append(ids, task.ID)
+		for _, tk := range tasks {
+			ids = append(ids, tk.ID)
 		}
 		if strings.Join(ids, ",") != strings.Join(want, ",") {
 			t.Errorf("GET /api/tasks%s = %v, want %v", query, ids, want)
@@ -116,13 +118,13 @@ func TestAPIReadyFilterValues(t *testing.T) {
 
 	for _, value := range []string{"true", "1"} {
 		_, payload := do(t, srv, "GET", "/api/tasks?ready="+value, "")
-		if tasks := decode[[]Task](t, payload); len(tasks) != 1 || tasks[0].ID != "TQ-0001" {
+		if tasks := decode[[]task.Task](t, payload); len(tasks) != 1 || tasks[0].ID != "TQ-0001" {
 			t.Errorf("?ready=%s returned %+v, want only TQ-0001", value, tasks)
 		}
 	}
 
 	_, payload := do(t, srv, "GET", "/api/tasks?ready=false", "")
-	if tasks := decode[[]Task](t, payload); len(tasks) != 2 {
+	if tasks := decode[[]task.Task](t, payload); len(tasks) != 2 {
 		t.Errorf("?ready=false should not filter, got %d tasks", len(tasks))
 	}
 
@@ -160,9 +162,9 @@ func TestAPICreateTask(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, body: %s", resp.StatusCode, payload)
 	}
-	task := decode[Task](t, payload)
-	if task.ID != "TQ-0001" || task.Title != "Implement authentication" || task.Priority != PriorityHigh {
-		t.Errorf("task = %+v", task)
+	tk := decode[task.Task](t, payload)
+	if tk.ID != "TQ-0001" || tk.Title != "Implement authentication" || tk.Priority != task.PriorityHigh {
+		t.Errorf("task = %+v", tk)
 	}
 	if loc := resp.Header.Get("Location"); loc != "/api/tasks/TQ-0001" {
 		t.Errorf("Location = %q", loc)
@@ -197,8 +199,8 @@ func TestAPIGetTask(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if task := decode[Task](t, payload); task.Title != "Findable" {
-		t.Errorf("task = %+v", task)
+	if tk := decode[task.Task](t, payload); tk.Title != "Findable" {
+		t.Errorf("task = %+v", tk)
 	}
 
 	resp, payload = do(t, srv, "GET", "/api/tasks/TQ-4242", "")
@@ -216,18 +218,18 @@ func TestAPIPatchTask(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body: %s", resp.StatusCode, payload)
 	}
-	if task := decode[Task](t, payload); task.Status != StatusInProgress {
-		t.Errorf("task = %+v", task)
+	if tk := decode[task.Task](t, payload); tk.Status != task.StatusInProgress {
+		t.Errorf("task = %+v", tk)
 	}
-	if stored, _ := store.Get("TQ-0001"); stored.Status != StatusInProgress || stored.Body != "Body." {
+	if stored, _ := store.Get("TQ-0001"); stored.Status != task.StatusInProgress || stored.Body != "Body." {
 		t.Errorf("stored = %+v", stored)
 	}
 
 	// A partial update leaves the other fields alone.
 	_, payload = do(t, srv, "PATCH", "/api/tasks/TQ-0001", `{"labels": ["ui"], "body": "Edited body."}`)
-	task := decode[Task](t, payload)
-	if strings.Join(task.Labels, ",") != "ui" || task.Body != "Edited body." || task.Status != StatusInProgress {
-		t.Errorf("task = %+v", task)
+	tk := decode[task.Task](t, payload)
+	if strings.Join(tk.Labels, ",") != "ui" || tk.Body != "Edited body." || tk.Status != task.StatusInProgress {
+		t.Errorf("task = %+v", tk)
 	}
 
 	resp, payload = do(t, srv, "PATCH", "/api/tasks/TQ-0001", `{"status": "shipped"}`)
@@ -251,14 +253,14 @@ func TestAPIAddNote(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body: %s", resp.StatusCode, payload)
 	}
-	task := decode[Task](t, payload)
-	if !strings.Contains(task.Body, "## Notes") || !strings.Contains(task.Body, "API implemented") {
-		t.Errorf("body = %q", task.Body)
+	tk := decode[task.Task](t, payload)
+	if !strings.Contains(tk.Body, "## Notes") || !strings.Contains(tk.Body, "API implemented") {
+		t.Errorf("body = %q", tk.Body)
 	}
 
 	stored, _ := store.Get("TQ-0001")
-	if stored.Body != task.Body {
-		t.Errorf("stored body differs from the response:\n%q\n%q", stored.Body, task.Body)
+	if stored.Body != tk.Body {
+		t.Errorf("stored body differs from the response:\n%q\n%q", stored.Body, tk.Body)
 	}
 
 	resp, payload = do(t, srv, "POST", "/api/tasks/TQ-0001/notes", `{"text": "   "}`)

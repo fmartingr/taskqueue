@@ -1,4 +1,4 @@
-package taskqueue
+package task
 
 import (
 	"strings"

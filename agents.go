@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 // AgentsFileName is the guide `tq init` keeps inside the task directory, and
@@ -100,7 +102,7 @@ func writeAtomic(path string, content []byte) (err error) {
 func taskGuide(taskDir string) []byte {
 	return fmt.Appendf(nil, `%s
 
-# Task queue
+# task.Task queue
 
 This directory is a `+"`tq`"+` task queue: one Markdown file per task, named
 `+"`<id>-<title-slug>.md`"+`, with YAML frontmatter. The files are the source of
@@ -143,8 +145,8 @@ Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 
 ## Rules of the format
 
-- Statuses: %s
-- Priorities: %s (default: %s)
+- task.Statuses: %s
+- task.Priorities: %s (default: %s)
 - Notes are the last section of a body, introduced by a `+"`---`"+` rule with a blank
   line above it. A `+"`## Notes`"+` heading anywhere else is ordinary content, so a
   body can document notes without `+"`tq note`"+` mistaking prose for notes.
@@ -177,8 +179,8 @@ repository root.
 `,
 		generatedNotice,
 		filepath.Base(taskDir), filepath.Base(taskDir),
-		strings.Join(Statuses, ", "),
-		strings.Join(Priorities, ", "), PriorityNormal,
+		strings.Join(task.Statuses, ", "),
+		strings.Join(task.Priorities, ", "), task.PriorityNormal,
 		taskDir,
 		ConfigFileName, EnvTaskDir, EnvWalkForever,
 	)

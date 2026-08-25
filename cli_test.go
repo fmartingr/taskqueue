@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 type testCLI struct {
@@ -129,28 +131,28 @@ func TestCLIAdd(t *testing.T) {
 		t.Errorf("add output = %q, want it to contain %q", out, want)
 	}
 
-	var task Task
-	tc.mustRunJSON(&task, "add", "Build board", "--priority", "high",
+	var tk task.Task
+	tc.mustRunJSON(&tk, "add", "Build board", "--priority", "high",
 		"--label", "frontend", "--label", "ui", "--assignee", "agent-ui",
 		"--depends-on", "TQ-0001", "--body", "Kanban board.", "--json")
 
-	if task.ID != "TQ-0002" || task.Title != "Build board" {
-		t.Errorf("task = %+v", task)
+	if tk.ID != "TQ-0002" || tk.Title != "Build board" {
+		t.Errorf("task = %+v", tk)
 	}
-	if task.Priority != PriorityHigh || task.Assignee != "agent-ui" {
-		t.Errorf("task = %+v", task)
+	if tk.Priority != task.PriorityHigh || tk.Assignee != "agent-ui" {
+		t.Errorf("task = %+v", tk)
 	}
-	if strings.Join(task.Labels, ",") != "frontend,ui" {
-		t.Errorf("Labels = %v", task.Labels)
+	if strings.Join(tk.Labels, ",") != "frontend,ui" {
+		t.Errorf("Labels = %v", tk.Labels)
 	}
-	if strings.Join(task.DependsOn, ",") != "TQ-0001" {
-		t.Errorf("DependsOn = %v", task.DependsOn)
+	if strings.Join(tk.DependsOn, ",") != "TQ-0001" {
+		t.Errorf("DependsOn = %v", tk.DependsOn)
 	}
-	if task.Body != "Kanban board." {
-		t.Errorf("Body = %q", task.Body)
+	if tk.Body != "Kanban board." {
+		t.Errorf("Body = %q", tk.Body)
 	}
-	if task.Status != StatusTodo {
-		t.Errorf("Status = %q, want %q", task.Status, StatusTodo)
+	if tk.Status != task.StatusTodo {
+		t.Errorf("Status = %q, want %q", tk.Status, task.StatusTodo)
 	}
 }
 
@@ -198,7 +200,7 @@ func TestCLIListAndFilters(t *testing.T) {
 		}
 	}
 
-	var tasks []Task
+	var tasks []task.Task
 	tc.mustRunJSON(&tasks, "list", "--json")
 	if len(tasks) != 2 {
 		t.Fatalf("list --json returned %d tasks, want 2", len(tasks))
@@ -228,10 +230,10 @@ func TestCLIShow(t *testing.T) {
 		}
 	}
 
-	var task Task
-	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
-	if task.ID != "TQ-0001" || task.Body != "Some description." {
-		t.Errorf("show --json = %+v", task)
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if tk.ID != "TQ-0001" || tk.Body != "Some description." {
+		t.Errorf("show --json = %+v", tk)
 	}
 
 	if code := tc.run("show", "TQ-4242"); code != exitTaskNotFound {
@@ -299,10 +301,10 @@ func TestCLIMoveAndDone(t *testing.T) {
 		t.Errorf("done output = %q, want it to contain %q", out, want)
 	}
 
-	var task Task
-	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
-	if task.Status != StatusDone {
-		t.Errorf("status = %q, want done", task.Status)
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if tk.Status != task.StatusDone {
+		t.Errorf("status = %q, want done", tk.Status)
 	}
 
 	if code := tc.run("move", "TQ-0001", "shipped"); code != exitError {
@@ -329,20 +331,20 @@ func TestCLIUpdate(t *testing.T) {
 		"--remove-label", "backend",
 		"--add-dependency", "TQ-0002")
 
-	var task Task
-	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
-	if task.Title != "New title" || task.Priority != PriorityUrgent || task.Assignee != "agent-api" {
-		t.Errorf("task = %+v", task)
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if tk.Title != "New title" || tk.Priority != task.PriorityUrgent || tk.Assignee != "agent-api" {
+		t.Errorf("task = %+v", tk)
 	}
-	if strings.Join(task.Labels, ",") != "auth" {
-		t.Errorf("Labels = %v, want [auth]", task.Labels)
+	if strings.Join(tk.Labels, ",") != "auth" {
+		t.Errorf("Labels = %v, want [auth]", tk.Labels)
 	}
-	if strings.Join(task.DependsOn, ",") != "TQ-0002" {
-		t.Errorf("DependsOn = %v", task.DependsOn)
+	if strings.Join(tk.DependsOn, ",") != "TQ-0002" {
+		t.Errorf("DependsOn = %v", tk.DependsOn)
 	}
 
 	tc.mustRun("update", "TQ-0001", "--remove-dependency", "TQ-0002")
-	var afterRemoval Task // a fresh value: omitted JSON fields do not clear a reused struct
+	var afterRemoval task.Task // a fresh value: omitted JSON fields do not clear a reused struct
 	tc.mustRunJSON(&afterRemoval, "show", "TQ-0001", "--json")
 	if len(afterRemoval.DependsOn) != 0 {
 		t.Errorf("DependsOn = %v, want empty", afterRemoval.DependsOn)
@@ -384,10 +386,10 @@ func TestCLIUpdateRenamesTheFile(t *testing.T) {
 	}
 
 	// The ID still addresses the task after the rename.
-	var task Task
-	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
-	if task.Title != "A better title" {
-		t.Errorf("task = %+v", task)
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if tk.Title != "A better title" {
+		t.Errorf("task = %+v", tk)
 	}
 }
 
@@ -400,22 +402,22 @@ func TestCLINote(t *testing.T) {
 		t.Errorf("note output = %q", out)
 	}
 
-	var task Task
-	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
-	if !strings.Contains(task.Body, "## Notes") {
-		t.Errorf("body should have a Notes section:\n%s", task.Body)
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.Contains(tk.Body, "## Notes") {
+		t.Errorf("body should have a Notes section:\n%s", tk.Body)
 	}
-	if !strings.Contains(task.Body, "CRUD endpoints implemented; tests remain.") {
-		t.Errorf("body should contain the note:\n%s", task.Body)
+	if !strings.Contains(tk.Body, "CRUD endpoints implemented; tests remain.") {
+		t.Errorf("body should contain the note:\n%s", tk.Body)
 	}
-	if !strings.HasPrefix(task.Body, "Description.") {
-		t.Errorf("the original body should be preserved:\n%s", task.Body)
+	if !strings.HasPrefix(tk.Body, "Description.") {
+		t.Errorf("the original body should be preserved:\n%s", tk.Body)
 	}
 
 	tc.mustRun("note", "TQ-0001", "Second note.")
-	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
-	if strings.Count(task.Body, "## Notes") != 1 {
-		t.Errorf("a second note should reuse the section:\n%s", task.Body)
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if strings.Count(tk.Body, "## Notes") != 1 {
+		t.Errorf("a second note should reuse the section:\n%s", tk.Body)
 	}
 
 	if code := tc.run("note", "TQ-0001"); code != exitError {
@@ -433,17 +435,17 @@ func TestCLINoteLeavesAContentNotesSectionAlone(t *testing.T) {
 
 	tc.mustRun("note", "TQ-0001", "The real note.")
 
-	var task Task
-	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
-	if !strings.HasPrefix(task.Body, body) {
-		t.Fatalf("the original body should be untouched:\n%s", task.Body)
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(tk.Body, body) {
+		t.Fatalf("the original body should be untouched:\n%s", tk.Body)
 	}
 	want := body + "\n\n---\n\n## Notes\n\n- "
-	if !strings.HasPrefix(task.Body, want) {
-		t.Errorf("the note should start a new section at the end:\n%s", task.Body)
+	if !strings.HasPrefix(tk.Body, want) {
+		t.Errorf("the note should start a new section at the end:\n%s", tk.Body)
 	}
-	if !strings.HasSuffix(task.Body, " — The real note.") {
-		t.Errorf("the note should be the last line:\n%s", task.Body)
+	if !strings.HasSuffix(tk.Body, " — The real note.") {
+		t.Errorf("the note should be the last line:\n%s", tk.Body)
 	}
 }
 
@@ -458,7 +460,7 @@ func TestCLIReady(t *testing.T) {
 	}
 
 	tc.mustRun("move", "TQ-0001", "in-progress")
-	var tasks []Task
+	var tasks []task.Task
 	tc.mustRunJSON(&tasks, "ready", "--json")
 	if len(tasks) != 0 {
 		t.Errorf("a claimed task and its blocked dependant are not ready, got %+v", tasks)
@@ -493,7 +495,7 @@ func TestCLICreatesTaskDirOnDemand(t *testing.T) {
 	}
 
 	// Reading commands work the same way, and say nothing once it exists.
-	var tasks []Task
+	var tasks []task.Task
 	tc.mustRunJSON(&tasks, "list", "--json")
 	if len(tasks) != 1 {
 		t.Errorf("list returned %d tasks, want 1", len(tasks))
@@ -503,7 +505,7 @@ func TestCLICreatesTaskDirOnDemand(t *testing.T) {
 func TestCLIReadCommandsCreateAnEmptyQueue(t *testing.T) {
 	tc := newBareCLI(t)
 
-	var tasks []Task
+	var tasks []task.Task
 	tc.mustRunJSON(&tasks, "ready", "--json")
 	if len(tasks) != 0 {
 		t.Errorf("ready = %+v, want an empty list", tasks)
@@ -596,14 +598,14 @@ func TestCLIHelpFlagStopsCleanly(t *testing.T) {
 
 func TestCLIEnvTaskDirOverride(t *testing.T) {
 	tc := newTestCLI(t)
-	tc.mustRun("add", "Task in the project")
+	tc.mustRun("add", "task.Task in the project")
 
 	elsewhere := newBareCLI(t)
 	elsewhere.t.Setenv(EnvTaskDir, filepath.Join(tc.root, TaskDirName))
 
-	var tasks []Task
+	var tasks []task.Task
 	elsewhere.mustRunJSON(&tasks, "list", "--json")
-	if len(tasks) != 1 || tasks[0].Title != "Task in the project" {
+	if len(tasks) != 1 || tasks[0].Title != "task.Task in the project" {
 		t.Errorf("%s override ignored, got %+v", EnvTaskDir, tasks)
 	}
 }

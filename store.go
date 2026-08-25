@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 // TaskDirName is the directory, relative to the project root, that holds one
@@ -265,11 +267,11 @@ var taskFilePattern = regexp.MustCompile(`^(TQ-[0-9]+)(?:-[^/]*)?\.md$`)
 // TaskFileName is the file a task belongs in: its ID, suffixed with a slug of
 // the title so the directory is browsable and greppable by name. The ID stays
 // first, so files sort and glob by ID.
-func TaskFileName(task Task) string {
-	if slug := Slugify(task.Title); slug != "" {
-		return task.ID + "-" + slug + ".md"
+func TaskFileName(t task.Task) string {
+	if slug := task.Slugify(t.Title); slug != "" {
+		return t.ID + "-" + slug + ".md"
 	}
-	return task.ID + ".md"
+	return t.ID + ".md"
 }
 
 // taskFileID reports which task a filename holds, ignoring the title suffix.
@@ -308,19 +310,19 @@ func (s *Store) locate(id string) (string, error) {
 		// half-finished rename can cause it, and guessing would lose an edit.
 		sort.Strings(matches)
 		return "", fmt.Errorf("%w: %s is claimed by %d files (%s); keep the one you want",
-			ErrInvalidTaskFile, id, len(matches), strings.Join(matches, ", "))
+			task.ErrInvalidTaskFile, id, len(matches), strings.Join(matches, ", "))
 	}
 }
 
 // List returns every task in the directory in the default order: status,
 // priority, creation time, ID.
-func (s *Store) List() ([]Task, error) {
+func (s *Store) List() ([]task.Task, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {
 		return nil, err
 	}
 
-	tasks := make([]Task, 0, len(entries))
+	tasks := make([]task.Task, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -329,52 +331,52 @@ func (s *Store) List() ([]Task, error) {
 		if _, ok := taskFileID(name); !ok {
 			continue
 		}
-		task, err := s.readFile(name)
+		t, err := s.readFile(name)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, task)
+		tasks = append(tasks, t)
 	}
 
-	SortTasks(tasks)
+	task.SortTasks(tasks)
 	return tasks, nil
 }
 
 // Get returns a single task by ID.
-func (s *Store) Get(id string) (Task, error) {
-	if !ValidID(id) {
-		return Task{}, fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
+func (s *Store) Get(id string) (task.Task, error) {
+	if !task.ValidID(id) {
+		return task.Task{}, fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
 	}
 	name, err := s.locate(id)
 	if err != nil {
-		return Task{}, err
+		return task.Task{}, err
 	}
 	return s.readFile(name)
 }
 
-func (s *Store) readFile(name string) (Task, error) {
+func (s *Store) readFile(name string) (task.Task, error) {
 	data, err := os.ReadFile(filepath.Join(s.Dir, name))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Task{}, fmt.Errorf("%w: %s", ErrTaskNotFound, name)
+			return task.Task{}, fmt.Errorf("%w: %s", ErrTaskNotFound, name)
 		}
-		return Task{}, err
+		return task.Task{}, err
 	}
 
-	task, err := ParseTask(name, data)
+	t, err := task.ParseTask(name, data)
 	if err != nil {
-		return Task{}, err
+		return task.Task{}, err
 	}
 	// The ID in the frontmatter is authoritative; a stale title suffix is
 	// harmless and gets fixed on the next write.
-	if fileID, _ := taskFileID(name); task.ID != fileID {
-		return Task{}, fmt.Errorf("%w: %s: id %q does not match the filename", ErrInvalidTaskFile, name, task.ID)
+	if fileID, _ := taskFileID(name); t.ID != fileID {
+		return task.Task{}, fmt.Errorf("%w: %s: id %q does not match the filename", task.ErrInvalidTaskFile, name, t.ID)
 	}
-	return task, nil
+	return t, nil
 }
 
 // Create allocates the next ID and writes a new task file.
-func (s *Store) Create(in CreateTaskInput) (Task, error) {
+func (s *Store) Create(in CreateTaskInput) (task.Task, error) {
 	// Allocating a number and claiming it must happen together, or a
 	// concurrent caller allocates the same one. A task sharing its ID with
 	// another is unreachable: locate refuses to guess between them.
@@ -382,10 +384,10 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 	defer s.mu.Unlock()
 
 	now := time.Now().Truncate(time.Second)
-	task := Task{
+	t := task.Task{
 		Title:     strings.TrimSpace(in.Title),
-		Status:    orDefault(in.Status, StatusTodo),
-		Priority:  orDefault(in.Priority, PriorityNormal),
+		Status:    orDefault(in.Status, task.StatusTodo),
+		Priority:  orDefault(in.Priority, task.PriorityNormal),
 		Assignee:  in.Assignee,
 		Labels:    normalizeList(in.Labels),
 		DependsOn: normalizeList(in.DependsOn),
@@ -398,21 +400,21 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 	for attempt := 0; attempt < createAttempts; attempt++ {
 		id, err := s.NextID()
 		if err != nil {
-			return Task{}, err
+			return task.Task{}, err
 		}
-		task.ID = id
-		if err := task.ValidateForWrite(); err != nil {
-			return Task{}, err
+		t.ID = id
+		if err := t.ValidateForWrite(); err != nil {
+			return task.Task{}, err
 		}
-		if _, err := s.writeNew(task); err != nil {
+		if _, err := s.writeNew(t); err != nil {
 			if errors.Is(err, os.ErrExist) {
 				continue
 			}
-			return Task{}, err
+			return task.Task{}, err
 		}
-		return task, nil
+		return t, nil
 	}
-	return Task{}, fmt.Errorf("could not claim a task ID after %d attempts", createAttempts)
+	return task.Task{}, fmt.Errorf("could not claim a task ID after %d attempts", createAttempts)
 }
 
 // Update rewrites an existing task and refreshes its updated timestamp. The
@@ -420,75 +422,75 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 // Update saves a task the caller has already read and changed. It is
 // last-write-wins by nature: two callers that read the same version both write
 // their whole copy. Use Mutate when the change depends on what is there.
-func (s *Store) Update(task Task) (Task, error) {
+func (s *Store) Update(t task.Task) (task.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.update(task)
+	return s.update(t)
 }
 
 // Mutate reads a task, applies a change and saves it, holding the lock across
 // all three. A read-modify-write split across Get and Update loses everything
 // the other caller did; an append like a note loses information nobody can
 // reconstruct.
-func (s *Store) Mutate(id string, apply func(*Task) error) (Task, error) {
+func (s *Store) Mutate(id string, apply func(*task.Task) error) (task.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	task, err := s.Get(id)
+	t, err := s.Get(id)
 	if err != nil {
-		return Task{}, err
+		return task.Task{}, err
 	}
-	if err := apply(&task); err != nil {
-		return Task{}, err
+	if err := apply(&t); err != nil {
+		return task.Task{}, err
 	}
-	return s.update(task)
+	return s.update(t)
 }
 
 // Patch applies a change to a task and saves it in one step. Adding a label or
 // a dependency is an append, so a caller doing this through Get and Update
 // loses whatever another caller added in between.
-func (s *Store) Patch(id string, patch TaskPatch) (Task, error) {
-	return s.Mutate(id, func(task *Task) error {
-		*task = ApplyPatch(*task, patch)
+func (s *Store) Patch(id string, patch task.TaskPatch) (task.Task, error) {
+	return s.Mutate(id, func(t *task.Task) error {
+		*t = task.ApplyPatch(*t, patch)
 		return nil
 	})
 }
 
 // Note appends a timestamped note to a task and saves it in one step.
-func (s *Store) Note(id, text string) (Task, error) {
-	return s.Mutate(id, func(task *Task) error {
-		task.Body = AppendNote(task.Body, text, time.Now().Truncate(time.Second))
+func (s *Store) Note(id, text string) (task.Task, error) {
+	return s.Mutate(id, func(t *task.Task) error {
+		t.Body = task.AppendNote(t.Body, text, time.Now().Truncate(time.Second))
 		return nil
 	})
 }
 
-func (s *Store) update(task Task) (Task, error) {
-	current, err := s.locate(task.ID)
+func (s *Store) update(t task.Task) (task.Task, error) {
+	current, err := s.locate(t.ID)
 	if err != nil {
-		return Task{}, err
+		return task.Task{}, err
 	}
-	task.Title = strings.TrimSpace(task.Title)
-	task.Labels = normalizeList(task.Labels)
-	task.DependsOn = normalizeList(task.DependsOn)
-	task.Body = strings.Trim(task.Body, "\n")
-	task.Updated = time.Now().Truncate(time.Second)
+	t.Title = strings.TrimSpace(t.Title)
+	t.Labels = normalizeList(t.Labels)
+	t.DependsOn = normalizeList(t.DependsOn)
+	t.Body = strings.Trim(t.Body, "\n")
+	t.Updated = time.Now().Truncate(time.Second)
 
-	if err := task.ValidateForWrite(); err != nil {
-		return Task{}, err
+	if err := t.ValidateForWrite(); err != nil {
+		return task.Task{}, err
 	}
 
-	written, err := s.write(task)
+	written, err := s.write(t)
 	if err != nil {
-		return Task{}, err
+		return task.Task{}, err
 	}
 	// A retitled task moves to a new filename; the task itself is now safely
 	// on disk either way, and only the file it used to live in is left.
 	if written != current {
 		if err := retireOldFile(filepath.Join(s.Dir, current), filepath.Join(s.Dir, written)); err != nil {
-			return Task{}, fmt.Errorf("saved %s but could not retire %s: %w", written, current, err)
+			return task.Task{}, fmt.Errorf("saved %s but could not retire %s: %w", written, current, err)
 		}
 	}
-	return task, nil
+	return t, nil
 }
 
 // retireOldFile disposes of the file a task used to live in, now that it has
@@ -523,7 +525,7 @@ func retireOldFile(oldPath, newPath string) error {
 
 // Delete removes a task file.
 func (s *Store) Delete(id string) error {
-	if !ValidID(id) {
+	if !task.ValidID(id) {
 		return fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
 	}
 	name, err := s.locate(id)
@@ -565,8 +567,8 @@ const createAttempts = 10
 
 // stage renders a task into a temporary file beside the tasks and returns its
 // path. The caller moves it into place, or removes it.
-func (s *Store) stage(task Task) (path string, err error) {
-	data, err := RenderTask(task)
+func (s *Store) stage(t task.Task) (path string, err error) {
+	data, err := task.RenderTask(t)
 	if err != nil {
 		return "", err
 	}
@@ -600,12 +602,12 @@ func (s *Store) stage(task Task) (path string, err error) {
 }
 
 // write puts a task on disk, replacing whatever was at its filename.
-func (s *Store) write(task Task) (string, error) {
-	tmpName, err := s.stage(task)
+func (s *Store) write(t task.Task) (string, error) {
+	tmpName, err := s.stage(t)
 	if err != nil {
 		return "", err
 	}
-	name := TaskFileName(task)
+	name := TaskFileName(t)
 	if err := os.Rename(tmpName, filepath.Join(s.Dir, name)); err != nil {
 		_ = os.Remove(tmpName)
 		return "", err
@@ -616,14 +618,14 @@ func (s *Store) write(task Task) (string, error) {
 // writeNew is write for a task that must not exist yet. Linking fails when the
 // name is taken, where renaming would replace the file — and the file it would
 // replace is another task nobody asked to lose.
-func (s *Store) writeNew(task Task) (string, error) {
-	tmpName, err := s.stage(task)
+func (s *Store) writeNew(t task.Task) (string, error) {
+	tmpName, err := s.stage(t)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = os.Remove(tmpName) }()
 
-	name := TaskFileName(task)
+	name := TaskFileName(t)
 	if err := os.Link(tmpName, filepath.Join(s.Dir, name)); err != nil {
 		return "", err
 	}

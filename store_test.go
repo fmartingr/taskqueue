@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 // TestMain clears the environment the whole suite runs under. TQ_DIR is the
@@ -57,13 +59,13 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
-func mustCreate(t *testing.T, s *Store, in CreateTaskInput) Task {
+func mustCreate(t *testing.T, s *Store, in CreateTaskInput) task.Task {
 	t.Helper()
-	task, err := s.Create(in)
+	tk, err := s.Create(in)
 	if err != nil {
 		t.Fatalf("Create(%q): %v", in.Title, err)
 	}
-	return task
+	return tk
 }
 
 func TestInitStore(t *testing.T) {
@@ -166,20 +168,20 @@ func TestOpenStoreReportsUncreatableDir(t *testing.T) {
 
 func TestCreateWritesMarkdownFile(t *testing.T) {
 	store := newTestStore(t)
-	task := mustCreate(t, store, CreateTaskInput{
+	tk := mustCreate(t, store, CreateTaskInput{
 		Title:    "Implement REST API",
-		Priority: PriorityHigh,
+		Priority: task.PriorityHigh,
 		Labels:   []string{"backend"},
 		Body:     "Some description.",
 	})
 
-	if task.ID != "TQ-0001" {
-		t.Errorf("ID = %q, want TQ-0001", task.ID)
+	if tk.ID != "TQ-0001" {
+		t.Errorf("ID = %q, want TQ-0001", tk.ID)
 	}
-	if task.Status != StatusTodo {
-		t.Errorf("Status = %q, want the default %q", task.Status, StatusTodo)
+	if tk.Status != task.StatusTodo {
+		t.Errorf("Status = %q, want the default %q", tk.Status, task.StatusTodo)
 	}
-	if task.Created.IsZero() || task.Updated.IsZero() {
+	if tk.Created.IsZero() || tk.Updated.IsZero() {
 		t.Error("timestamps should be set on create")
 	}
 
@@ -198,9 +200,9 @@ func TestCreateWritesMarkdownFile(t *testing.T) {
 
 func TestCreateDefaultsPriorityToNormal(t *testing.T) {
 	store := newTestStore(t)
-	task := mustCreate(t, store, CreateTaskInput{Title: "No priority given"})
-	if task.Priority != PriorityNormal {
-		t.Errorf("Priority = %q, want %q", task.Priority, PriorityNormal)
+	tk := mustCreate(t, store, CreateTaskInput{Title: "No priority given"})
+	if tk.Priority != task.PriorityNormal {
+		t.Errorf("Priority = %q, want %q", tk.Priority, task.PriorityNormal)
 	}
 }
 
@@ -268,7 +270,7 @@ func TestGet(t *testing.T) {
 func TestListSortsAndReportsBadFiles(t *testing.T) {
 	store := newTestStore(t)
 	mustCreate(t, store, CreateTaskInput{Title: "first"})
-	second := mustCreate(t, store, CreateTaskInput{Title: "second", Priority: PriorityUrgent})
+	second := mustCreate(t, store, CreateTaskInput{Title: "second", Priority: task.PriorityUrgent})
 
 	tasks, err := store.List()
 	if err != nil {
@@ -312,7 +314,7 @@ func TestUpdateRewritesFileAtomically(t *testing.T) {
 	created := mustCreate(t, store, CreateTaskInput{Title: "Original", Body: "Body."})
 
 	created.Title = "Renamed"
-	created.Status = StatusInProgress
+	created.Status = task.StatusInProgress
 	updated, err := store.Update(created)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -325,7 +327,7 @@ func TestUpdateRewritesFileAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if reloaded.Title != "Renamed" || reloaded.Status != StatusInProgress || reloaded.Body != "Body." {
+	if reloaded.Title != "Renamed" || reloaded.Status != task.StatusInProgress || reloaded.Body != "Body." {
 		t.Errorf("reloaded = %+v", reloaded)
 	}
 
@@ -353,8 +355,8 @@ func TestTaskFileName(t *testing.T) {
 		{"...", "TQ-0001.md"}, // nothing slugifiable: the ID alone
 	}
 	for _, tc := range tests {
-		task := Task{ID: "TQ-0001", Title: tc.title, Status: StatusTodo}
-		if got := TaskFileName(task); got != tc.want {
+		tk := task.Task{ID: "TQ-0001", Title: tc.title, Status: task.StatusTodo}
+		if got := TaskFileName(tk); got != tc.want {
 			t.Errorf("TaskFileName(%q) = %q, want %q", tc.title, got, tc.want)
 		}
 	}
@@ -368,12 +370,12 @@ func TestGetFindsTasksWhateverTheSuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := store.Get("TQ-0001")
+	tk, err := store.Get("TQ-0001")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if task.Title != "Written by an older version" {
-		t.Errorf("task = %+v", task)
+	if tk.Title != "Written by an older version" {
+		t.Errorf("task = %+v", tk)
 	}
 
 	tasks, err := store.List()
@@ -382,7 +384,7 @@ func TestGetFindsTasksWhateverTheSuffix(t *testing.T) {
 	}
 
 	// Touching it adopts the new naming.
-	if _, err := store.Update(task); err != nil {
+	if _, err := store.Update(tk); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(store.Dir, "TQ-0001-written-by-an-older-version.md")); err != nil {
@@ -395,10 +397,10 @@ func TestGetFindsTasksWhateverTheSuffix(t *testing.T) {
 
 func TestUpdateKeepsTheFilenameWhenTheTitleIsUnchanged(t *testing.T) {
 	store := newTestStore(t)
-	task := mustCreate(t, store, CreateTaskInput{Title: "Stable title"})
+	tk := mustCreate(t, store, CreateTaskInput{Title: "Stable title"})
 
-	task.Status = StatusInProgress
-	if _, err := store.Update(task); err != nil {
+	tk.Status = task.StatusInProgress
+	if _, err := store.Update(tk); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -413,10 +415,10 @@ func TestUpdateKeepsTheFilenameWhenTheTitleIsUnchanged(t *testing.T) {
 
 func TestDuplicateFilesForOneIDAreRejected(t *testing.T) {
 	store := newTestStore(t)
-	task := mustCreate(t, store, CreateTaskInput{Title: "Original"})
+	tk := mustCreate(t, store, CreateTaskInput{Title: "Original"})
 
 	// A half-finished manual rename leaves two files claiming one ID.
-	rendered, err := RenderTask(task)
+	rendered, err := task.RenderTask(tk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,8 +427,8 @@ func TestDuplicateFilesForOneIDAreRejected(t *testing.T) {
 	}
 
 	_, err = store.Get("TQ-0001")
-	if !errors.Is(err, ErrInvalidTaskFile) {
-		t.Errorf("Get = %v, want ErrInvalidTaskFile", err)
+	if !errors.Is(err, task.ErrInvalidTaskFile) {
+		t.Errorf("Get = %v, want task.ErrInvalidTaskFile", err)
 	}
 	for _, name := range []string{"TQ-0001-original.md", "TQ-0001-copy.md"} {
 		if err == nil || !strings.Contains(err.Error(), name) {
@@ -444,14 +446,14 @@ func TestUpdateRejectsInvalidTask(t *testing.T) {
 	}
 
 	reloaded, err := store.Get("TQ-0001")
-	if err != nil || reloaded.Status != StatusTodo {
+	if err != nil || reloaded.Status != task.StatusTodo {
 		t.Errorf("the stored task should be untouched, got %+v (%v)", reloaded, err)
 	}
 }
 
 func TestUpdateUnknownTask(t *testing.T) {
 	store := newTestStore(t)
-	ghost := Task{ID: "TQ-0404", Title: "ghost", Status: StatusTodo}
+	ghost := task.Task{ID: "TQ-0404", Title: "ghost", Status: task.StatusTodo}
 	if _, err := store.Update(ghost); !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("Update(missing) = %v, want ErrTaskNotFound", err)
 	}
@@ -558,25 +560,25 @@ func TestUpdateKeepsTheTaskWhenTheFilenameDiffersOnlySpelling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newTestStore(t)
-			task := mustCreate(t, store, CreateTaskInput{Title: tt.title})
-			if got := TaskFileName(task); got != tt.canonical {
+			tk := mustCreate(t, store, CreateTaskInput{Title: tt.title})
+			if got := TaskFileName(tk); got != tt.canonical {
 				t.Fatalf("TaskFileName = %q, want %q", got, tt.canonical)
 			}
-			if !aliasOnDisk(t, store, task.ID, tt.alias) {
+			if !aliasOnDisk(t, store, tk.ID, tt.alias) {
 				t.Skipf("this filesystem keeps %q and %q apart, so there is no alias to lose", tt.canonical, tt.alias)
 			}
 
-			task.Status = StatusInProgress
-			if _, err := store.Update(task); err != nil {
+			tk.Status = task.StatusInProgress
+			if _, err := store.Update(tk); err != nil {
 				t.Fatalf("Update: %v", err)
 			}
 
-			reloaded, err := store.Get(task.ID)
+			reloaded, err := store.Get(tk.ID)
 			if err != nil {
 				t.Fatalf("the task should have survived the update: %v", err)
 			}
-			if reloaded.Status != StatusInProgress {
-				t.Errorf("Status = %q, want %q", reloaded.Status, StatusInProgress)
+			if reloaded.Status != task.StatusInProgress {
+				t.Errorf("Status = %q, want %q", reloaded.Status, task.StatusInProgress)
 			}
 			// The alias is a stale title suffix like any other: it converges.
 			entries, err := os.ReadDir(store.Dir)
@@ -868,8 +870,8 @@ func TestCreateUnderConcurrencyGivesEveryTaskItsOwnID(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			task, err := store.Create(CreateTaskInput{Title: fmt.Sprintf("task %d", i)})
-			ids[i], errs[i] = task.ID, err
+			tk, err := store.Create(CreateTaskInput{Title: fmt.Sprintf("task %d", i)})
+			ids[i], errs[i] = tk.ID, err
 		}()
 	}
 	wg.Wait()
@@ -932,7 +934,7 @@ func TestCreateUnderConcurrencyKeepsTasksWithTheSameTitle(t *testing.T) {
 // Two agents working the same task is what the queue exists for.
 func TestNoteUnderConcurrencyKeepsEveryNote(t *testing.T) {
 	store := newTestStore(t)
-	task := mustCreate(t, store, CreateTaskInput{Title: "probe"})
+	tk := mustCreate(t, store, CreateTaskInput{Title: "probe"})
 
 	const notes = 10
 	var wg sync.WaitGroup
@@ -940,14 +942,14 @@ func TestNoteUnderConcurrencyKeepsEveryNote(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := store.Note(task.ID, fmt.Sprintf("note %d", i)); err != nil {
+			if _, err := store.Note(tk.ID, fmt.Sprintf("note %d", i)); err != nil {
 				t.Errorf("Note: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	after, err := store.Get(task.ID)
+	after, err := store.Get(tk.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +963,7 @@ func TestNoteUnderConcurrencyKeepsEveryNote(t *testing.T) {
 // --add-label is an append too, so concurrent patches must not lose one.
 func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
 	store := newTestStore(t)
-	task := mustCreate(t, store, CreateTaskInput{Title: "probe"})
+	tk := mustCreate(t, store, CreateTaskInput{Title: "probe"})
 
 	const labels = 10
 	var wg sync.WaitGroup
@@ -969,14 +971,14 @@ func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := store.Patch(task.ID, TaskPatch{AddLabels: []string{fmt.Sprintf("label-%d", i)}}); err != nil {
+			if _, err := store.Patch(tk.ID, task.TaskPatch{AddLabels: []string{fmt.Sprintf("label-%d", i)}}); err != nil {
 				t.Errorf("Patch: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	after, err := store.Get(task.ID)
+	after, err := store.Get(tk.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

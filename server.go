@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 const (
@@ -84,7 +86,7 @@ func frontendHandler(dev bool) (http.Handler, error) {
 
 func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	filter := Filter{
+	filter := task.Filter{
 		Status:   query.Get("status"),
 		Priority: query.Get("priority"),
 		Label:    query.Get("label"),
@@ -110,7 +112,7 @@ func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, FilterTasks(tasks, filter))
+	writeJSON(w, http.StatusOK, task.FilterTasks(tasks, filter))
 }
 
 func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +129,7 @@ func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.store.Create(CreateTaskInput{
+	t, err := s.store.Create(CreateTaskInput{
 		Title:     in.Title,
 		Status:    in.Status,
 		Priority:  in.Priority,
@@ -141,21 +143,21 @@ func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Location", "/api/tasks/"+task.ID)
-	writeJSON(w, http.StatusCreated, task)
+	w.Header().Set("Location", "/api/tasks/"+t.ID)
+	writeJSON(w, http.StatusCreated, t)
 }
 
 func (s *server) handleGetTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.store.Get(r.PathValue("id"))
+	t, err := s.store.Get(r.PathValue("id"))
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, http.StatusOK, t)
 }
 
 func (s *server) handlePatchTask(w http.ResponseWriter, r *http.Request) {
-	var patch TaskPatch
+	var patch task.TaskPatch
 	if !decodeJSON(w, r, &patch) {
 		return
 	}
@@ -164,12 +166,12 @@ func (s *server) handlePatchTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.store.Patch(r.PathValue("id"), patch)
+	t, err := s.store.Patch(r.PathValue("id"), patch)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, http.StatusOK, t)
 }
 
 func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
@@ -185,12 +187,12 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.store.Note(r.PathValue("id"), text)
+	t, err := s.store.Note(r.PathValue("id"), text)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, http.StatusOK, t)
 }
 
 // handleConfig reports the project configuration the board is looking at. The
@@ -258,7 +260,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrTaskNotFound):
 		writeError(w, http.StatusNotFound, "task_not_found", err.Error())
-	case errors.Is(err, ErrInvalidTaskFile):
+	case errors.Is(err, task.ErrInvalidTaskFile):
 		writeError(w, http.StatusInternalServerError, "invalid_task_file", err.Error())
 	case errors.Is(err, ErrProjectNotFound),
 		errors.As(err, &pathErr), errors.As(err, &linkErr),

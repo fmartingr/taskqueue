@@ -1,13 +1,13 @@
 ---
 id: TQ-0025
 title: The release workflow publishes without tests or a fresh public/
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/ci
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:27:58+02:00
 ---
 
 ## Finding
@@ -25,3 +25,9 @@ ci.yml's frontend job carries the comment 'public/ is committed so releases need
 Gate the release job on the same checks CI runs: tests, lint, and a public/ freshness check, before goreleaser publishes.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T18:27:58+02:00 — Fixed as part of TQ-0036, which rewrote release.yml and warned against re-introducing this. The release job now needs a verify job running ci-lint, test, test-frontend and the public/ freshness gate, so a tag cannot publish binaries that never passed their own checks.

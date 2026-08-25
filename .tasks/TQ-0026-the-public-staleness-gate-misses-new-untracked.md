@@ -1,13 +1,13 @@
 ---
 id: TQ-0026
 title: The public/ staleness gate misses new untracked files
-status: todo
+status: done
 priority: normal
 labels:
   - bug
   - component/ci
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:27:58+02:00
 ---
 
 ## Finding
@@ -25,3 +25,9 @@ VERIFIED in a scratch repo: with `public/index.html` committed, an untracked `pu
 Use `git status --porcelain -- public` instead of `git diff --exit-code -- public`, which only sees already-tracked files.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T18:27:58+02:00 — Fixed as part of TQ-0036, which rewrote both workflows and warned against re-introducing this. The gate is now git status --porcelain -- public, which sees untracked build output where git diff --exit-code did not, and it prints what is stale before failing.

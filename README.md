@@ -1,6 +1,6 @@
 # tq — task queue
 
-<div align="center"><img src="frontend/icon.png" width="128" alt="tq"/></div>
+<div align="center"><img src="frontend/icon.png" width="256" alt="tq"/></div>
 
 A local-first task queue for agentic software development.
 
@@ -24,7 +24,12 @@ plain text either way.
 
 ## Install
 
-Download a release binary, or build from source:
+```bash
+go install github.com/fmartingr/taskqueue/cmd/tq@latest
+```
+
+Or take a [release archive](https://github.com/fmartingr/taskqueue/releases),
+or build from source:
 
 ```bash
 make build     # builds the frontend with Bun, then the Go binary

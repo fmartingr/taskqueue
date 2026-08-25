@@ -1,7 +1,7 @@
 ---
 id: TQ-0036
 title: Migrate CI and releases from Forgejo to GitHub Actions
-status: todo
+status: done
 priority: high
 labels:
   - chore
@@ -9,7 +9,7 @@ labels:
 depends_on:
   - TQ-0037
 created: 2026-08-25T12:13:06+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:28:32+02:00
 ---
 
 ## Why
@@ -88,7 +88,16 @@ line, belong to TQ-0037; this ticket owns the shape of the section.
   `go install github.com/fmartingr/taskqueue@latest`, with release binaries and
   `make build` as the alternatives below it.
 
+---
+
 ## Notes
 
 - 2026-08-25T12:13:36+02:00 — The README in the working tree now advertises 'go install github.com/fmartingr/task-queue@latest', which settles the module-path question: go.mod still says git.nakama.town/fmartingr/task-queue, and that go install command fails until it matches the repository. Treat the module path rename as required work in this ticket, not an option.
 - 2026-08-25T12:16:50+02:00 — Correction to the note above: the repository is github.com/fmartingr/taskqueue, no hyphen. The path quoted there is what the README currently says, and it is wrong on both counts — TQ-0037 owns fixing it.
+- 2026-08-25T18:28:32+02:00 — Workflows moved to ubuntu-latest with no container, checkout at v4 and setup-go at v5, goreleaser/goreleaser-action@v6, and a contents: read permissions block per workflow with contents: write only on the release job.
+- 2026-08-25T18:28:32+02:00 — goreleaser config lost gitea_urls and the release: gitea block; the GitHub repository is inferred from the remote. goreleaser check passes, verified by adding the github remote temporarily and removing it again, since there is still no remote configured here.
+- 2026-08-25T18:28:32+02:00 — Fixed rather than re-introduced, as this ticket asked: TQ-0025 now has a verify job the release needs, and TQ-0026's gate is git status --porcelain -- public so untracked build output is caught. Both closed.
+- 2026-08-25T18:28:32+02:00 — Install section leads with go install, but the path is github.com/fmartingr/taskqueue/cmd/tq@latest rather than the module root. go install names the binary after the last element of the package path, so the module root produced a binary called taskqueue while every command in the docs is tq. Verified both ways with GOBIN.
+- 2026-08-25T18:28:32+02:00 — That required an architecture change the user approved: a thin package main in cmd/tq, with the root becoming package taskqueue. public/ and its go:embed stay at the root, because an embed cannot reach outside its own package directory. AGENTS.md's no-cmd rule is rewritten to allow exactly this one subpackage and say why.
+- 2026-08-25T18:28:32+02:00 — Knock-on fixes: ldflags now set github.com/fmartingr/taskqueue.version, make build and goreleaser build ./cmd/tq, and go run . became go run ./cmd/tq in the Makefile and the plan. goreleaser snapshot produces a binary named tq, and GOBIN=... go install ./cmd/tq installs tq.
+- 2026-08-25T18:28:32+02:00 — Not done, deliberately: pinning actions by commit SHA and adding a Dependabot config, both listed as optional hardening. SHAs cannot be resolved without network access here, and the two belong together.

@@ -2,20 +2,17 @@ version: 2
 
 project_name: tq
 
-gitea_urls:
-  api: https://git.nakama.town/api/v1
-  download: https://git.nakama.town
-
 before:
   hooks:
     - go mod tidy
 
 builds:
   - binary: tq
+    main: ./cmd/tq
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w -X github.com/fmartingr/taskqueue.version={{.Version}}
     goos:
       - linux
       - darwin
@@ -54,7 +51,5 @@ changelog:
       order: 999
 
 release:
-  gitea:
-    owner: fmartingr
-    name: task-queue
+  # The GitHub repository is inferred from the remote.
   prerelease: auto

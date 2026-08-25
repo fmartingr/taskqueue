@@ -12,10 +12,12 @@ files are the only source of truth.
 - **Backend**: Go (standard library as much as possible)
 - **Frontend**: vanilla TypeScript + CSS, built with Bun, embedded via `go:embed`
   (no JavaScript dependencies at all, so there is no lockfile to commit)
-- **Layout**: one `package main` at the repository root, flat files by responsibility
+- **Layout**: one package at the repository root, flat files by responsibility,
+  with a thin `package main` in `cmd/tq`
 
 ```text
-main.go        CLI entry point and version variable
+cmd/tq/main.go The binary: `go install` names it after this directory
+tq.go          Main entry point and version variable
 cli.go         Commands, flags, human/JSON output, exit codes
 server.go      net/http server, REST API, static serving, tq serve
 store.go       Filesystem store: discovery, atomic writes, ID allocation
@@ -66,7 +68,11 @@ make dev            # Bun watch + DEV=1 server
   root of the enclosing Git repository (or `TQ_DIR`). Commands must not fail
   merely because a project has not been initialised.
 - Prefer the Go standard library where practical.
-- Keep the flat `package main` architecture; no `cmd/`, `internal/` or `pkg/`.
+- Keep the flat architecture: one package at the root, files by responsibility,
+  and no `internal/` or `pkg/`. The only subpackage is `cmd/tq`, which exists
+  solely so `go install` names the binary `tq` rather than after the module.
+  It holds a `main` that calls `Main` and nothing else; `public/` and its
+  `go:embed` stay at the root, where the embed can reach them.
 - Track work in this project's own queue, following the lifecycle in
   [Task management](#task-management).
 

@@ -3,7 +3,7 @@ CGO_ENABLED ?= 0
 HOST ?= 127.0.0.1
 PORT ?= 7331
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -X main.version=$(VERSION)
+LDFLAGS := -X github.com/fmartingr/taskqueue.version=$(VERSION)
 
 GOLANGCI_LINT_VERSION := v2.12.2
 
@@ -29,7 +29,7 @@ build: frontend build-go
 ## build-go: Build the binary from the committed public/ output (no Bun needed)
 .PHONY: build-go
 build-go:
-	CGO_ENABLED=$(CGO_ENABLED) go build -ldflags "$(LDFLAGS)" -o $(PROJECT_NAME) .
+	CGO_ENABLED=$(CGO_ENABLED) go build -ldflags "$(LDFLAGS)" -o $(PROJECT_NAME) ./cmd/tq
 
 ## build-snapshot: Build all platforms locally via goreleaser (snapshot)
 .PHONY: build-snapshot
@@ -43,7 +43,7 @@ build-snapshot:
 dev:
 	@trap 'kill 0' INT TERM EXIT; \
 	bun run dev & \
-	DEV=1 go run . serve --host $(HOST) --port $(PORT)
+	DEV=1 go run ./cmd/tq serve --host $(HOST) --port $(PORT)
 
 ## serve: Build and run the production binary
 .PHONY: serve

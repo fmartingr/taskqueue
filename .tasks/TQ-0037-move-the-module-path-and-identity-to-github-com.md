@@ -8,7 +8,7 @@ labels:
   - chore
   - component/build
 created: 2026-08-25T12:16:11+02:00
-updated: 2026-08-25T18:19:52+02:00
+updated: 2026-08-25T18:27:58+02:00
 ---
 
 ## Why
@@ -81,3 +81,4 @@ method.
 - 2026-08-25T18:19:52+02:00 — Two corrections to the ticket. The README has no go install line at all, so there was nothing to respell here; TQ-0036 owns that section and will add it with the right path. And .goreleaser.yml still says name: task-queue, inside the gitea release block TQ-0036 deletes outright, so changing it here would be churn.
 - 2026-08-25T18:19:52+02:00 — goreleaser check fails with 'no remote configured to list refs from'. Verified it fails identically at HEAD, so this is the environmental limitation the ticket anticipated, not a regression. There is no git remote at all yet.
 - 2026-08-25T18:19:52+02:00 — Not done, deliberately: pointing the remote at the new repository and pushing. That is outward-facing and needs the repository to exist; left for a human to do.
+- 2026-08-25T18:27:58+02:00 — Superseded in part by the cmd/tq move made under TQ-0036: go build ./... no longer drops a stray binary at all, and the one make build writes is tq, which was already ignored. The taskqueue line this ticket added is gone again.

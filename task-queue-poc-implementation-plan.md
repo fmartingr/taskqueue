@@ -1183,7 +1183,7 @@ Possible implementation:
 dev:
 	@trap 'kill 0' INT TERM EXIT; \
 	bun run dev & \
-	DEV=1 go run . serve
+	DEV=1 go run ./cmd/tq serve
 ```
 
 Adjust shell handling as needed for portability.

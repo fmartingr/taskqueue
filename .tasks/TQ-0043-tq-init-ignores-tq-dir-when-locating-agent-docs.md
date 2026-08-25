@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T13:44:56+02:00
-updated: 2026-08-25T13:44:56+02:00
+updated: 2026-08-25T14:12:27+02:00
 ---
 
 ## Finding
@@ -66,3 +66,9 @@ context, which is why the root document can stay minimal.
 Distinct from TQ-0042 (which is about `@` includes not being recognised as
 existing pointers); the two share a symptom but need separate fixes, and this
 one fires even when the pointer syntax is a plain Markdown link.
+
+---
+
+## Notes
+
+- 2026-08-25T14:12:27+02:00 — Adjacent case found while verifying TQ-0047 (cad90f9): SyncAgentsDocs derives its doc root from the working directory, not from the discovered task directory, so init in proj/backend of a non-Git project still creates a pointer at backend/AGENTS.md. It is now a correct pointer (../.tasks/AGENTS.md) rather than one aimed at a forked queue, so the harm is reduced, but the root cause is the same docRoot() question this ticket covers.

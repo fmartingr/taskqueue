@@ -12,7 +12,7 @@ import { watch } from "node:fs";
 
 const SOURCE_DIR = "frontend";
 const OUTPUT_DIR = "public";
-const COPIES = ["index.html", "style.css"];
+const COPIES = ["index.html", "style.css", "icon.png"];
 
 async function build(): Promise<void> {
   const started = performance.now();

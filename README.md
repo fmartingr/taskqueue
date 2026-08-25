@@ -1,6 +1,6 @@
 # tq — task queue
 
-<div align="center"><img src="assets/icon.png" width="128"/></div>
+<div align="center"><img src="frontend/icon.png" width="128" alt="tq"/></div>
 
 A local-first task queue for agentic software development.
 

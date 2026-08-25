@@ -9,5 +9,5 @@ const publicDirName = "public"
 // of the file to rebuild (`make frontend`) instead of "contains no embeddable
 // files".
 //
-//go:embed public/index.html public/app.js public/style.css
+//go:embed public/index.html public/app.js public/style.css public/icon.png
 var publicFS embed.FS

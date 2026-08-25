@@ -1,13 +1,14 @@
 ---
 id: TQ-0049
 title: A hand-written root AGENTS.md is destroyed when the task dir is the repo root
-status: todo
+status: done
 priority: normal
 labels:
   - bug
   - component/cli
+  - wontfix
 created: 2026-08-25T14:08:39+02:00
-updated: 2026-08-25T16:19:27+02:00
+updated: 2026-08-25T16:26:46+02:00
 ---
 
 ## Finding
@@ -58,3 +59,6 @@ addressed only the convergence half. Found by verifying that ticket's fix.
 ## Notes
 
 - 2026-08-25T16:19:27+02:00 — Survives TQ-0055 and is now the only remaining way tq can damage a hand-written file. Re-verified after the removal: with TQ_DIR making the task directory the repository root, the guide write still lands on the root AGENTS.md and replaces it. The surrounding machinery is gone, so the fix is now small — refuse to render the guide over a path that already holds a file tq did not write.
+- 2026-08-25T16:26:46+02:00 — Rejected as a scope decision, not as unreproducible: it still reproduces on the current build, verified after TQ-0055.
+- 2026-08-25T16:26:46+02:00 — Reaching it requires pointing TQ_DIR at the repository root, which makes the root AGENTS.md the guide's own path by definition. That is a deliberate, unusual configuration, and the file tq overwrites is the one the user told it to write. Guarding it would mean tq inspecting a document again, which is exactly what TQ-0055 removed.
+- 2026-08-25T16:26:46+02:00 — Reopen if a real project hits this without setting TQ_DIR by hand.

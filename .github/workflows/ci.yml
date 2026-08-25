@@ -64,5 +64,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
+      - run: make test-frontend
       - run: make frontend
       - run: git diff --exit-code -- public

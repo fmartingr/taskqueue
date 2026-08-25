@@ -1,3 +1,101 @@
+// frontend/notes.ts
+var NOTES_HEADING = "## Notes";
+var NOTES_RULE = "---";
+var FENCE_PATTERN = /^(```|~~~)/;
+var HEADING_PATTERN = /^#{1,6}\s/;
+var BULLET_PATTERN = /^[-*]\s+/;
+var NOTE_PATTERN = /^(\S+)\s+—\s+([\s\S]*)$/;
+var CONTINUATION_INDENT = "  ";
+function trimBlankLines(text) {
+  return text.replace(/^\n+|\n+$/g, "");
+}
+function splitBody(body) {
+  const lines = body.split(`
+`);
+  const start = notesStart(lines);
+  if (start === -1) {
+    return { content: trimBlankLines(body), notes: [] };
+  }
+  let end = start;
+  while (end > 0 && lines[end - 1].trim() === "")
+    end--;
+  if (end > 0 && lines[end - 1].trim() === NOTES_RULE && (end === 1 || lines[end - 2].trim() === "")) {
+    end--;
+  }
+  return {
+    content: trimBlankLines(lines.slice(0, end).join(`
+`)),
+    notes: parseNotes(lines.slice(start + 1))
+  };
+}
+function notesStart(lines) {
+  const [start, balanced] = scanNotesStart(lines, true);
+  if (balanced)
+    return start;
+  return scanNotesStart(lines, false)[0];
+}
+function scanNotesStart(lines, honourFences) {
+  let start = -1;
+  let fenced = false;
+  for (let i = 0;i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (honourFences && FENCE_PATTERN.test(trimmed)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced || !HEADING_PATTERN.test(trimmed))
+      continue;
+    start = trimmed === NOTES_HEADING ? i : -1;
+  }
+  return [start, !fenced];
+}
+function parseNotes(lines) {
+  const notes = [];
+  let blanks = [];
+  for (const line of lines) {
+    const text = line.replace(/\s+$/, "");
+    if (text === "") {
+      blanks.push("");
+      continue;
+    }
+    const indented = /^\s/.test(text);
+    if (notes.length === 0 || !indented && BULLET_PATTERN.test(text)) {
+      notes.push(parseNote(text.trim().replace(BULLET_PATTERN, "")));
+      blanks = [];
+      continue;
+    }
+    const last = notes[notes.length - 1];
+    last.text = [last.text, ...blanks, text.replace(/^ {1,2}/, "")].join(`
+`);
+    blanks = [];
+  }
+  return notes;
+}
+function parseNote(text) {
+  const match = NOTE_PATTERN.exec(text);
+  if (match && !Number.isNaN(new Date(match[1]).getTime())) {
+    return { timestamp: match[1], text: match[2] };
+  }
+  return { timestamp: "", text };
+}
+function joinBody(body) {
+  const content = trimBlankLines(body.content);
+  const notes = body.notes.filter((note) => note.text.trim() !== "");
+  if (notes.length === 0)
+    return content;
+  const section = [NOTES_HEADING, "", ...notes.map(formatNote)].join(`
+`);
+  return content === "" ? section : [content, "", NOTES_RULE, "", section].join(`
+`);
+}
+function formatNote(note) {
+  const [first = "", ...rest] = trimBlankLines(note.text).split(`
+`);
+  const head = note.timestamp === "" ? `- ${first.trim()}` : `- ${note.timestamp} — ${first.trim()}`;
+  return [head, ...rest.map((line) => line.trim() === "" ? "" : CONTINUATION_INDENT + line)].join(`
+`);
+}
+
 // frontend/app.ts
 var STATUSES = ["backlog", "todo", "in-progress", "done"];
 var POLL_INTERVAL_MS = 3000;
@@ -7,7 +105,7 @@ var state = {
   lastPayload: "",
   dragging: null,
   openTaskID: null,
-  openBody: { content: "", notes: [], trailing: "" },
+  openBody: { content: "", notes: [] },
   composing: null,
   draft: "",
   taskDir: "",
@@ -48,63 +146,6 @@ var fetchTasks = () => api("/api/tasks");
 var createTask = (input) => api("/api/tasks", "POST", input);
 var patchTask = (id, patch) => api(`/api/tasks/${id}`, "PATCH", patch);
 var addNote = (id, text) => api(`/api/tasks/${id}/notes`, "POST", { text });
-var NOTES_HEADING = "## Notes";
-var NOTE_PATTERN = /^-\s+(\S+)\s+—\s+([\s\S]*)$/;
-function splitBody(body) {
-  const lines = body.split(`
-`);
-  const start = lines.findIndex((line) => line.trim() === NOTES_HEADING);
-  if (start === -1) {
-    return { content: body.trim(), notes: [], trailing: "" };
-  }
-  let end = lines.length;
-  for (let i = start + 1;i < lines.length; i++) {
-    if (lines[i].trim().startsWith("## ")) {
-      end = i;
-      break;
-    }
-  }
-  const notes = [];
-  for (const line of lines.slice(start + 1, end)) {
-    const note = parseNote(line);
-    if (note)
-      notes.push(note);
-  }
-  return {
-    content: lines.slice(0, start).join(`
-`).trim(),
-    notes,
-    trailing: lines.slice(end).join(`
-`).trim()
-  };
-}
-function parseNote(line) {
-  const trimmed = line.trim();
-  if (trimmed === "")
-    return null;
-  const match = NOTE_PATTERN.exec(trimmed);
-  if (match && !Number.isNaN(new Date(match[1]).getTime())) {
-    return { timestamp: match[1], text: match[2] };
-  }
-  return { timestamp: "", text: trimmed.replace(/^[-*]\s+/, "") };
-}
-function joinBody(body) {
-  const sections = [body.content.trim()];
-  if (body.notes.length > 0) {
-    sections.push([NOTES_HEADING, "", ...body.notes.map(formatNote)].join(`
-`));
-  }
-  if (body.trailing.trim() !== "") {
-    sections.push(body.trailing.trim());
-  }
-  return sections.filter((section) => section !== "").join(`
-
-`);
-}
-function formatNote(note) {
-  const text = note.text.replace(/\s+/g, " ").trim();
-  return note.timestamp === "" ? `- ${text}` : `- ${note.timestamp} — ${text}`;
-}
 function indexTasks(tasks) {
   return new Map(tasks.map((task) => [task.id, task]));
 }

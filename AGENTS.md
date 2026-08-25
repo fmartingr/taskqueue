@@ -22,25 +22,28 @@ store.go       Filesystem store: discovery, atomic writes, ID allocation
 task.go        Task model, validation, filters, dependencies, notes
 frontmatter.go YAML frontmatter parse/render
 embed.go       go:embed public/
-frontend/      app.ts, index.html, style.css, build.ts (Bun)
+frontend/      app.ts, notes.ts, index.html, style.css, build.ts (Bun)
 public/        Built frontend (committed; regenerate with `make frontend`)
 ```
 
 ## Commands
 
 ```bash
-make test       # run after backend changes
-make frontend   # run after frontend changes (updates public/, which is committed)
-make build      # run before completing a task
-make lint       # golangci-lint
-make format     # go fmt + go mod tidy
-make dev        # Bun watch + DEV=1 server
+make test           # run after backend changes
+make test-frontend  # Bun unit tests for the pure frontend helpers
+make frontend       # run after frontend changes (updates public/, which is committed)
+make build          # run before completing a task
+make lint           # golangci-lint
+make format         # go fmt + go mod tidy
+make dev            # Bun watch + DEV=1 server
 ```
 
 ## Rules
 
 - Run `make test` after backend changes.
-- Run `make frontend` after frontend changes and commit the `public/` output.
+- Run `make frontend` after frontend changes and commit the `public/` output,
+  and `make test-frontend` when the change touches logic that is unit-tested
+  (the pure helpers in `frontend/`, currently `notes.ts`).
 - Run `make build` before completing a task.
 - Do not add a database, an index file, a cache or a filesystem watcher. Markdown
   files are the source of truth and every read hits the disk — that is what makes
@@ -69,8 +72,10 @@ make dev        # Bun watch + DEV=1 server
 
 `go test ./...` covers frontmatter parsing/rendering, the store (with
 `t.TempDir()`), dependency/ready logic, the CLI (through `runCLI`, without
-spawning a binary) and the HTTP API (through `httptest`). There is deliberately
-no browser test stack; the board is verified manually.
+spawning a binary) and the HTTP API (through `httptest`). Frontend logic that is pure — the
+notes split/join in `frontend/notes.ts` — has `bun test` unit tests next to it
+(`make test-frontend`). There is deliberately no browser test stack; anything
+that touches the DOM is verified manually.
 
 ## Task management
 

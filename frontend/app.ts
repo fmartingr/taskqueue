@@ -6,6 +6,8 @@
  * tasks created or moved by an agent show up on their own.
  */
 
+import { joinBody, splitBody, type Note, type SplitBody } from "./notes";
+
 const STATUSES = ["backlog", "todo", "in-progress", "done"] as const;
 const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
 
@@ -60,7 +62,7 @@ const state = {
   dragging: null as string | null,
   openTaskID: null as string | null,
   /** Body of the open task, split so notes can be edited on their own. */
-  openBody: { content: "", notes: [] as Note[], trailing: "" } as SplitBody,
+  openBody: { content: "", notes: [] } as SplitBody,
   /** Column whose inline "add a card" composer is open, with its draft text. */
   composing: null as Status | null,
   draft: "",
@@ -112,83 +114,6 @@ const fetchTasks = () => api<Task[]>("/api/tasks");
 const createTask = (input: TaskInput) => api<Task>("/api/tasks", "POST", input);
 const patchTask = (id: string, patch: Partial<TaskInput>) => api<Task>(`/api/tasks/${id}`, "PATCH", patch);
 const addNote = (id: string, text: string) => api<Task>(`/api/tasks/${id}/notes`, "POST", { text });
-
-// ── Notes ───────────────────────────────────────────────────────
-//
-// Notes live in the Markdown body under a "## Notes" heading, exactly as the
-// CLI writes them — the file stays the source of truth. The board splits them
-// out for display and puts them back together on save.
-
-const NOTES_HEADING = "## Notes";
-const NOTE_PATTERN = /^-\s+(\S+)\s+—\s+([\s\S]*)$/;
-
-interface Note {
-  /** RFC 3339 timestamp, or "" for a bullet tq did not write. */
-  timestamp: string;
-  text: string;
-}
-
-interface SplitBody {
-  content: string;
-  notes: Note[];
-  /** Anything after the notes section, kept so nothing is lost on save. */
-  trailing: string;
-}
-
-function splitBody(body: string): SplitBody {
-  const lines = body.split("\n");
-  const start = lines.findIndex((line) => line.trim() === NOTES_HEADING);
-  if (start === -1) {
-    return { content: body.trim(), notes: [], trailing: "" };
-  }
-
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (lines[i].trim().startsWith("## ")) {
-      end = i;
-      break;
-    }
-  }
-
-  const notes: Note[] = [];
-  for (const line of lines.slice(start + 1, end)) {
-    const note = parseNote(line);
-    if (note) notes.push(note);
-  }
-  return {
-    content: lines.slice(0, start).join("\n").trim(),
-    notes,
-    trailing: lines.slice(end).join("\n").trim(),
-  };
-}
-
-function parseNote(line: string): Note | null {
-  const trimmed = line.trim();
-  if (trimmed === "") return null;
-
-  const match = NOTE_PATTERN.exec(trimmed);
-  if (match && !Number.isNaN(new Date(match[1]).getTime())) {
-    return { timestamp: match[1], text: match[2] };
-  }
-  // A hand-written bullet: keep it, just without a timestamp.
-  return { timestamp: "", text: trimmed.replace(/^[-*]\s+/, "") };
-}
-
-function joinBody(body: SplitBody): string {
-  const sections = [body.content.trim()];
-  if (body.notes.length > 0) {
-    sections.push([NOTES_HEADING, "", ...body.notes.map(formatNote)].join("\n"));
-  }
-  if (body.trailing.trim() !== "") {
-    sections.push(body.trailing.trim());
-  }
-  return sections.filter((section) => section !== "").join("\n\n");
-}
-
-function formatNote(note: Note): string {
-  const text = note.text.replace(/\s+/g, " ").trim();
-  return note.timestamp === "" ? `- ${text}` : `- ${note.timestamp} — ${text}`;
-}
 
 // ── Dependencies ────────────────────────────────────────────────
 

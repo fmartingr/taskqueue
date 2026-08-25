@@ -7,7 +7,7 @@ labels:
   - bug
   - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T12:43:09+02:00
 ---
 
 ## Finding
@@ -25,3 +25,9 @@ Reproduced with body `## Notes` / `- old note` / `# Appendix` / `text`: `tq note
 End the Notes section at any heading of level 2 or shallower, not only at `## `.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T12:43:09+02:00 — Fixed by TQ-0031: notes are now the body's last section, so AppendNote no longer scans for the first '## Notes' at all — a heading of any level after it, and one inside a fenced code block, both make it content. task.go:notesStart covers the level-1/level-3 and fenced cases this ticket reported, with tests in TestAppendNote and TestNotesSection.

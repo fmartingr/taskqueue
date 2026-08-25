@@ -1,14 +1,14 @@
 ---
 id: TQ-0031
 title: Notes section must be last and introduced by a horizontal rule
-status: todo
+status: done
 priority: urgent
 labels:
   - bug
   - component/frontend
   - component/store
 created: 2026-08-25T11:57:34+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T12:43:22+02:00
 ---
 
 ## Symptom
@@ -94,3 +94,9 @@ other sections — that is content, which is exactly the TQ-0029 case.
   without the rule are read correctly and upgraded when next written.
 - Round-trip test: body containing a `## Notes` heading and a `---` rule, parsed
   and rendered, comes back unchanged.
+
+---
+
+## Notes
+
+- 2026-08-25T12:43:09+02:00 — Implemented: notesSection/notesStart in task.go and frontend/notes.ts (extracted from app.ts) both read the notes as the last section, rule-delimited; legacy sections without the rule are read and upgraded on the next write. Verified against the real .tasks: TQ-0029 splits to zero notes with its body intact and a board save leaves it byte-identical, and all 38 files round-trip with no change beyond the added rule.

@@ -186,52 +186,111 @@ func FilterTasks(tasks []Task, f Filter) []Task {
 	return out
 }
 
-const notesHeading = "## Notes"
+// Notes are the last section of a task body, introduced by a horizontal rule:
+//
+//	Task content, which may itself contain a Notes section.
+//
+//	---
+//
+//	## Notes
+//
+//	- 2026-08-25T09:42:00+02:00 — the actual note
+//
+// The blank line above the rule is required — text directly above "---" is a
+// setext heading rather than a rule — and everything after the heading is
+// notes, so a "## Notes" heading anywhere else is ordinary content.
+const (
+	notesHeading = "## Notes"
+	notesRule    = "---"
+)
 
-// AppendNote appends a timestamped bullet to the task body's "## Notes"
-// section, creating the section at the end of the body when it is missing.
+// notesSection splits a body into the content ahead of the notes section and
+// the notes themselves. Both are empty when the body has neither.
+//
+// The rule is optional when reading: files written before it existed end in a
+// bare "## Notes", and AppendNote writes the rule in the next time it touches
+// one. A "## Notes" that is followed by another section is content, and so is
+// one inside a fenced code block.
+func notesSection(body string) (content, notes string) {
+	body = strings.Trim(body, "\n")
+	lines := strings.Split(body, "\n")
+
+	start := notesStart(lines)
+	if start == -1 {
+		return body, ""
+	}
+
+	end := start
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	// A "---" that does not follow a blank line underlines the text above it as
+	// a setext heading, so it is part of the content and not the notes rule.
+	if end > 0 && strings.TrimSpace(lines[end-1]) == notesRule && (end == 1 || strings.TrimSpace(lines[end-2]) == "") {
+		end--
+	}
+
+	content = strings.Trim(strings.Join(lines[:end], "\n"), "\n")
+	notes = strings.Trim(strings.Join(lines[start+1:], "\n"), "\n")
+	return content, notes
+}
+
+// notesStart returns the index of the "## Notes" heading that opens the notes
+// section, or -1 when there is none. Only the heading of the body's last
+// section qualifies; any heading after it makes it content.
+func notesStart(lines []string) int {
+	if start, balanced := scanNotesStart(lines, true); balanced {
+		return start
+	}
+	// The body has an unclosed (or mismatched) fence, which would hide
+	// everything after it — including a real notes section, so that appending a
+	// note would start a second one. Read the fences as ordinary lines instead.
+	start, _ := scanNotesStart(lines, false)
+	return start
+}
+
+// scanNotesStart is notesStart over one pass, also reporting whether the code
+// fences it honoured were balanced.
+func scanNotesStart(lines []string, honourFences bool) (start int, balanced bool) {
+	start, fenced := -1, false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if honourFences && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")) {
+			fenced = !fenced
+			continue
+		}
+		if fenced || !isATXHeading(trimmed) {
+			continue
+		}
+		if trimmed == notesHeading {
+			start = i
+		} else {
+			start = -1
+		}
+	}
+	return start, !fenced
+}
+
+// isATXHeading reports whether a trimmed line is a "#"-style Markdown heading.
+func isATXHeading(trimmed string) bool {
+	hashes := len(trimmed) - len(strings.TrimLeft(trimmed, "#"))
+	return hashes > 0 && hashes <= 6 && strings.HasPrefix(trimmed[hashes:], " ")
+}
+
+// AppendNote appends a timestamped bullet to the task body's notes section,
+// creating it — rule included — at the very end of the body when it is missing.
 func AppendNote(body, text string, ts time.Time) string {
 	note := "- " + ts.Format(time.RFC3339) + " — " + strings.Join(strings.Fields(text), " ")
-	body = strings.Trim(body, "\n")
 
-	lines := strings.Split(body, "\n")
-	heading := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == notesHeading {
-			heading = i
-			break
-		}
+	content, notes := notesSection(body)
+	section := notesHeading
+	if content != "" {
+		section = content + "\n\n" + notesRule + "\n\n" + notesHeading
 	}
-	if heading == -1 {
-		if body == "" {
-			return notesHeading + "\n\n" + note
-		}
-		return body + "\n\n" + notesHeading + "\n\n" + note
+	if notes == "" {
+		return section + "\n\n" + note
 	}
-
-	// The notes section ends at the next heading (or at the end of the body).
-	end := len(lines)
-	for i := heading + 1; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
-			end = i
-			break
-		}
-	}
-	insert := end
-	for insert > heading+1 && strings.TrimSpace(lines[insert-1]) == "" {
-		insert--
-	}
-
-	out := append([]string{}, lines[:insert]...)
-	if insert == heading+1 { // empty section: keep a blank line under the heading
-		out = append(out, "")
-	}
-	out = append(out, note)
-	if end < len(lines) {
-		out = append(out, "")
-	}
-	out = append(out, lines[end:]...)
-	return strings.Join(out, "\n")
+	return section + "\n\n" + notes + "\n" + note
 }
 
 // TaskPatch is a partial update. Nil pointers mean "leave unchanged", which is

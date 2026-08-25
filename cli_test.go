@@ -396,6 +396,27 @@ func TestCLINote(t *testing.T) {
 	}
 }
 
+func TestCLINoteLeavesAContentNotesSectionAlone(t *testing.T) {
+	tc := newTestCLI(t)
+	body := "Description.\n\n## Notes\n\nProse that belongs to the task.\n\n## Acceptance criteria\n\n- something"
+	tc.mustRun("add", "A task documenting its own notes", "--body", body)
+
+	tc.mustRun("note", "TQ-0001", "The real note.")
+
+	var task Task
+	tc.mustRunJSON(&task, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(task.Body, body) {
+		t.Fatalf("the original body should be untouched:\n%s", task.Body)
+	}
+	want := body + "\n\n---\n\n## Notes\n\n- "
+	if !strings.HasPrefix(task.Body, want) {
+		t.Errorf("the note should start a new section at the end:\n%s", task.Body)
+	}
+	if !strings.HasSuffix(task.Body, " — The real note.") {
+		t.Errorf("the note should be the last line:\n%s", task.Body)
+	}
+}
+
 func TestCLIReady(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "Implement REST API", "--priority", "high", "--label", "backend")

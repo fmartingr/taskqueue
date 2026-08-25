@@ -57,6 +57,11 @@ serve: build
 test:
 	go test ./...
 
+## test-frontend: Run the frontend unit tests with Bun
+.PHONY: test-frontend
+test-frontend:
+	bun test frontend/
+
 ## format: Format code and tidy modules
 .PHONY: format
 format:

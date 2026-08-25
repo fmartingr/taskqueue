@@ -85,7 +85,8 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
   and the Markdown body.
 - Notes are not part of the body editor: they get their own list in the dialog,
   each with a pencil to correct it, and cards show a 💬 count. They are still
-  stored as the `## Notes` section of the Markdown file that `tq note` writes.
+  stored as the trailing `## Notes` section of the Markdown file that `tq note`
+  writes, so a `## Notes` heading in the body itself stays part of the body.
 - "New task" creates a task; the filter bar narrows the board by status,
   priority, assignee, label, or "ready only".
 - Cards show a blocked marker while a dependency is unfinished or missing.
@@ -137,7 +138,7 @@ tq done <id>                       Shorthand for: tq move <id> done
 tq update <id> [flags]             --title --status --priority --assignee
                                    --add-label --remove-label
                                    --add-dependency --remove-dependency
-tq note <id> <text>                Append a timestamped bullet under "## Notes"
+tq note <id> <text>                Append a timestamped bullet to the notes
 tq ready [flags]                   --priority --label --assignee --json
 tq serve [flags]                   --host --port
 tq version
@@ -172,6 +173,8 @@ updated: 2026-08-25T09:12:00+02:00
 
 Implement authentication using the existing OIDC provider.
 
+---
+
 ## Notes
 
 - 2026-08-25T09:42:00+02:00 — Initial investigation completed.
@@ -180,6 +183,12 @@ Implement authentication using the existing OIDC provider.
 - Statuses: `backlog`, `todo`, `in-progress`, `done`.
 - Priorities: `urgent`, `high`, `normal` (default), `low` — highest first, which
   is also the order `tq list` sorts by.
+- Notes are the last section of the body and are introduced by a horizontal
+  rule, so a `## Notes` heading in the body itself is content like any other:
+  only a `## Notes` that ends the document is read as notes. The blank line
+  above the `---` is required — text directly above it would make a heading
+  instead of a rule. Files written before the rule existed are still read
+  correctly and gain the rule the next time `tq note` touches them.
 - Files are named `<id>-<title-slug>.md` (`TQ-0001-implement-oidc-authentication.md`),
   so the directory is browsable and greppable by name. The ID comes first, so
   files still sort and glob by ID.

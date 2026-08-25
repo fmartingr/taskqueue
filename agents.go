@@ -212,6 +212,9 @@ Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 
 - Statuses: %s
 - Priorities: %s (default: %s)
+- Notes are the last section of a body, introduced by a `+"`---`"+` rule with a blank
+  line above it. A `+"`## Notes`"+` heading anywhere else is ordinary content, so a
+  body can document notes without `+"`tq note`"+` mistaking prose for notes.
 - A task is *ready* when it is neither done nor in-progress and every task in
   `+"`depends_on`"+` exists and is done. A missing dependency blocks it.
 - `+"`--json`"+` prints JSON to stdout and nothing else; errors go to stderr.

@@ -113,6 +113,43 @@ func TestRenderParseRoundTrip(t *testing.T) {
 	}
 }
 
+// A body may contain both a horizontal rule and a "## Notes" heading of its
+// own: the frontmatter scan stops at the real closing delimiter, so neither
+// confuses the parser and the body survives a round trip byte for byte.
+func TestRoundTripKeepsRulesAndNotesInTheBody(t *testing.T) {
+	body := "Description.\n\n---\n\n## Notes\n\nProse that is content, not notes.\n\n" +
+		"## Acceptance criteria\n\n- something\n\n---\n\n## Notes\n\n- 2026-08-25T09:42:00+02:00 — a real note"
+
+	task := Task{
+		ID:      "TQ-0001",
+		Title:   "Round trip",
+		Status:  StatusTodo,
+		Created: time.Date(2026, 8, 25, 8, 30, 0, 0, time.UTC),
+		Updated: time.Date(2026, 8, 25, 9, 12, 0, 0, time.UTC),
+		Body:    body,
+	}
+
+	rendered, err := RenderTask(task)
+	if err != nil {
+		t.Fatalf("RenderTask: %v", err)
+	}
+	parsed, err := ParseTask("TQ-0001.md", rendered)
+	if err != nil {
+		t.Fatalf("ParseTask: %v", err)
+	}
+	if parsed.Body != body {
+		t.Errorf("body changed:\ngot:  %q\nwant: %q", parsed.Body, body)
+	}
+
+	again, err := RenderTask(parsed)
+	if err != nil {
+		t.Fatalf("RenderTask(parsed): %v", err)
+	}
+	if string(again) != string(rendered) {
+		t.Errorf("render is not stable:\n%s\n---\n%s", rendered, again)
+	}
+}
+
 func TestRenderUsesTwoSpaceListIndent(t *testing.T) {
 	task, err := ParseTask("TQ-0001.md", []byte(validTask))
 	if err != nil {

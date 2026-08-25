@@ -166,47 +166,175 @@ func TestFilterValidate(t *testing.T) {
 func TestAppendNote(t *testing.T) {
 	ts := time.Date(2026, 8, 25, 9, 42, 0, 0, time.FixedZone("", 2*3600))
 	stamp := "2026-08-25T09:42:00+02:00"
+	note := "- " + stamp + " — "
 
-	t.Run("creates the section when missing", func(t *testing.T) {
-		got := AppendNote("Some description.", "First note.", ts)
-		want := "Some description.\n\n## Notes\n\n- " + stamp + " — First note."
+	tests := []struct {
+		name string
+		body string
+		text string
+		want string
+	}{
+		{
+			name: "creates the section under a rule when missing",
+			body: "Some description.",
+			text: "First note.",
+			want: "Some description.\n\n---\n\n## Notes\n\n" + note + "First note.",
+		},
+		{
+			name: "creates the section without a rule for an empty body",
+			body: "",
+			text: "First note.",
+			want: "## Notes\n\n" + note + "First note.",
+		},
+		{
+			name: "appends under an existing section",
+			body: "Description.\n\n---\n\n## Notes\n\n- earlier note",
+			text: "Second note.",
+			want: "Description.\n\n---\n\n## Notes\n\n- earlier note\n" + note + "Second note.",
+		},
+		{
+			name: "upgrades a legacy section that has no rule",
+			body: "Description.\n\n## Notes\n\n- earlier note",
+			text: "Second note.",
+			want: "Description.\n\n---\n\n## Notes\n\n- earlier note\n" + note + "Second note.",
+		},
+		{
+			name: "keeps continuation lines of an existing note",
+			body: "Description.\n\n---\n\n## Notes\n\n- earlier note\n  wrapped onto a second line",
+			text: "Second note.",
+			want: "Description.\n\n---\n\n## Notes\n\n- earlier note\n  wrapped onto a second line\n" + note + "Second note.",
+		},
+		{
+			name: "an empty section keeps its blank line",
+			body: "Description.\n\n---\n\n## Notes",
+			text: "First note.",
+			want: "Description.\n\n---\n\n## Notes\n\n" + note + "First note.",
+		},
+		{
+			name: "a Notes section followed by other content is content",
+			body: "Description.\n\n## Notes\n\nProse about notes.\n\n## Acceptance criteria\n\n- something",
+			text: "First note.",
+			want: "Description.\n\n## Notes\n\nProse about notes.\n\n## Acceptance criteria\n\n- something" +
+				"\n\n---\n\n## Notes\n\n" + note + "First note.",
+		},
+		{
+			name: "a Notes heading inside a fenced block is content",
+			body: "Description.\n\n```markdown\n## Notes\n\n- an example\n```",
+			text: "First note.",
+			want: "Description.\n\n```markdown\n## Notes\n\n- an example\n```" +
+				"\n\n---\n\n## Notes\n\n" + note + "First note.",
+		},
+		{
+			name: "an unclosed fence does not hide the notes section",
+			body: "Description.\n\n```go\nfunc x() {}\n\n---\n\n## Notes\n\n- earlier note",
+			text: "Second note.",
+			want: "Description.\n\n```go\nfunc x() {}\n\n---\n\n## Notes\n\n- earlier note\n" + note + "Second note.",
+		},
+		{
+			name: "a rule with nothing above it introduces the notes",
+			body: "---\n\n## Notes\n\n- earlier note",
+			text: "Second note.",
+			want: "## Notes\n\n- earlier note\n" + note + "Second note.",
+		},
+		{
+			name: "a setext heading underline is not the notes rule",
+			body: "Description\n---\n\n## Notes\n\n- earlier note",
+			text: "Second note.",
+			want: "Description\n---\n\n---\n\n## Notes\n\n- earlier note\n" + note + "Second note.",
+		},
+		{
+			name: "content ending in a rule keeps it",
+			body: "Description.\n\n---",
+			text: "First note.",
+			want: "Description.\n\n---\n\n---\n\n## Notes\n\n" + note + "First note.",
+		},
+		{
+			name: "surrounding blank lines are normalised away",
+			body: "\n\nDescription.\n\n\n---\n\n\n## Notes\n\n- earlier note\n\n",
+			text: "Second note.",
+			want: "Description.\n\n---\n\n## Notes\n\n- earlier note\n" + note + "Second note.",
+		},
+		{
+			name: "collapses newlines in the note text",
+			body: "",
+			text: "line one\nline two",
+			want: "## Notes\n\n" + note + "line one line two",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AppendNote(tt.body, tt.text, ts); got != tt.want {
+				t.Errorf("AppendNote(%q):\ngot:  %q\nwant: %q", tt.body, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("a second note lands under the first", func(t *testing.T) {
+		body := AppendNote("Description.", "First note.", ts)
+		got := AppendNote(body, "Second note.", ts.Add(time.Hour))
+		want := "Description.\n\n---\n\n## Notes\n\n" + note + "First note.\n" +
+			"- 2026-08-25T10:42:00+02:00 — Second note."
 		if got != want {
 			t.Errorf("got:\n%q\nwant:\n%q", got, want)
 		}
 	})
+}
 
-	t.Run("creates the section for an empty body", func(t *testing.T) {
-		got := AppendNote("", "First note.", ts)
-		want := "## Notes\n\n- " + stamp + " — First note."
-		if got != want {
-			t.Errorf("got:\n%q\nwant:\n%q", got, want)
-		}
-	})
+func TestNotesSection(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		content string
+		notes   string
+	}{
+		{
+			name: "no notes at all",
+			body: "Just content.", content: "Just content.",
+		},
+		{
+			name:    "canonical section",
+			body:    "Content.\n\n---\n\n## Notes\n\n- a note",
+			content: "Content.", notes: "- a note",
+		},
+		{
+			name:    "legacy section without a rule",
+			body:    "Content.\n\n## Notes\n\n- a note",
+			content: "Content.", notes: "- a note",
+		},
+		{
+			name:    "notes followed by another section are content",
+			body:    "Content.\n\n## Notes\n\n- a note\n\n## After\n\nmore",
+			content: "Content.\n\n## Notes\n\n- a note\n\n## After\n\nmore",
+		},
+		{
+			name:    "the last of several Notes headings wins",
+			body:    "## Notes\n\ncontent\n\n## Other\n\nx\n\n---\n\n## Notes\n\n- a note",
+			content: "## Notes\n\ncontent\n\n## Other\n\nx", notes: "- a note",
+		},
+		{
+			name:    "an empty notes section",
+			body:    "Content.\n\n---\n\n## Notes",
+			content: "Content.", notes: "",
+		},
+		{
+			name:    "notes only",
+			body:    "## Notes\n\n- a note",
+			content: "", notes: "- a note",
+		},
+	}
 
-	t.Run("appends under an existing section", func(t *testing.T) {
-		body := "Description.\n\n## Notes\n\n- earlier note"
-		got := AppendNote(body, "Second note.", ts)
-		want := body + "\n- " + stamp + " — Second note."
-		if got != want {
-			t.Errorf("got:\n%q\nwant:\n%q", got, want)
-		}
-	})
-
-	t.Run("appends before a following section", func(t *testing.T) {
-		body := "Description.\n\n## Notes\n\n- earlier note\n\n## Acceptance criteria\n\n- something"
-		got := AppendNote(body, "Second note.", ts)
-		want := "Description.\n\n## Notes\n\n- earlier note\n- " + stamp + " — Second note.\n\n## Acceptance criteria\n\n- something"
-		if got != want {
-			t.Errorf("got:\n%q\nwant:\n%q", got, want)
-		}
-	})
-
-	t.Run("collapses newlines in the note text", func(t *testing.T) {
-		got := AppendNote("", "line one\nline two", ts)
-		if strings.Count(got, "\n- ") != 1 || !strings.Contains(got, "line one line two") {
-			t.Errorf("multiline note should collapse to one bullet, got %q", got)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, notes := notesSection(tt.body)
+			if content != tt.content {
+				t.Errorf("content:\ngot:  %q\nwant: %q", content, tt.content)
+			}
+			if notes != tt.notes {
+				t.Errorf("notes:\ngot:  %q\nwant: %q", notes, tt.notes)
+			}
+		})
+	}
 }
 
 func TestApplyPatch(t *testing.T) {

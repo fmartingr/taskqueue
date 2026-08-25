@@ -218,6 +218,18 @@ func TestAppendNote(t *testing.T) {
 				"\n\n---\n\n## Notes\n\n" + note + "First note.",
 		},
 		{
+			name: "a Notes section followed by a level-1 heading is content",
+			body: "## Notes\n\n- old note\n\n# Appendix\n\ntext",
+			text: "First note.",
+			want: "## Notes\n\n- old note\n\n# Appendix\n\ntext\n\n---\n\n## Notes\n\n" + note + "First note.",
+		},
+		{
+			name: "a Notes section followed by a sub-heading is content",
+			body: "## Notes\n\n- old note\n\n### Sub\n\ntext",
+			text: "First note.",
+			want: "## Notes\n\n- old note\n\n### Sub\n\ntext\n\n---\n\n## Notes\n\n" + note + "First note.",
+		},
+		{
 			name: "a Notes heading inside a fenced block is content",
 			body: "Description.\n\n```markdown\n## Notes\n\n- an example\n```",
 			text: "First note.",
@@ -306,6 +318,16 @@ func TestNotesSection(t *testing.T) {
 			name:    "notes followed by another section are content",
 			body:    "Content.\n\n## Notes\n\n- a note\n\n## After\n\nmore",
 			content: "Content.\n\n## Notes\n\n- a note\n\n## After\n\nmore",
+		},
+		{
+			name:    "notes followed by a level-1 heading are content",
+			body:    "## Notes\n\n- a note\n\n# Appendix\n\nmore",
+			content: "## Notes\n\n- a note\n\n# Appendix\n\nmore",
+		},
+		{
+			name:    "notes followed by a sub-heading are content",
+			body:    "## Notes\n\n- a note\n\n### Sub\n\nmore",
+			content: "## Notes\n\n- a note\n\n### Sub\n\nmore",
 		},
 		{
 			name:    "the last of several Notes headings wins",

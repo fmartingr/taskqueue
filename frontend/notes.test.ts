@@ -30,6 +30,16 @@ describe("splitBody", () => {
     expect(splitBody(body)).toEqual({ content: body, notes: [] });
   });
 
+  test("a Notes section followed by a level-1 heading is content", () => {
+    const body = "## Notes\n\n- a note\n\n# Appendix\n\ntext";
+    expect(splitBody(body)).toEqual({ content: body, notes: [] });
+  });
+
+  test("a Notes section followed by a sub-heading is content", () => {
+    const body = "## Notes\n\n- a note\n\n### Sub\n\ntext";
+    expect(splitBody(body)).toEqual({ content: body, notes: [] });
+  });
+
   test("a Notes heading inside a fenced block is content", () => {
     const body = "Description.\n\n```markdown\n## Notes\n\n- an example\n```";
     expect(splitBody(body)).toEqual({ content: body, notes: [] });
@@ -171,6 +181,8 @@ describe("round trip", () => {
     "content that opens with an indented block": `    indented\n\n---\n\n## Notes\n\n- ${STAMP} — A note.`,
     "notes only": `## Notes\n\n- ${STAMP} — A note.`,
     "a fenced example of the notes format": "Description.\n\n```markdown\n## Notes\n\n- an example\n```",
+    "content whose Notes section is followed by a level-1 heading":
+      `## Notes\n\n- old note\n\n# Appendix\n\ntext\n\n---\n\n## Notes\n\n- ${STAMP} — A real note.`,
   };
 
   for (const [name, body] of Object.entries(bodies)) {

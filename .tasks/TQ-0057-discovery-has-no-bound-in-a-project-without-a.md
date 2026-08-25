@@ -1,13 +1,14 @@
 ---
 id: TQ-0057
 title: Discovery has no bound in a project without a repository root
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/store
+  - wontfix
 created: 2026-08-25T17:44:25+02:00
-updated: 2026-08-25T17:44:25+02:00
+updated: 2026-08-25T17:47:31+02:00
 ---
 
 ## Finding
@@ -36,3 +37,13 @@ rejected: it would undo TQ-0047, whose only remaining effect is in projects
 that are not Git repositories.
 
 Found by `/code-review` over 20b06d2; reproduced by hand.
+
+---
+
+## Notes
+
+- 2026-08-25T17:47:31+02:00 — Rejected as a scope decision, not as unreproducible: the unbounded walk is still there, verified on the current build.
+- 2026-08-25T17:47:31+02:00 — The damaging half is already gone. TQ-0056 stopped tq init writing a guide outside the tree it was invoked in, which was the only case that touched another project's committed files.
+- 2026-08-25T17:47:31+02:00 — What remains is consistent behaviour, not a defect: tq add, tq list and tq init all walk up the same way and agree on the same task directory. A queue above your project capturing it is the documented walk-up working as described.
+- 2026-08-25T17:47:31+02:00 — Option B was the fix on offer and is the reason for rejecting: treating go.mod, package.json and similar as roots is guesswork about what a project is. It would make discovery depend on which marker files happen to exist, and would surprise people whose layouts do not match the list. .git is a boundary tq can be certain about.
+- 2026-08-25T17:47:31+02:00 — Reopen if the walk is shown to reach a task directory a user did not intend in a layout that has no .git and no reasonable marker.

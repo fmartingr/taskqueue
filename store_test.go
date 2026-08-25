@@ -637,3 +637,89 @@ func TestRetireOldFile(t *testing.T) {
 		}
 	})
 }
+
+// A queue above a project must not capture it: a developer who once ran tq in
+// their home directory would otherwise have every new repository file into it.
+func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
+	outer := t.TempDir()
+	if _, err := InitStore(outer); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(outer, "project")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := DiscoverTaskDir(repo)
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("err = %v, want ErrProjectNotFound rather than the queue above the repository", err)
+	}
+	// The message has to explain itself: the queue is plainly there, one level
+	// up, so "not found" alone reads as a bug.
+	for _, want := range []string{"repository root", EnvWalkForever} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
+	outer := t.TempDir()
+	if _, err := InitStore(outer); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(outer, "project")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvWalkForever, "true")
+
+	dir, err := DiscoverTaskDir(repo)
+	if err != nil {
+		t.Fatalf("DiscoverTaskDir: %v", err)
+	}
+	if want := filepath.Join(outer, TaskDirName); dir != want {
+		t.Errorf("dir = %q, want %q", dir, want)
+	}
+}
+
+// Only "true" lifts the bound; anything else leaves the default in place.
+func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
+	outer := t.TempDir()
+	if _, err := InitStore(outer); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(outer, "project")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvWalkForever, "1")
+
+	if _, err := DiscoverTaskDir(repo); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("err = %v, want the bound to hold for a value other than \"true\"", err)
+	}
+}
+
+// The bound is the repository root, not the starting directory: a queue at the
+// root is still found from a subdirectory of the same repository.
+func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitStore(repo); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(repo, "src", "deep")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, err := DiscoverTaskDir(nested)
+	if err != nil {
+		t.Fatalf("DiscoverTaskDir: %v", err)
+	}
+	if want := filepath.Join(repo, TaskDirName); dir != want {
+		t.Errorf("dir = %q, want %q", dir, want)
+	}
+}

@@ -112,8 +112,14 @@ than silently making it ready, so a typo shows up as blocked work.
 
 `tq` finds `.tasks/` by walking up from the current directory, so agents can run
 it from any subdirectory, and creates it at the repository root when it does not
-exist yet. `TQ_DIR=/path/to/.tasks` overrides both the search and where the
-directory is created.
+exist yet. The search stops at that same repository root, so a queue in a parent
+directory — a stray `~/.tasks`, say — cannot capture a project that has none of
+its own.
+
+`TQ_DIR=/path/to/.tasks` overrides both the search and where the directory is
+created. `TQ_WALK_FOREVER=true` lifts the bound instead of replacing it, letting
+the search continue past the repository root to the filesystem root; use it when
+one queue above several repositories is what you want.
 
 ### Exit codes
 

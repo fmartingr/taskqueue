@@ -1,13 +1,13 @@
 ---
 id: TQ-0017
 title: Task directory discovery walks past the repository root
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T16:31:54+02:00
+updated: 2026-08-25T16:37:48+02:00
 ---
 
 ## Finding
@@ -76,3 +76,7 @@ Filed from a `/code-review` pass at max effort.
 - 2026-08-25T16:31:54+02:00 — Decision recorded: discovery stops at the repository root by default, with TQ_WALK_FOREVER=true to walk to the filesystem root as before. The open question in the original Suggested fix is settled; the section now describes the change rather than asking for a choice.
 - 2026-08-25T16:31:54+02:00 — Reproduced again on the current build before writing it up: a .tasks in a parent directory captured tq add from a fresh git repo underneath, filing TQ-0002 into the parent and never creating a queue in the repo.
 - 2026-08-25T16:31:54+02:00 — Raised from low to high: this blocks TQ-0047, which had to be reverted because unbounded discovery let tq init adopt a queue outside the repository (TQ-0050).
+- 2026-08-25T16:37:48+02:00 — Implemented. DiscoverTaskDir now stops at the repository root, using the repositoryRoot helper taskDirTarget already used, so finding a queue and creating one finally agree. TQ_WALK_FOREVER=true lifts the bound; any other value leaves it in place.
+- 2026-08-25T16:37:48+02:00 — Correction to this ticket's own plan: the improved not-found error is unreachable from the CLI. OpenStore is DiscoverTaskDir's only caller and it converts ErrProjectNotFound into creating a local queue, so the message never prints. It is kept and tested as the function's contract, but it is not what a user sees.
+- 2026-08-25T16:37:48+02:00 — Where the confusion actually lands is the create path: a developer with tasks above the repository suddenly gets an empty local queue. tq now prints a second stderr note there, naming the excluded directory and TQ_WALK_FOREVER. That is this ticket's intent delivered where it is visible.
+- 2026-08-25T16:37:48+02:00 — Out of scope and still open, as recorded before: the swallowed permission error on a candidate .tasks, and unresolved symlinks in the walk. Both survive inside a single repository and are untouched by the bound.

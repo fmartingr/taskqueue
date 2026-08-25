@@ -500,6 +500,9 @@ func (c *cli) store() (*Store, error) {
 	if store.Created {
 		// stderr, so --json output stays machine-readable.
 		fmt.Fprintf(c.stderr, "note: created %s\n", store.Dir)
+		if shadowed, ok := ShadowedTaskDir(c.dir); ok {
+			fmt.Fprintf(c.stderr, "note: %s is above this repository and was not used; set %s=true to search past the repository root\n", shadowed, EnvWalkForever)
+		}
 	}
 	return store, nil
 }

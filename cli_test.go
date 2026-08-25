@@ -569,3 +569,41 @@ func TestCLIEnvTaskDirOverride(t *testing.T) {
 		t.Errorf("%s override ignored, got %+v", EnvTaskDir, tasks)
 	}
 }
+
+// Creating a local queue while one sits above the repository is the moment a
+// developer's tasks appear to vanish, so that is where tq should name the
+// variable that would have found them.
+func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
+	outer := t.TempDir()
+	if _, err := InitStore(outer); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(outer, "project")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo}, t: t, stdout: stdout, stderr: stderr, root: repo}
+	tc.mustRun("list")
+
+	notice := stderr.String()
+	for _, want := range []string{filepath.Join(outer, TaskDirName), EnvWalkForever} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("stderr = %q, want it to mention %q", notice, want)
+		}
+	}
+}
+
+// With nothing above it, the notice stays a single line.
+func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
+	tc := newBareCLI(t)
+	if err := os.MkdirAll(filepath.Join(tc.root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tc.mustRun("list")
+
+	if strings.Contains(tc.stderr.String(), EnvWalkForever) {
+		t.Errorf("stderr = %q, want no mention of %s when nothing was excluded", tc.stderr, EnvWalkForever)
+	}
+}

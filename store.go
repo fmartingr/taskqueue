@@ -20,6 +20,11 @@ const TaskDirName = ".tasks"
 // automation and tests: TQ_DIR=/repo/.tasks tq list
 const EnvTaskDir = "TQ_DIR"
 
+// EnvWalkForever lifts the bound on the search: set to "true", discovery walks
+// past the repository root to the filesystem root, for a queue deliberately
+// kept above several repositories.
+const EnvWalkForever = "TQ_WALK_FOREVER"
+
 var (
 	ErrTaskNotFound    = errors.New("task not found")
 	ErrProjectNotFound = errors.New("no " + TaskDirName + " directory found")
@@ -117,6 +122,35 @@ func repositoryRoot(dir string) (string, bool) {
 	}
 }
 
+// ShadowedTaskDir reports a task directory that discovery deliberately walked
+// past — one above the enclosing repository. Creating a fresh queue while that
+// exists is when a caller's tasks appear to vanish, so the CLI names it.
+func ShadowedTaskDir(startDir string) (string, bool) {
+	if os.Getenv(EnvTaskDir) != "" || os.Getenv(EnvWalkForever) == "true" {
+		return "", false // nothing was excluded: the search was not bounded
+	}
+	abs, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", false
+	}
+	root, ok := repositoryRoot(abs)
+	if !ok {
+		return "", false
+	}
+
+	for dir := filepath.Dir(root); ; {
+		candidate := filepath.Join(dir, TaskDirName)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
 // DiscoverTaskDir returns the existing task directory to use: the TQ_DIR
 // override when set, otherwise the nearest .tasks directory at or above
 // startDir. Walking up lets an agent run tq from any subdirectory of a
@@ -144,12 +178,29 @@ func DiscoverTaskDir(startDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// The search stops at the repository root, so a queue above a project
+	// cannot capture it — creation has always stopped there (taskDirTarget),
+	// and finding one should agree.
+	stopAt := ""
+	if os.Getenv(EnvWalkForever) != "true" {
+		if root, ok := repositoryRoot(dir); ok {
+			stopAt = root
+		}
+	}
+
 	for {
 		candidate := filepath.Join(dir, TaskDirName)
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate, nil
 		}
 		parent := filepath.Dir(dir)
+		if dir == stopAt {
+			// Say where the search stopped: the queue the caller means may be
+			// one directory further up, and plainly visible to them.
+			return "", fmt.Errorf("%w (looked in %s up to the repository root %s; set %s=true to search past it)",
+				ErrProjectNotFound, startDir, stopAt, EnvWalkForever)
+		}
 		if parent == dir { // filesystem root
 			return "", fmt.Errorf("%w (looked in %s and every parent directory)", ErrProjectNotFound, startDir)
 		}

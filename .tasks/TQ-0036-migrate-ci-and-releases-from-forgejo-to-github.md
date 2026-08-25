@@ -6,14 +6,16 @@ priority: high
 labels:
   - ci
   - build
+depends_on:
+  - TQ-0037
 created: 2026-08-25T12:13:06+02:00
-updated: 2026-08-25T12:13:36+02:00
+updated: 2026-08-25T12:16:50+02:00
 ---
 
 ## Why
 
 The workflows were written for a Forgejo server and its runner. The repository
-is moving to github.com/fmartingr/task-queue, where **none of them will run**:
+is moving to github.com/fmartingr/taskqueue, where **none of them will run**:
 every job requests a runner label and a container image that only exist on that
 forge, and the release publishes through the Gitea API.
 
@@ -47,17 +49,19 @@ forge, and the release publishes through the Gitea API.
 - `goreleaser check` must pass afterwards; it needs a git remote to resolve the
   release target, which is worth remembering when running it locally.
 
-## Module path — decide
+## README: make `go install` the default installation method
 
-`go.mod` declares `module git.nakama.town/fmartingr/task-queue`. If GitHub
-becomes canonical, `go install github.com/fmartingr/task-queue@latest` only
-works when the module path matches the repository. The package is `main` with no
-internal imports, so the change is a one-line edit with no import rewrites, but
-it does touch `go.sum` regeneration, the README, and anything quoting the path.
+The Install section still leads with "Download a release binary, or build from
+source". With releases published from GitHub and the module path fixed by
+TQ-0037, the headline becomes:
 
-Recommendation: switch the module path when GitHub becomes the canonical home,
-and keep the forge as a mirror. If both hosts stay canonical, leave it and say
-so in the README, because `go install` from the GitHub path will not work.
+```bash
+go install github.com/fmartingr/taskqueue@latest
+```
+
+with the release archives and `make build` kept below it as the alternatives.
+The module path itself, and the wrong `task-queue` spelling currently in that
+line, belong to TQ-0037; this ticket owns the shape of the section.
 
 ## Worth doing during the move, not after
 
@@ -79,9 +83,12 @@ so in the README, because `go install` from the GitHub path will not work.
   `checksums.txt`, authenticated with `GITHUB_TOKEN`.
 - `goreleaser check` passes against the GitHub configuration.
 - No `git.nakama.town`, `gitea` or `FORGEJO_TOKEN` reference remains in the
-  workflows or in `.goreleaser.yml`, and the module-path decision is recorded in
-  the README either way.
+  workflows or in `.goreleaser.yml`.
+- The README's Install section leads with
+  `go install github.com/fmartingr/taskqueue@latest`, with release binaries and
+  `make build` as the alternatives below it.
 
 ## Notes
 
 - 2026-08-25T12:13:36+02:00 — The README in the working tree now advertises 'go install github.com/fmartingr/task-queue@latest', which settles the module-path question: go.mod still says git.nakama.town/fmartingr/task-queue, and that go install command fails until it matches the repository. Treat the module path rename as required work in this ticket, not an option.
+- 2026-08-25T12:16:50+02:00 — Correction to the note above: the repository is github.com/fmartingr/taskqueue, no hyphen. The path quoted there is what the README currently says, and it is wrong on both counts — TQ-0037 owns fixing it.

@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-25T11:53:19+02:00
+updated: 2026-08-25T12:02:53+02:00
 ---
 
 ## Proposal
@@ -99,3 +99,9 @@ label today means editing frontmatter by hand).
 - No config still means no restriction.
 - The board groups by prefix, colours the chips and shows display names.
 - `tq init` seeds the base set into a new config.
+
+## Notes
+
+- 2026-08-25T12:02:00+02:00 — Strict by default once a config exists, or an escape hatch such as `--allow-new-label` for quick capture? -> Allow new labels when creating tasks, those serve as reference for the human, agent and future autocomplete.
+- 2026-08-25T12:02:12+02:00 — Is a `tq label list [--json]` worth having so agents can discover the vocabulary without parsing YAML? -> Yes
+- 2026-08-25T12:02:28+02:00 — - Both themes need readable chips: check the colours against the dark palette in `style.css`, not just the light one. -> Yes

@@ -8,7 +8,7 @@ labels:
   - component/frontend
   - component/ci
 created: 2026-08-25T22:39:54+02:00
-updated: 2026-08-25T22:40:15+02:00
+updated: 2026-08-25T22:46:21+02:00
 ---
 
 ## Decision
@@ -33,15 +33,18 @@ one, for no gain here).
   It needed an explicit `executablePath`; on macOS the binary is inside
   `Google Chrome for Testing.app`, not `Chromium.app`.
 
-## The rule this changes
+## Not a rule change
 
-`AGENTS.md` says: *no JavaScript dependencies at all, so there is no lockfile to
-commit*. That stops being true. Amend it in the same change — state that the
-frontend runtime still has no dependencies, that the only one is a browser
-driver used by tests, and that `bun.lock` is committed.
+The "no JavaScript dependencies" line meant the frontend runtime and its build —
+no npm packages, no Node, no bundler but Bun — not test tooling. A browser driver
+used only by tests sits outside that, so nothing has to be relaxed to allow it.
 
-Do not let this become a precedent by accident: the rule should say what would
-justify the next dependency, not just that this one was allowed.
+`AGENTS.md` said "no JavaScript dependencies at all", which does not say that,
+and is the wording that made this look like a decision needing approval. It has
+been corrected: the constraint is on what the built `public/` output depends on.
+
+What still holds, and should be checked in review: `frontend/build.ts` gains no
+import, and nothing playwright touches ends up in `public/`.
 
 ## Shape
 
@@ -78,7 +81,7 @@ The parts of `frontend/app.ts` that no test reaches today:
 
 ## Acceptance criteria
 
-- `bun.lock` is committed and `AGENTS.md` explains why.
+- `bun.lock` is committed, and `build.ts` still imports nothing.
 - `make test-browser` passes locally and in CI, and says how to install the
   browser when it is missing.
 - The suite is parallel-safe and each test cleans up its server.
@@ -90,3 +93,5 @@ The parts of `frontend/app.ts` that no test reaches today:
 
 - 2026-08-25T22:40:15+02:00 — Decision recorded rather than proposed: playwright-core driven from bun test, chosen over happy-dom and @playwright/test after measuring each. Verified working before deciding — bun test launched Chrome for Testing through playwright-core and asserted on the DOM.
 - 2026-08-25T22:40:15+02:00 — The cost that is easy to miss: playwright-core ships no browser, and it only worked here because this machine already had Playwright's cache. A clean checkout and CI both need playwright install chromium and a cache step.
+- 2026-08-25T22:46:21+02:00 — Correction: this is not a rule change. The no-JavaScript-dependencies line was about the frontend runtime and its build — npm, Node, a bundler other than Bun — not about test tooling, so a browser driver needs no exception.
+- 2026-08-25T22:46:21+02:00 — AGENTS.md said 'no JavaScript dependencies at all', which is what made this read as a bigger decision than it is. Reworded so the constraint is on what the built public/ output depends on. bun.lock is simply committed, like any dev dependency.

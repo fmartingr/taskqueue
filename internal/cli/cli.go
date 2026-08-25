@@ -722,7 +722,9 @@ func (c *cli) runServe(args []string) int {
 		return c.fail(err)
 	}
 
-	fmt.Fprintf(c.stdout, "Serving %s on http://%s\n", st.Dir, addr)
+	// The listener's address, not the requested one: --port 0 asks the OS to
+	// pick, and the caller has no other way to learn what it picked.
+	fmt.Fprintf(c.stdout, "Serving %s on http://%s\n", st.Dir, listener.Addr())
 	if dev {
 		fmt.Fprintf(c.stdout, "DEV mode: frontend served from ./%s\n", web.DevDir)
 	}

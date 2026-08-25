@@ -57,6 +57,11 @@ serve: build
 test:
 	go test ./...
 
+## test-integration: Run the tests that drive the compiled binary
+.PHONY: test-integration
+test-integration:
+	go test -tags integration ./internal/integration/
+
 ## test-frontend: Run the frontend unit tests with Bun
 .PHONY: test-frontend
 test-frontend:

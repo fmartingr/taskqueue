@@ -27,6 +27,7 @@ internal/web/      REST API, the server, and public/ (embedded frontend)
 internal/cli/      Commands, flags, human/JSON output, exit codes
 internal/fsx/      Atomic file write, shared by the two generators
 internal/tqtest/   Test fixtures shared across packages
+internal/integration/ Tests that drive the compiled binary (build tag)
 frontend/          app.ts, notes.ts, index.html, style.css, build.ts (Bun)
 ```
 
@@ -36,6 +37,7 @@ Dependencies run one way: `task` <- `config` <- `store` <- `guide`, `web`, `cli`
 
 ```bash
 make test           # run after backend changes
+make test-integration # drives the compiled binary; slower, tagged
 make test-frontend  # Bun unit tests for the pure frontend helpers
 make frontend       # run after frontend changes (updates public/, which is committed)
 make build          # run before completing a task
@@ -84,10 +86,18 @@ make dev            # Bun watch + DEV=1 server
 
 `go test ./...` covers frontmatter parsing/rendering, the store (with
 `t.TempDir()`), dependency/ready logic, the CLI (through `runCLI`, without
-spawning a binary) and the HTTP API (through `httptest`). Frontend logic that is pure — the
-notes split/join in `frontend/notes.ts` — has `bun test` unit tests next to it
-(`make test-frontend`). There is deliberately no browser test stack; anything
-that touches the DOM is verified manually.
+spawning a binary) and the HTTP API (through `httptest`). Frontend logic that is
+pure — the notes split/join in `frontend/notes.ts` — has `bun test` unit tests
+next to it (`make test-frontend`).
+
+`make test-integration` is a separate layer behind a build tag, so `go test ./...`
+stays fast. It builds `tq` once and runs it as a process: real exit codes through
+`os.Exit`, the stdout/stderr split the `--json` contract rests on, a real
+listener, and the CLI and a running server reading each other's writes. Anything
+that only shows up in a compiled binary belongs there rather than in a unit test.
+
+There is deliberately no browser test stack; anything that touches the DOM is
+verified manually.
 
 ## Task management
 

@@ -1,0 +1,306 @@
+//go:build integration
+
+// Package integration drives the compiled tq the way a user or an agent does:
+// as a process, with real exit codes, a real stdout/stderr split and a real
+// listening server. Everything else in the suite runs inside the process and
+// cannot see any of that.
+//
+// Run with: make test-integration
+package integration
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// binary is built once for the whole run and reused by every test.
+var binary string
+
+func TestMain(m *testing.M) {
+	// The environment is neutralised here rather than per test: these are
+	// separate processes, so t.Setenv would not reach them, and a developer
+	// with TQ_DIR exported must not have the suite operate on their own queue.
+	// TQ-0021 and TQ-0023 are this mistake made in the unit tests.
+	for _, name := range []string{"TQ_DIR", "TQ_WALK_FOREVER", "TQ_HOST", "TQ_PORT", "DEV"} {
+		_ = os.Unsetenv(name)
+	}
+
+	dir, err := os.MkdirTemp("", "tq-integration-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "integration: %v\n", err)
+		os.Exit(1)
+	}
+	binary = filepath.Join(dir, "tq")
+
+	build := exec.Command("go", "build", "-o", binary, "../../cmd/tq")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "integration: building tq: %v\n", err)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// project is a directory the binary can treat as a real project: it carries the
+// marker, so discovery resolves inside it and cannot climb out into whatever
+// happens to be above the temp directory.
+type project struct {
+	dir string
+}
+
+func newProject(t *testing.T) *project {
+	t.Helper()
+	dir := t.TempDir()
+	marker := filepath.Join(dir, ".taskqueue.yaml")
+	if err := os.WriteFile(marker, []byte("version: 1\npath: .tasks\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return &project{dir: dir}
+}
+
+// path joins a path inside the project.
+func (p *project) path(elem ...string) string {
+	return filepath.Join(append([]string{p.dir}, elem...)...)
+}
+
+// result is one run of the binary. The streams stay apart, which is the whole
+// point: the --json contract is a claim about which stream carries what.
+type result struct {
+	Code   int
+	Stdout string
+	Stderr string
+}
+
+// JSON decodes stdout, and says so loudly when stdout was not JSON alone —
+// that failure is the contract this layer exists to check.
+func (r result) JSON(t *testing.T, target any) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(r.Stdout), target); err != nil {
+		t.Fatalf("stdout is not JSON on its own: %v\nstdout: %q\nstderr: %q", err, r.Stdout, r.Stderr)
+	}
+}
+
+// run executes the binary in the project and returns what a shell would see.
+func (p *project) run(t *testing.T, args ...string) result {
+	t.Helper()
+	return p.runIn(t, p.dir, nil, args...)
+}
+
+// runIn executes the binary in a chosen directory, with extra environment.
+func (p *project) runIn(t *testing.T, dir string, env []string, args ...string) result {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	code := 0
+	if err := cmd.Run(); err != nil {
+		exit := &exec.ExitError{}
+		if !errorsAs(err, &exit) {
+			t.Fatalf("running tq %s: %v", strings.Join(args, " "), err)
+		}
+		code = exit.ExitCode()
+	}
+	return result{Code: code, Stdout: stdout.String(), Stderr: stderr.String()}
+}
+
+// mustRun fails the test when the command did not succeed, and says what the
+// binary printed on both streams.
+func (p *project) mustRun(t *testing.T, args ...string) result {
+	t.Helper()
+	r := p.run(t, args...)
+	if r.Code != 0 {
+		t.Fatalf("tq %s = %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), r.Code, r.Stdout, r.Stderr)
+	}
+	return r
+}
+
+// server is a running `tq serve`, reachable at URL.
+type server struct {
+	URL    string
+	cmd    *exec.Cmd
+	stderr *syncBuffer
+}
+
+// serve starts the binary on a port the OS picks, waits until it answers, and
+// stops it when the test ends. Port 0 is what keeps these tests parallel-safe.
+func (p *project) serve(t *testing.T, env ...string) *server {
+	t.Helper()
+
+	cmd := exec.Command(binary, "serve", "--port", "0")
+	cmd.Dir = p.dir
+	cmd.Env = append(os.Environ(), env...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errOut := &syncBuffer{}
+	cmd.Stderr = errOut
+
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{cmd: cmd, stderr: errOut}
+
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	})
+
+	// The banner carries the address the listener actually got.
+	lines := bufio.NewScanner(stdout)
+	deadline := time.AfterFunc(10*time.Second, func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+	defer deadline.Stop()
+
+	for lines.Scan() {
+		line := lines.Text()
+		_, addr, found := strings.Cut(line, "http://")
+		if !found {
+			continue
+		}
+		s.URL = "http://" + strings.TrimSpace(addr)
+		break
+	}
+	if s.URL == "" {
+		t.Fatalf("serve printed no address; stderr:\n%s", errOut.String())
+	}
+
+	// Drain the rest of stdout so the process never blocks on a full pipe.
+	go func() {
+		for lines.Scan() {
+		}
+	}()
+
+	s.waitReady(t)
+	return s
+}
+
+// waitReady polls until the server answers, and reports its stderr on failure
+// rather than a bare timeout.
+func (s *server) waitReady(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(s.URL + "/api/status")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("server at %s never became ready; stderr:\n%s", s.URL, s.stderr.String())
+}
+
+// get fetches a path and decodes the JSON body.
+func (s *server) get(t *testing.T, path string, target any) {
+	t.Helper()
+	resp, err := http.Get(s.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d", path, resp.StatusCode)
+	}
+	if target != nil {
+		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// send performs a request with a JSON body and returns the status code.
+func (s *server) send(t *testing.T, method, path, body string) int {
+	t.Helper()
+	req, err := http.NewRequest(method, s.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
+
+// status fetches a path and returns only the status code.
+func (s *server) status(t *testing.T, path string) int {
+	t.Helper()
+	resp, err := http.Get(s.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
+
+// syncBuffer is a bytes.Buffer safe to read while a process writes to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// errorsAs is errors.As, kept local so the import list stays about the harness.
+func errorsAs(err error, target **exec.ExitError) bool {
+	e, ok := err.(*exec.ExitError)
+	if ok {
+		*target = e
+	}
+	return ok
+}
+
+// fetchInto reads a path's body into w.
+func fetchInto(t *testing.T, s *server, path string, w *strings.Builder) {
+	t.Helper()
+	resp, err := http.Get(s.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write(body)
+}

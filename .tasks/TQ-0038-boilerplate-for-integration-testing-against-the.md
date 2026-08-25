@@ -1,14 +1,14 @@
 ---
 id: TQ-0038
 title: Boilerplate for integration testing against the real binary
-status: todo
+status: done
 priority: normal
 labels:
   - tests
   - component/cli
   - component/ci
 created: 2026-08-25T12:25:12+02:00
-updated: 2026-08-25T18:42:55+02:00
+updated: 2026-08-25T19:58:06+02:00
 ---
 
 ## Why
@@ -122,3 +122,8 @@ with no new dependency — worth doing, also separately. This ticket stays Go.
 ## Notes
 
 - 2026-08-25T18:42:55+02:00 — The harness plants a .git marker to bound discovery. After TQ-0029 it should plant .taskqueue.yaml instead — closer to what a real project has, and independent of Git.
+- 2026-08-25T19:58:06+02:00 — Harness in internal/integration behind a build tag, so go test ./... is unchanged in scope and speed. It builds tq once in TestMain and reuses it, gives each test its own project with a .taskqueue.yaml marker as the note asked, and clears TQ_DIR, TQ_WALK_FOREVER, TQ_HOST, TQ_PORT and DEV for the whole run — per-test t.Setenv cannot reach a separate process.
+- 2026-08-25T19:58:06+02:00 — serve --port 0 works and the banner now prints listener.Addr() rather than the requested address, which is what lets the tests run in parallel without picking ports. Covered by a unit test that reads the banner and calls the address it names.
+- 2026-08-25T19:58:06+02:00 — Eight tests, all parallel: the documented session end to end, the four exit codes from the real binary, --json stdout purity with notes and errors on stderr, the CLI and a running server seeing each other's writes both ways, embedded asset serving, DEV=1 disk serving, and a shutdown that leaves no temp file behind.
+- 2026-08-25T19:58:06+02:00 — Checked they fail informatively by breaking things on purpose, as the ticket asked. Routing the creation note to stdout under --json fails with the stdout that was not JSON printed in full; returning the wrong exit code for an unknown task fails with 'tq show TQ-9999 = 1, want 2'.
+- 2026-08-25T19:58:06+02:00 — make test-integration and a CI job added. One assumption of mine was wrong and the test was corrected rather than the code: the guide is written by tq init, not by tq add, so a queue created by add holds only task files.

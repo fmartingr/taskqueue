@@ -17,6 +17,9 @@ import (
 	"github.com/fmartingr/taskqueue/internal/tqtest"
 
 	"github.com/fmartingr/taskqueue/internal/guide"
+	"net/http"
+	"syscall"
+	"time"
 )
 
 // testVersion stands in for the string the build stamps on the binary.
@@ -972,5 +975,50 @@ func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 	}
 	if !strings.Contains(out, "@"+config.TaskDirName+"/"+guide.AgentsFileName) {
 		t.Errorf("the second init should still print the line to add, got %q", out)
+	}
+}
+
+// --port 0 asks the OS for a free port, which is how anything driving the real
+// binary avoids racing for one. The banner has to say which port it got, or the
+// caller has no way to find out.
+func TestCLIServePrintsTheAddressItActuallyGot(t *testing.T) {
+	tc := newTestCLI(t)
+
+	done := make(chan int, 1)
+	go func() { done <- tc.run("serve", "--port", "0") }()
+
+	var line string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s := tc.stdout.String(); strings.Contains(s, "http://") {
+			line = strings.SplitN(s, "\n", 2)[0]
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if line == "" {
+		t.Fatalf("no banner within the deadline; stderr = %q", tc.stderr)
+	}
+	if strings.Contains(line, ":0") {
+		t.Errorf("banner = %q, want the port the listener got, not the one requested", line)
+	}
+
+	_, addr, found := strings.Cut(line, "http://")
+	if !found {
+		t.Fatalf("banner = %q, want an address", line)
+	}
+	resp, err := http.Get("http://" + strings.TrimSpace(addr) + "/api/status")
+	if err != nil {
+		t.Fatalf("the printed address should be reachable: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if p, err := os.FindProcess(os.Getpid()); err == nil {
+		_ = p.Signal(syscall.SIGTERM)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not shut down")
 	}
 }

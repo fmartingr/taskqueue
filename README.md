@@ -1,8 +1,12 @@
 # tq — task queue
 
+<div align="center"><img src="assets/icon.png" width="128"/></div>
+
 A local-first task queue for agentic software development.
 
 > Markdown on disk, CLI for agents, Kanban for humans.
+
+## Summary
 
 Every task is a Markdown file with YAML frontmatter inside a `.tasks/` directory
 in your repository. The filesystem is the database: no SQL, no service, no
@@ -43,9 +47,23 @@ tq serve                                       # board on http://127.0.0.1:7331
 
 There is no setup step: the first command that needs `.tasks/` creates it (at
 the root of the enclosing Git repository, so running `tq` from a subdirectory
-does not scatter task directories around the tree) and says so on stderr. `tq
-init` still exists if you would rather create it up front, and is harmless to
-run twice.
+does not scatter task directories around the tree) and says so on stderr.
+
+`tq init` is still worth running once, and is harmless to repeat: besides
+creating the directory it writes `.tasks/AGENTS.md` — a short CLI cheat sheet
+for coding agents, generated from the statuses, priorities and exit codes the
+binary actually implements — and adds a pointer to it from the repository's
+`AGENTS.md`/`CLAUDE.md`:
+
+```md
+## Task management
+
+See [AGENTS.md](.tasks/AGENTS.md)
+```
+
+Existing files are only appended to, an existing pointer is refreshed when the
+task directory moves, and nothing is rewritten when it is already correct. If
+the repository has neither file, `AGENTS.md` is created.
 
 Commit `.tasks/` with your code — task history lives in the same repository as
 the work it describes.
@@ -58,8 +76,14 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
 
 - Four columns: `backlog`, `todo`, `in-progress`, `done`.
 - Drag a card between columns to change its status.
+- "+ Add a card" at the bottom of a column files a task straight into it:
+  type a title and press Enter (the composer stays open for the next one) or
+  click away. An empty card is discarded; Escape cancels.
 - Click a card to edit title, status, priority, assignee, labels, dependencies
-  and the Markdown body, or to append a note.
+  and the Markdown body.
+- Notes are not part of the body editor: they get their own list in the dialog,
+  each with a pencil to correct it, and cards show a 💬 count. They are still
+  stored as the `## Notes` section of the Markdown file that `tq note` writes.
 - "New task" creates a task; the filter bar narrows the board by status,
   priority, assignee, label, or "ready only".
 - Cards show a blocked marker while a dependency is unfinished or missing.
@@ -100,8 +124,9 @@ directory is created.
 ## CLI reference
 
 ```text
-tq init                            Create the .tasks/ directory (optional: every
-                                   command creates it on demand)
+tq init                            Create .tasks/ and refresh the agent
+                                   instructions (optional: every command
+                                   creates the directory on demand)
 tq add <title> [flags]             --priority --assignee --label --depends-on --body --status --json
 tq list [flags]                    --status --priority --label --assignee --json
 tq show <id> [--json]              Frontmatter fields followed by the Markdown body

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -72,8 +73,9 @@ Usage:
   tq <command> [arguments]
 
 Commands:
-  init                            Create the %s directory (every command creates
-                                  it on demand, so this is optional)
+  init                            Create the %s directory and refresh the agent
+                                  instructions (%s and the pointer to it from
+                                  AGENTS.md/CLAUDE.md)
   add <title> [flags]             Create a task
   list [flags]                    List tasks
   show <id> [--json]              Show one task
@@ -107,7 +109,7 @@ Exit codes:
 
 func (c *cli) usage(w io.Writer) {
 	fmt.Fprintf(w, usageText,
-		TaskDirName,
+		TaskDirName, filepath.Join(TaskDirName, AgentsFileName),
 		strings.Join(Statuses, ", "),
 		strings.Join(Priorities, ", "), PriorityNormal,
 		EnvTaskDir, TaskDirName,
@@ -127,14 +129,29 @@ func (c *cli) runInit(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
+
+	// Keep the agent instructions current: the guide inside the task directory
+	// and the pointer to it from the repository's own AGENTS.md/CLAUDE.md.
+	written, err := SyncAgentsDocs(store, c.dir)
+	if err != nil {
+		return c.fail(err)
+	}
+
 	if *jsonOut {
-		return c.printJSON(map[string]any{"task_dir": store.Dir, "created": store.Created})
+		return c.printJSON(map[string]any{
+			"task_dir": store.Dir,
+			"created":  store.Created,
+			"written":  written,
+		})
 	}
-	if !store.Created {
+	if store.Created {
+		fmt.Fprintf(c.stdout, "Initialized task queue in %s\n", store.Dir)
+	} else {
 		fmt.Fprintf(c.stdout, "Task queue already initialized in %s\n", store.Dir)
-		return exitOK
 	}
-	fmt.Fprintf(c.stdout, "Initialized task queue in %s\n", store.Dir)
+	for _, path := range written {
+		fmt.Fprintf(c.stdout, "Wrote %s\n", path)
+	}
 	return exitOK
 }
 

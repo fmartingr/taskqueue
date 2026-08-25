@@ -4,10 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>tq — task queue</title>
-    <link
-      rel="icon"
-      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232f6feb'/><text x='16' y='23' font-family='monospace' font-size='19' font-weight='bold' fill='white' text-anchor='middle'>tq</text></svg>"
-    />
+    <link rel="icon" type="image/png" href="/icon-industrial.png" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -110,13 +107,17 @@
 
         <label>
           Body (Markdown)
-          <textarea id="task-body" name="body" rows="12" spellcheck="false"></textarea>
+          <textarea id="task-body" name="body" rows="10" spellcheck="false"></textarea>
         </label>
 
-        <div class="note-row">
-          <input id="task-note" type="text" placeholder="Append a timestamped note…" autocomplete="off" />
-          <button type="button" id="task-note-add" class="ghost">Add note</button>
-        </div>
+        <section class="notes-section">
+          <h3 class="notes-title">Notes</h3>
+          <ul id="task-notes" class="notes"></ul>
+          <div class="note-row">
+            <input id="task-note" type="text" placeholder="Append a timestamped note…" autocomplete="off" />
+            <button type="button" id="task-note-add" class="ghost">Add note</button>
+          </div>
+        </section>
 
         <footer class="dialog-footer">
           <span class="timestamps" id="task-timestamps"></span>

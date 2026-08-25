@@ -59,6 +59,11 @@ const state = {
   lastPayload: "",
   dragging: null as string | null,
   openTaskID: null as string | null,
+  /** Body of the open task, split so notes can be edited on their own. */
+  openBody: { content: "", notes: [] as Note[], trailing: "" } as SplitBody,
+  /** Column whose inline "add a card" composer is open, with its draft text. */
+  composing: null as Status | null,
+  draft: "",
   taskDir: "",
   version: "",
 };
@@ -107,6 +112,83 @@ const fetchTasks = () => api<Task[]>("/api/tasks");
 const createTask = (input: TaskInput) => api<Task>("/api/tasks", "POST", input);
 const patchTask = (id: string, patch: Partial<TaskInput>) => api<Task>(`/api/tasks/${id}`, "PATCH", patch);
 const addNote = (id: string, text: string) => api<Task>(`/api/tasks/${id}/notes`, "POST", { text });
+
+// ── Notes ───────────────────────────────────────────────────────
+//
+// Notes live in the Markdown body under a "## Notes" heading, exactly as the
+// CLI writes them — the file stays the source of truth. The board splits them
+// out for display and puts them back together on save.
+
+const NOTES_HEADING = "## Notes";
+const NOTE_PATTERN = /^-\s+(\S+)\s+—\s+([\s\S]*)$/;
+
+interface Note {
+  /** RFC 3339 timestamp, or "" for a bullet tq did not write. */
+  timestamp: string;
+  text: string;
+}
+
+interface SplitBody {
+  content: string;
+  notes: Note[];
+  /** Anything after the notes section, kept so nothing is lost on save. */
+  trailing: string;
+}
+
+function splitBody(body: string): SplitBody {
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => line.trim() === NOTES_HEADING);
+  if (start === -1) {
+    return { content: body.trim(), notes: [], trailing: "" };
+  }
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].trim().startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+
+  const notes: Note[] = [];
+  for (const line of lines.slice(start + 1, end)) {
+    const note = parseNote(line);
+    if (note) notes.push(note);
+  }
+  return {
+    content: lines.slice(0, start).join("\n").trim(),
+    notes,
+    trailing: lines.slice(end).join("\n").trim(),
+  };
+}
+
+function parseNote(line: string): Note | null {
+  const trimmed = line.trim();
+  if (trimmed === "") return null;
+
+  const match = NOTE_PATTERN.exec(trimmed);
+  if (match && !Number.isNaN(new Date(match[1]).getTime())) {
+    return { timestamp: match[1], text: match[2] };
+  }
+  // A hand-written bullet: keep it, just without a timestamp.
+  return { timestamp: "", text: trimmed.replace(/^[-*]\s+/, "") };
+}
+
+function joinBody(body: SplitBody): string {
+  const sections = [body.content.trim()];
+  if (body.notes.length > 0) {
+    sections.push([NOTES_HEADING, "", ...body.notes.map(formatNote)].join("\n"));
+  }
+  if (body.trailing.trim() !== "") {
+    sections.push(body.trailing.trim());
+  }
+  return sections.filter((section) => section !== "").join("\n\n");
+}
+
+function formatNote(note: Note): string {
+  const text = note.text.replace(/\s+/g, " ").trim();
+  return note.timestamp === "" ? `- ${text}` : `- ${note.timestamp} — ${text}`;
+}
 
 // ── Dependencies ────────────────────────────────────────────────
 
@@ -185,6 +267,7 @@ function renderColumn(status: Status, tasks: Task[], index: Map<string, Task>): 
   const list = element("div", "column-tasks");
   list.append(...tasks.map((task) => renderCard(task, index)));
   column.append(list);
+  column.append(renderComposer(status));
 
   // Native drag and drop: the column is the drop target for its status.
   column.addEventListener("dragover", (event) => {
@@ -208,6 +291,102 @@ function renderColumn(status: Status, tasks: Task[], index: Map<string, Task>): 
   return column;
 }
 
+/**
+ * The composer is either a "+ Add a card" button or, once opened, a card-shaped
+ * textarea. Enter or losing focus files the card; an empty one is discarded.
+ */
+function renderComposer(status: Status): HTMLElement {
+  if (state.composing !== status) {
+    const open = element("button", "composer-open", "+ Add a card");
+    open.type = "button";
+    open.addEventListener("click", () => {
+      state.composing = status;
+      state.draft = "";
+      render();
+    });
+    return open;
+  }
+
+  const form = element("div", "composer");
+  const input = element("textarea", "composer-input");
+  input.rows = 2;
+  input.placeholder = "Title";
+  input.value = state.draft;
+  form.append(input);
+
+  // One-way latch: this node files at most one card, so the blur that follows
+  // Enter (and the blur some browsers fire when the node is replaced) is a
+  // no-op. Every re-render builds a fresh composer with a fresh latch.
+  let settled = false;
+  const close = () => {
+    state.composing = null;
+    state.draft = "";
+    render();
+  };
+  const submit = (keepOpen: boolean) => {
+    if (settled) return;
+    settled = true;
+
+    const title = input.value.trim();
+    if (title === "") {
+      close();
+      return;
+    }
+
+    input.value = ""; // immediate feedback while the request is in flight
+    state.draft = "";
+    if (!keepOpen) {
+      state.composing = null;
+    }
+    void quickAdd(title, status, keepOpen);
+  };
+
+  input.addEventListener("input", () => {
+    state.draft = input.value;
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      settled = true;
+      close();
+    }
+  });
+  input.addEventListener("blur", () => submit(false));
+
+  // Focus after the browser has the node, restoring the caret while typing.
+  queueMicrotask(() => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+  return form;
+}
+
+async function quickAdd(title: string, status: Status, keepOpen: boolean): Promise<void> {
+  try {
+    await createTask({ title, status });
+    await refresh();
+    if (keepOpen) {
+      // refresh() re-rendered the board: put the cursor back in the composer.
+      focusComposer();
+    }
+  } catch (error) {
+    toast(`Could not create the task: ${describe(error)}`);
+    // Hand the text back rather than losing what was typed.
+    state.composing = status;
+    state.draft = title;
+    render();
+    focusComposer();
+  }
+}
+
+function focusComposer(): void {
+  const input = document.querySelector<HTMLTextAreaElement>(".composer-input");
+  input?.focus();
+}
+
 function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
   const card = element("article", "card");
   card.draggable = true;
@@ -224,6 +403,9 @@ function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
   const meta = element("div", "card-meta");
   if (task.assignee) meta.append(element("span", "assignee", task.assignee));
   for (const label of task.labels ?? []) meta.append(element("span", "label", label));
+
+  const noteCount = splitBody(task.body ?? "").notes.length;
+  if (noteCount > 0) meta.append(noteBadge(noteCount));
   if (meta.childElementCount > 0) card.append(meta);
 
   const pending = pendingDependencies(task, index);
@@ -251,6 +433,19 @@ function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
   });
 
   return card;
+}
+
+const SPEECH_BUBBLE =
+  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' +
+  '<path fill="currentColor" d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H6.6L3.7 13.7A.5.5 0 0 1 3 13.3V11h-.5A1.5 1.5 0 0 1 1 9.5v-6z"/>' +
+  "</svg>";
+
+function noteBadge(count: number): HTMLElement {
+  const badge = element("span", "note-badge");
+  badge.title = count === 1 ? "1 note" : `${count} notes`;
+  badge.innerHTML = SPEECH_BUBBLE; // a constant, no task data involved
+  badge.append(String(count));
+  return badge;
 }
 
 // ── Toasts ──────────────────────────────────────────────────────
@@ -319,8 +514,10 @@ function openTask(id: string): void {
   byId<HTMLInputElement>("task-assignee").value = task.assignee ?? "";
   byId<HTMLInputElement>("task-labels").value = (task.labels ?? []).join(", ");
   byId<HTMLInputElement>("task-depends-on").value = (task.depends_on ?? []).join(", ");
-  byId<HTMLTextAreaElement>("task-body").value = task.body ?? "";
+  state.openBody = splitBody(task.body ?? "");
+  byId<HTMLTextAreaElement>("task-body").value = state.openBody.content;
   byId<HTMLInputElement>("task-note").value = "";
+  renderNotes();
   byId<HTMLElement>("task-timestamps").textContent =
     `created ${formatTime(task.created)} · updated ${formatTime(task.updated)}`;
 
@@ -330,6 +527,75 @@ function openTask(id: string): void {
   blocked.hidden = pending.length === 0;
 
   taskDialog.showModal();
+}
+
+/** Renders the notes panel from state.openBody. */
+function renderNotes(): void {
+  const list = byId<HTMLUListElement>("task-notes");
+  if (state.openBody.notes.length === 0) {
+    const empty = element("li", "notes-empty", "No notes yet.");
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...state.openBody.notes.map(renderNote));
+}
+
+function renderNote(note: Note, position: number): HTMLElement {
+  const item = element("li", "note");
+
+  const head = element("div", "note-head");
+  head.append(element("time", "note-time", note.timestamp === "" ? "note" : formatTime(note.timestamp)));
+
+  const edit = element("button", "ghost icon", "✎");
+  edit.type = "button";
+  edit.title = "Edit this note";
+  edit.setAttribute("aria-label", "Edit this note");
+  head.append(edit);
+  item.append(head);
+
+  const text = element("p", "note-text", note.text);
+  item.append(text);
+
+  edit.addEventListener("click", () => startEditingNote(item, text, position));
+  return item;
+}
+
+/**
+ * Turns a note into a textarea in place. Enter or losing focus keeps the edit,
+ * Escape drops it; either way the change is written with the dialog's Save,
+ * like every other field.
+ */
+function startEditingNote(item: HTMLElement, text: HTMLElement, position: number): void {
+  const editor = element("textarea", "note-editor");
+  editor.value = state.openBody.notes[position]?.text ?? "";
+  editor.rows = 2;
+  item.replaceChild(editor, text);
+  editor.focus();
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+
+  let settled = false;
+  const finish = (keep: boolean) => {
+    if (settled) return;
+    settled = true;
+
+    const note = state.openBody.notes[position];
+    if (keep && note) {
+      const edited = editor.value.trim();
+      if (edited !== "") note.text = edited;
+    }
+    renderNotes();
+  };
+
+  editor.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  editor.addEventListener("blur", () => finish(true));
 }
 
 function formatTime(value: string): string {
@@ -346,7 +612,10 @@ function patchFromDialog(id: string): Promise<Task> {
     assignee: byId<HTMLInputElement>("task-assignee").value,
     labels: splitList(byId<HTMLInputElement>("task-labels").value),
     depends_on: splitList(byId<HTMLInputElement>("task-depends-on").value),
-    body: byId<HTMLTextAreaElement>("task-body").value,
+    body: joinBody({
+      ...state.openBody,
+      content: byId<HTMLTextAreaElement>("task-body").value,
+    }),
   });
 }
 
@@ -376,7 +645,9 @@ async function addNoteToOpenTask(): Promise<void> {
     await patchFromDialog(id);
     const task = await addNote(id, text);
     input.value = "";
-    byId<HTMLTextAreaElement>("task-body").value = task.body;
+    state.openBody = splitBody(task.body ?? "");
+    byId<HTMLTextAreaElement>("task-body").value = state.openBody.content;
+    renderNotes();
     await refresh();
     toast(`Note added to ${id}`, "info");
   } catch (error) {
@@ -491,7 +762,7 @@ async function start(): Promise<void> {
   // Poll so CLI changes show up. Skip while dragging or editing so the board
   // never moves under the user's hands.
   setInterval(() => {
-    if (state.dragging || taskDialog.open || createDialog.open) return;
+    if (state.dragging || state.composing || taskDialog.open || createDialog.open) return;
     void refreshQuietly();
   }, POLL_INTERVAL_MS);
 }

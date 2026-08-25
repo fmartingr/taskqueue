@@ -7,6 +7,9 @@ var state = {
   lastPayload: "",
   dragging: null,
   openTaskID: null,
+  openBody: { content: "", notes: [], trailing: "" },
+  composing: null,
+  draft: "",
   taskDir: "",
   version: ""
 };
@@ -45,6 +48,63 @@ var fetchTasks = () => api("/api/tasks");
 var createTask = (input) => api("/api/tasks", "POST", input);
 var patchTask = (id, patch) => api(`/api/tasks/${id}`, "PATCH", patch);
 var addNote = (id, text) => api(`/api/tasks/${id}/notes`, "POST", { text });
+var NOTES_HEADING = "## Notes";
+var NOTE_PATTERN = /^-\s+(\S+)\s+—\s+([\s\S]*)$/;
+function splitBody(body) {
+  const lines = body.split(`
+`);
+  const start = lines.findIndex((line) => line.trim() === NOTES_HEADING);
+  if (start === -1) {
+    return { content: body.trim(), notes: [], trailing: "" };
+  }
+  let end = lines.length;
+  for (let i = start + 1;i < lines.length; i++) {
+    if (lines[i].trim().startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+  const notes = [];
+  for (const line of lines.slice(start + 1, end)) {
+    const note = parseNote(line);
+    if (note)
+      notes.push(note);
+  }
+  return {
+    content: lines.slice(0, start).join(`
+`).trim(),
+    notes,
+    trailing: lines.slice(end).join(`
+`).trim()
+  };
+}
+function parseNote(line) {
+  const trimmed = line.trim();
+  if (trimmed === "")
+    return null;
+  const match = NOTE_PATTERN.exec(trimmed);
+  if (match && !Number.isNaN(new Date(match[1]).getTime())) {
+    return { timestamp: match[1], text: match[2] };
+  }
+  return { timestamp: "", text: trimmed.replace(/^[-*]\s+/, "") };
+}
+function joinBody(body) {
+  const sections = [body.content.trim()];
+  if (body.notes.length > 0) {
+    sections.push([NOTES_HEADING, "", ...body.notes.map(formatNote)].join(`
+`));
+  }
+  if (body.trailing.trim() !== "") {
+    sections.push(body.trailing.trim());
+  }
+  return sections.filter((section) => section !== "").join(`
+
+`);
+}
+function formatNote(note) {
+  const text = note.text.replace(/\s+/g, " ").trim();
+  return note.timestamp === "" ? `- ${text}` : `- ${note.timestamp} — ${text}`;
+}
 function indexTasks(tasks) {
   return new Map(tasks.map((task) => [task.id, task]));
 }
@@ -100,6 +160,7 @@ function renderColumn(status, tasks, index) {
   const list = element("div", "column-tasks");
   list.append(...tasks.map((task) => renderCard(task, index)));
   column.append(list);
+  column.append(renderComposer(status));
   column.addEventListener("dragover", (event) => {
     event.preventDefault();
     column.classList.add("drop-target");
@@ -119,6 +180,84 @@ function renderColumn(status, tasks, index) {
   });
   return column;
 }
+function renderComposer(status) {
+  if (state.composing !== status) {
+    const open = element("button", "composer-open", "+ Add a card");
+    open.type = "button";
+    open.addEventListener("click", () => {
+      state.composing = status;
+      state.draft = "";
+      render();
+    });
+    return open;
+  }
+  const form = element("div", "composer");
+  const input = element("textarea", "composer-input");
+  input.rows = 2;
+  input.placeholder = "Title";
+  input.value = state.draft;
+  form.append(input);
+  let settled = false;
+  const close = () => {
+    state.composing = null;
+    state.draft = "";
+    render();
+  };
+  const submit = (keepOpen) => {
+    if (settled)
+      return;
+    settled = true;
+    const title = input.value.trim();
+    if (title === "") {
+      close();
+      return;
+    }
+    input.value = "";
+    state.draft = "";
+    if (!keepOpen) {
+      state.composing = null;
+    }
+    quickAdd(title, status, keepOpen);
+  };
+  input.addEventListener("input", () => {
+    state.draft = input.value;
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      settled = true;
+      close();
+    }
+  });
+  input.addEventListener("blur", () => submit(false));
+  queueMicrotask(() => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+  return form;
+}
+async function quickAdd(title, status, keepOpen) {
+  try {
+    await createTask({ title, status });
+    await refresh();
+    if (keepOpen) {
+      focusComposer();
+    }
+  } catch (error) {
+    toast(`Could not create the task: ${describe(error)}`);
+    state.composing = status;
+    state.draft = title;
+    render();
+    focusComposer();
+  }
+}
+function focusComposer() {
+  const input = document.querySelector(".composer-input");
+  input?.focus();
+}
 function renderCard(task, index) {
   const card = element("article", "card");
   card.draggable = true;
@@ -132,6 +271,9 @@ function renderCard(task, index) {
     meta.append(element("span", "assignee", task.assignee));
   for (const label of task.labels ?? [])
     meta.append(element("span", "label", label));
+  const noteCount = splitBody(task.body ?? "").notes.length;
+  if (noteCount > 0)
+    meta.append(noteBadge(noteCount));
   if (meta.childElementCount > 0)
     card.append(meta);
   const pending = pendingDependencies(task, index);
@@ -158,6 +300,14 @@ function renderCard(task, index) {
     }
   });
   return card;
+}
+var SPEECH_BUBBLE = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' + '<path fill="currentColor" d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H6.6L3.7 13.7A.5.5 0 0 1 3 13.3V11h-.5A1.5 1.5 0 0 1 1 9.5v-6z"/>' + "</svg>";
+function noteBadge(count) {
+  const badge = element("span", "note-badge");
+  badge.title = count === 1 ? "1 note" : `${count} notes`;
+  badge.innerHTML = SPEECH_BUBBLE;
+  badge.append(String(count));
+  return badge;
 }
 function toast(message, kind = "error") {
   const node = element("div", `toast ${kind}`, message);
@@ -210,14 +360,71 @@ function openTask(id) {
   byId("task-assignee").value = task.assignee ?? "";
   byId("task-labels").value = (task.labels ?? []).join(", ");
   byId("task-depends-on").value = (task.depends_on ?? []).join(", ");
-  byId("task-body").value = task.body ?? "";
+  state.openBody = splitBody(task.body ?? "");
+  byId("task-body").value = state.openBody.content;
   byId("task-note").value = "";
+  renderNotes();
   byId("task-timestamps").textContent = `created ${formatTime(task.created)} · updated ${formatTime(task.updated)}`;
   const pending = pendingDependencies(task, indexTasks(state.tasks));
   const blocked = byId("task-blocked");
   blocked.textContent = pending.length > 0 ? `Blocked by ${pending.join(", ")}` : "";
   blocked.hidden = pending.length === 0;
   taskDialog.showModal();
+}
+function renderNotes() {
+  const list = byId("task-notes");
+  if (state.openBody.notes.length === 0) {
+    const empty = element("li", "notes-empty", "No notes yet.");
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...state.openBody.notes.map(renderNote));
+}
+function renderNote(note, position) {
+  const item = element("li", "note");
+  const head = element("div", "note-head");
+  head.append(element("time", "note-time", note.timestamp === "" ? "note" : formatTime(note.timestamp)));
+  const edit = element("button", "ghost icon", "✎");
+  edit.type = "button";
+  edit.title = "Edit this note";
+  edit.setAttribute("aria-label", "Edit this note");
+  head.append(edit);
+  item.append(head);
+  const text = element("p", "note-text", note.text);
+  item.append(text);
+  edit.addEventListener("click", () => startEditingNote(item, text, position));
+  return item;
+}
+function startEditingNote(item, text, position) {
+  const editor = element("textarea", "note-editor");
+  editor.value = state.openBody.notes[position]?.text ?? "";
+  editor.rows = 2;
+  item.replaceChild(editor, text);
+  editor.focus();
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  let settled = false;
+  const finish = (keep) => {
+    if (settled)
+      return;
+    settled = true;
+    const note = state.openBody.notes[position];
+    if (keep && note) {
+      const edited = editor.value.trim();
+      if (edited !== "")
+        note.text = edited;
+    }
+    renderNotes();
+  };
+  editor.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  editor.addEventListener("blur", () => finish(true));
 }
 function formatTime(value) {
   const date = new Date(value);
@@ -231,7 +438,10 @@ function patchFromDialog(id) {
     assignee: byId("task-assignee").value,
     labels: splitList(byId("task-labels").value),
     depends_on: splitList(byId("task-depends-on").value),
-    body: byId("task-body").value
+    body: joinBody({
+      ...state.openBody,
+      content: byId("task-body").value
+    })
   });
 }
 async function saveOpenTask() {
@@ -257,7 +467,9 @@ async function addNoteToOpenTask() {
     await patchFromDialog(id);
     const task = await addNote(id, text);
     input.value = "";
-    byId("task-body").value = task.body;
+    state.openBody = splitBody(task.body ?? "");
+    byId("task-body").value = state.openBody.content;
+    renderNotes();
     await refresh();
     toast(`Note added to ${id}`, "info");
   } catch (error) {
@@ -354,7 +566,7 @@ async function start() {
     toast(`Could not load tasks: ${describe(error)}`);
   }
   setInterval(() => {
-    if (state.dragging || taskDialog.open || createDialog.open)
+    if (state.dragging || state.composing || taskDialog.open || createDialog.open)
       return;
     refreshQuietly();
   }, POLL_INTERVAL_MS);

@@ -339,12 +339,18 @@ func TestCLIUpdateRenamesTheFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "TQ-0001-a-better-title.md")); err != nil {
 		t.Errorf("the file should follow the new title: %v", err)
 	}
+	var taskFiles []string
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Errorf("directory contains %d files, want 1 (the old name should be gone)", len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "TQ-") {
+			taskFiles = append(taskFiles, entry.Name())
+		}
+	}
+	if len(taskFiles) != 1 {
+		t.Errorf("directory contains %v, want only the renamed file", taskFiles)
 	}
 
 	// The ID still addresses the task after the rename.

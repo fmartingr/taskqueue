@@ -213,6 +213,42 @@ button.ghost {
   min-height: 40px;
 }
 
+/* ── Quick add ───────────────────────────────────────────────── */
+
+.composer-open {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.composer-open:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.composer {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+
+.composer-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  resize: none;
+  font-weight: 600;
+}
+
+.composer-input:focus-visible {
+  outline: none;
+}
+
 /* ── Cards ───────────────────────────────────────────────────── */
 
 .card {
@@ -365,6 +401,94 @@ button.ghost {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 13px;
   resize: vertical;
+}
+
+/* ── Notes ───────────────────────────────────────────────────── */
+
+.note-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.notes-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.notes-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.notes-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.note {
+  background: var(--surface-alt);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-time {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+.note-text {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.note-editor {
+  width: 100%;
+  margin-top: 4px;
+  resize: vertical;
+}
+
+button.icon {
+  padding: 0 6px;
+  border-color: transparent;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+button.icon:hover {
+  color: var(--text);
+  border-color: var(--border);
 }
 
 .note-row {

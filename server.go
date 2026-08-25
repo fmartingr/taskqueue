@@ -20,6 +20,8 @@ import (
 	"github.com/fmartingr/taskqueue/internal/task"
 
 	"github.com/fmartingr/taskqueue/internal/config"
+
+	"github.com/fmartingr/taskqueue/internal/store"
 )
 
 const (
@@ -30,13 +32,13 @@ const (
 // server exposes the same store the CLI uses. Every request reads from disk, so
 // tasks created or edited by an agent show up without any synchronization.
 type server struct {
-	store *Store
+	st *store.Store
 }
 
 // newAPIRouter registers the REST API only. The frontend is added separately by
 // newRouter so tests can exercise the API without the embedded assets.
-func newAPIRouter(store *Store) *http.ServeMux {
-	s := &server{store: store}
+func newAPIRouter(st *store.Store) *http.ServeMux {
+	s := &server{st: st}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/tasks", s.handleListTasks)
@@ -58,8 +60,8 @@ func newAPIRouter(store *Store) *http.ServeMux {
 }
 
 // newRouter is the full handler: REST API plus the Kanban frontend.
-func newRouter(store *Store, dev bool) (http.Handler, error) {
-	mux := newAPIRouter(store)
+func newRouter(st *store.Store, dev bool) (http.Handler, error) {
+	mux := newAPIRouter(st)
 	frontend, err := frontendHandler(dev)
 	if err != nil {
 		return nil, err
@@ -109,7 +111,7 @@ func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, err := s.store.List()
+	tasks, err := s.st.List()
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -131,7 +133,7 @@ func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := s.store.Create(CreateTaskInput{
+	t, err := s.st.Create(store.CreateTaskInput{
 		Title:     in.Title,
 		Status:    in.Status,
 		Priority:  in.Priority,
@@ -150,7 +152,7 @@ func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetTask(w http.ResponseWriter, r *http.Request) {
-	t, err := s.store.Get(r.PathValue("id"))
+	t, err := s.st.Get(r.PathValue("id"))
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -168,7 +170,7 @@ func (s *server) handlePatchTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := s.store.Patch(r.PathValue("id"), patch)
+	t, err := s.st.Patch(r.PathValue("id"), patch)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -189,7 +191,7 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := s.store.Note(r.PathValue("id"), text)
+	t, err := s.st.Note(r.PathValue("id"), text)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -201,7 +203,7 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 // effective values are returned whether or not a config file exists, so the
 // board never has to know the defaults; file is empty when there is none.
 func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
-	cfg, err := config.FindConfig(s.store.Dir)
+	cfg, err := config.FindConfig(s.st.Dir)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -209,7 +211,7 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 	out := map[string]any{
 		"version":  config.ConfigVersion,
 		"path":     config.TaskDirName,
-		"task_dir": s.store.Dir,
+		"task_dir": s.st.Dir,
 		"file":     "",
 	}
 	if cfg != nil {
@@ -221,7 +223,7 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	tasks, err := s.store.List()
+	tasks, err := s.st.List()
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -229,7 +231,7 @@ func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
 		"task_count": len(tasks),
-		"task_dir":   s.store.Dir,
+		"task_dir":   s.st.Dir,
 		"version":    version,
 	})
 }
@@ -260,11 +262,11 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	var linkErr *os.LinkError
 
 	switch {
-	case errors.Is(err, ErrTaskNotFound):
+	case errors.Is(err, store.ErrTaskNotFound):
 		writeError(w, http.StatusNotFound, "task_not_found", err.Error())
 	case errors.Is(err, task.ErrInvalidTaskFile):
 		writeError(w, http.StatusInternalServerError, "invalid_task_file", err.Error())
-	case errors.Is(err, ErrProjectNotFound),
+	case errors.Is(err, store.ErrProjectNotFound),
 		errors.As(err, &pathErr), errors.As(err, &linkErr),
 		errors.Is(err, os.ErrNotExist), errors.Is(err, os.ErrPermission):
 		// A full disk or a read-only task directory is our problem, not the
@@ -297,13 +299,13 @@ func (c *cli) runServe(args []string) int {
 		return code
 	}
 
-	store, err := c.store()
+	st, err := c.st()
 	if err != nil {
 		return c.fail(err)
 	}
 
 	dev := os.Getenv("DEV") != ""
-	handler, err := newRouter(store, dev)
+	handler, err := newRouter(st, dev)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -320,7 +322,7 @@ func (c *cli) runServe(args []string) int {
 		return c.fail(err)
 	}
 
-	fmt.Fprintf(c.stdout, "Serving %s on http://%s\n", store.Dir, addr)
+	fmt.Fprintf(c.stdout, "Serving %s on http://%s\n", st.Dir, addr)
 	if dev {
 		fmt.Fprintf(c.stdout, "DEV mode: frontend served from ./%s\n", publicDirName)
 	}

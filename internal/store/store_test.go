@@ -1,4 +1,4 @@
-package taskqueue
+package store
 
 import (
 	"errors"
@@ -12,8 +12,6 @@ import (
 	"github.com/fmartingr/taskqueue/internal/task"
 
 	"github.com/fmartingr/taskqueue/internal/config"
-
-	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
 
 // TestMain clears the environment the whole suite runs under. TQ_DIR is the
@@ -23,6 +21,31 @@ import (
 func TestMain(m *testing.M) {
 	isolate()
 	os.Exit(m.Run())
+}
+
+// testRoot returns a temp directory discovery cannot climb out of. t.TempDir()
+// alone is not a barrier: it honours TMPDIR, and the walk up looks for .git in
+// every parent, so with TMPDIR inside a repository the fixtures would bind to
+// that repository's queue.
+func testRoot(t *testing.T) string {
+	t.Helper()
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// writeConfig plants a project marker in dir and returns its path.
+func writeConfig(t *testing.T, dir, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, config.ConfigFileName)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // isolate removes the configuration that could send a test outside its own
@@ -38,15 +61,6 @@ func isolate() {
 // testRoot(t) alone is not an isolation barrier: it honours TMPDIR, and the
 // walk up looks for .git and .tasks in every parent, so with TMPDIR inside a
 // repository the fixtures would bind to that repository's committed queue.
-// Marking the root as a repository root stops the walk here.
-func testRoot(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
 
 // newTestStore returns a store backed by a fresh .tasks directory.
 func newTestStore(t *testing.T) *Store {
@@ -995,7 +1009,7 @@ func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
 // tasks live, from anywhere in the project.
 func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
 	root := testRoot(t)
-	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
+	writeConfig(t, root, "version: 1\npath: docs/queue\n")
 	want := filepath.Join(root, "docs", "queue")
 	if err := os.MkdirAll(want, 0o755); err != nil {
 		t.Fatal(err)
@@ -1018,7 +1032,7 @@ func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
 // queue is created where it says.
 func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
 	root := testRoot(t)
-	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
+	writeConfig(t, root, "version: 1\npath: docs/queue\n")
 
 	store, err := InitStore(filepath.Join(root, "src"))
 	if err != nil {
@@ -1032,7 +1046,7 @@ func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
 // TQ_DIR is the task directory, full stop — the config's path is ignored.
 func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
 	root := testRoot(t)
-	tqtest.WriteConfig(t, root, "version: 1\npath: from-config\n")
+	writeConfig(t, root, "version: 1\npath: from-config\n")
 	override := filepath.Join(root, "from-env")
 	if err := os.MkdirAll(override, 0o755); err != nil {
 		t.Fatal(err)
@@ -1070,7 +1084,7 @@ func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
 // their file is wrong, not have a queue created somewhere else.
 func TestDiscoverTaskDirReportsABrokenConfig(t *testing.T) {
 	root := testRoot(t)
-	tqtest.WriteConfig(t, root, "version: 99\n")
+	writeConfig(t, root, "version: 99\n")
 
 	_, err := DiscoverTaskDir(root)
 	if !errors.Is(err, config.ErrConfig) {
@@ -1109,7 +1123,7 @@ func TestInitStoreWritesTheConfigMarker(t *testing.T) {
 func TestInitStoreLeavesAnExistingConfigAlone(t *testing.T) {
 	root := testRoot(t)
 	body := "version: 1\npath: mine\n# hand written\n"
-	path := tqtest.WriteConfig(t, root, body)
+	path := writeConfig(t, root, body)
 
 	if _, err := InitStore(root); err != nil {
 		t.Fatalf("InitStore: %v", err)

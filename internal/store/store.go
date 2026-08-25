@@ -1,4 +1,4 @@
-package taskqueue
+package store
 
 import (
 	"errors"

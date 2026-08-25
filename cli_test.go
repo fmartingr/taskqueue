@@ -11,6 +11,10 @@ import (
 	"github.com/fmartingr/taskqueue/internal/task"
 
 	"github.com/fmartingr/taskqueue/internal/config"
+
+	"github.com/fmartingr/taskqueue/internal/store"
+
+	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
 
 type testCLI struct {
@@ -41,7 +45,7 @@ func requireNoQueueAbove(t *testing.T, dir string) {
 }
 
 // anchorProject marks a directory as a repository root, so task directory
-// discovery stops there. Without it a fixture walks out of testRoot(t) and can
+// discovery stops there. Without it a fixture walks out of tqtest.Root(t) and can
 // reach — and write into — a developer's own queue (TQ-0053).
 func anchorProject(t *testing.T, dir string) {
 	t.Helper()
@@ -66,7 +70,7 @@ func newBareCLI(t *testing.T) *testCLI {
 	// Same isolation the store fixtures take: never reach a real queue.
 	t.Setenv(config.EnvTaskDir, "")
 	t.Setenv(config.EnvWalkForever, "")
-	root := testRoot(t)
+	root := tqtest.Root(t)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	return &testCLI{
 		cli:    &cli{stdout: stdout, stderr: stderr, dir: root},
@@ -616,8 +620,8 @@ func TestCLIEnvTaskDirOverride(t *testing.T) {
 // developer's tasks appear to vanish, so that is where tq should name the
 // variable that would have found them.
 func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
-	outer := testRoot(t)
-	if _, err := InitStore(outer); err != nil {
+	outer := tqtest.Root(t)
+	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(outer, "project")
@@ -649,12 +653,12 @@ func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
 }
 
 // The reason this fix was reverted once: with init discovering, an unanchored
-// fixture walks out of testRoot(t). TQ-0017's bound does not help here, since
+// fixture walks out of tqtest.Root(t). TQ-0017's bound does not help here, since
 // a bare temp directory has no repository root to stop at, so the fixtures
 // carry their own anchor.
 func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
-	outer := testRoot(t)
-	if _, err := InitStore(outer); err != nil {
+	outer := tqtest.Root(t)
+	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadDir(filepath.Join(outer, config.TaskDirName))
@@ -688,7 +692,7 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 // stops at it and init lands in the right place by accident. The enclosing
 // temp directory carries the .git anchor so the walk cannot escape it.
 func TestCLIInitFindsTheQueueAbove(t *testing.T) {
-	outer := testRoot(t)
+	outer := tqtest.Root(t)
 	anchorProject(t, outer)
 
 	project := filepath.Join(outer, "project")
@@ -696,7 +700,7 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Directly, not through InitStore: the enclosing anchor would send it to
+	// Directly, not through store.InitStore: the enclosing anchor would send it to
 	// the repository root, and the point here is a queue the project owns.
 	// The marker is what makes it the project's queue rather than a directory
 	// that happens to be named .tasks.
@@ -741,8 +745,8 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 // The bound TQ-0017 added is what makes the above safe: discovery must not
 // reach a queue outside the repository, or init adopts it and creates nothing.
 func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
-	outer := testRoot(t)
-	if _, err := InitStore(outer); err != nil {
+	outer := tqtest.Root(t)
+	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(outer, "project")
@@ -769,7 +773,7 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 // The CLI fixtures build their own store, so they need the same isolation the
 // store fixtures have.
 func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
-	outside := filepath.Join(testRoot(t), "real", config.TaskDirName)
+	outside := filepath.Join(tqtest.Root(t), "real", config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}

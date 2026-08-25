@@ -14,6 +14,8 @@ import (
 	"github.com/fmartingr/taskqueue/internal/task"
 
 	"github.com/fmartingr/taskqueue/internal/config"
+
+	"github.com/fmartingr/taskqueue/internal/store"
 )
 
 // Exit codes are part of the agent-facing contract and must stay stable.
@@ -131,10 +133,10 @@ func (c *cli) runInit(args []string) int {
 
 	// Discover the queue the way every other command does, so init in a
 	// subdirectory adopts the project's queue instead of forking a second one.
-	// OpenStore falls back to creating at the repository root when there is
+	// store.OpenStore falls back to creating at the repository root when there is
 	// nothing to find, and discovery stops there too (TQ-0017), so init cannot
 	// adopt a queue from outside the repository.
-	store, err := OpenStore(c.dir)
+	st, err := store.OpenStore(c.dir)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -145,49 +147,49 @@ func (c *cli) runInit(args []string) int {
 	// another repository's working tree, and writing a marker here would bind
 	// this directory to their queue for good.
 	var written []string
-	if withinInvokedTree(store.Dir, c.dir) {
+	if withinInvokedTree(st.Dir, c.dir) {
 		// A queue that predates the marker gets one now: init is the command
 		// that says "this project uses tq", and the file is what later
 		// commands find.
-		if store.ConfigWritten == "" {
-			config, err := config.WriteConfigIfMissing(c.dir, store.Dir)
+		if st.ConfigWritten == "" {
+			config, err := config.WriteConfigIfMissing(c.dir, st.Dir)
 			if err != nil {
 				return c.fail(err)
 			}
-			store.ConfigWritten = config
+			st.ConfigWritten = config
 		}
-		if store.ConfigWritten != "" {
-			written = append(written, store.ConfigWritten)
+		if st.ConfigWritten != "" {
+			written = append(written, st.ConfigWritten)
 		}
 
-		guide, err := SyncAgentsDocs(store)
+		guide, err := SyncAgentsDocs(st)
 		if err != nil {
 			return c.fail(err)
 		}
 		written = append(written, guide...)
 	} else if !*jsonOut {
-		fmt.Fprintf(c.stderr, "note: %s was found above this directory; leaving it and its guide alone\n", store.Dir)
+		fmt.Fprintf(c.stderr, "note: %s was found above this directory; leaving it and its guide alone\n", st.Dir)
 	}
 
 	if *jsonOut {
 		return c.printJSON(map[string]any{
-			"task_dir": store.Dir,
-			"created":  store.Created,
+			"task_dir": st.Dir,
+			"created":  st.Created,
 			"written":  written,
-			"pointer":  GuidePointer(store),
+			"pointer":  GuidePointer(st),
 		})
 	}
-	if store.Created {
-		fmt.Fprintf(c.stdout, "Initialized task queue in %s\n", store.Dir)
+	if st.Created {
+		fmt.Fprintf(c.stdout, "Initialized task queue in %s\n", st.Dir)
 	} else {
-		fmt.Fprintf(c.stdout, "task.Task queue already initialized in %s\n", store.Dir)
+		fmt.Fprintf(c.stdout, "task.Task queue already initialized in %s\n", st.Dir)
 	}
 	for _, path := range written {
 		fmt.Fprintf(c.stdout, "Wrote %s\n", path)
 	}
 	// tq does not edit the repository's own agent instructions, so say what to
 	// put there. One line, written once, and the guide comes with it.
-	fmt.Fprintf(c.stdout, "\nAdd this line to your AGENTS.md or CLAUDE.md so agents read the guide:\n\n    %s\n", GuidePointer(store))
+	fmt.Fprintf(c.stdout, "\nAdd this line to your AGENTS.md or CLAUDE.md so agents read the guide:\n\n    %s\n", GuidePointer(st))
 	return exitOK
 }
 
@@ -226,11 +228,11 @@ func (c *cli) runAdd(args []string) int {
 		return code
 	}
 
-	store, err := c.store()
+	st, err := c.st()
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := store.Create(CreateTaskInput{
+	t, err := st.Create(store.CreateTaskInput{
 		Title:     positional[0],
 		Status:    *status,
 		Priority:  *priority,
@@ -313,11 +315,11 @@ func (c *cli) runShow(args []string) int {
 		return code
 	}
 
-	store, err := c.store()
+	st, err := c.st()
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := store.Get(positional[0])
+	t, err := st.Get(positional[0])
 	if err != nil {
 		return c.fail(err)
 	}
@@ -401,11 +403,11 @@ func (c *cli) moveTask(id, status string, jsonOut bool) int {
 		return c.fail(fmt.Errorf("invalid status %q (want one of %s)", status, strings.Join(task.Statuses, ", ")))
 	}
 
-	store, err := c.store()
+	st, err := c.st()
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := store.Get(id)
+	t, err := st.Get(id)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -420,7 +422,7 @@ func (c *cli) moveTask(id, status string, jsonOut bool) int {
 	}
 
 	t.Status = status
-	t, err = store.Update(t)
+	t, err = st.Update(t)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -473,11 +475,11 @@ func (c *cli) runUpdate(args []string) int {
 		return c.fail(errors.New("update needs at least one field to change (see `tq help`)"))
 	}
 
-	store, err := c.store()
+	st, err := c.st()
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := store.Patch(positional[0], patch)
+	t, err := st.Patch(positional[0], patch)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -502,11 +504,11 @@ func (c *cli) runNote(args []string) int {
 		return c.fail(errors.New("note text cannot be empty"))
 	}
 
-	store, err := c.store()
+	st, err := c.st()
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := store.Note(positional[0], text)
+	t, err := st.Note(positional[0], text)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -533,27 +535,27 @@ func (c *cli) runVersion(args []string) int {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-func (c *cli) store() (*Store, error) {
-	store, err := OpenStore(c.dir)
+func (c *cli) st() (*store.Store, error) {
+	st, err := store.OpenStore(c.dir)
 	if err != nil {
 		return nil, err
 	}
-	if store.Created {
+	if st.Created {
 		// stderr, so --json output stays machine-readable.
-		fmt.Fprintf(c.stderr, "note: created %s\n", store.Dir)
-		if shadowed, ok := ShadowedTaskDir(c.dir); ok {
+		fmt.Fprintf(c.stderr, "note: created %s\n", st.Dir)
+		if shadowed, ok := store.ShadowedTaskDir(c.dir); ok {
 			fmt.Fprintf(c.stderr, "note: %s is above this repository and was not used; set %s=true to search past the repository root\n", shadowed, config.EnvWalkForever)
 		}
 	}
-	return store, nil
+	return st, nil
 }
 
 func (c *cli) tasks() ([]task.Task, error) {
-	store, err := c.store()
+	st, err := c.st()
 	if err != nil {
 		return nil, err
 	}
-	return store.List()
+	return st.List()
 }
 
 func (c *cli) flagSet(name string) *flag.FlagSet {
@@ -612,9 +614,9 @@ func (c *cli) parse(fs *flag.FlagSet, args []string, want int) (positional []str
 func (c *cli) fail(err error) int {
 	fmt.Fprintf(c.stderr, "error: %v\n", err)
 	switch {
-	case errors.Is(err, ErrTaskNotFound):
+	case errors.Is(err, store.ErrTaskNotFound):
 		return exitTaskNotFound
-	case errors.Is(err, ErrProjectNotFound):
+	case errors.Is(err, store.ErrProjectNotFound):
 		return exitProjectNotFound
 	default:
 		return exitError

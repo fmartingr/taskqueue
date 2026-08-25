@@ -7,17 +7,21 @@ import (
 	"testing"
 
 	"github.com/fmartingr/taskqueue/internal/config"
+
+	"github.com/fmartingr/taskqueue/internal/store"
+
+	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
 
 func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
-	store := newTestStore(t)
+	st := tqtest.NewStore(t)
 
-	written, err := SyncAgentsDocs(store)
+	written, err := SyncAgentsDocs(st)
 	if err != nil {
 		t.Fatalf("SyncAgentsDocs: %v", err)
 	}
 
-	guide, err := os.ReadFile(filepath.Join(store.Dir, AgentsFileName))
+	guide, err := os.ReadFile(filepath.Join(st.Dir, AgentsFileName))
 	if err != nil {
 		t.Fatalf("guide not written: %v", err)
 	}
@@ -25,24 +29,24 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 		"tq ready --json", "tq show <id> --json", "tq move <id> in-progress",
 		"tq note <id>", "tq done <id>", "tq add \"Title\"", "tq list --json",
 		"backlog, todo, in-progress, done", "urgent, high, normal, low",
-		store.Dir, config.EnvTaskDir, generatedNotice,
+		st.Dir, config.EnvTaskDir, generatedNotice,
 	} {
 		if !strings.Contains(string(guide), want) {
 			t.Errorf("guide is missing %q", want)
 		}
 	}
-	if len(written) == 0 || written[0] != filepath.Join(store.Dir, AgentsFileName) {
+	if len(written) == 0 || written[0] != filepath.Join(st.Dir, AgentsFileName) {
 		t.Errorf("written = %v, want it to start with the guide", written)
 	}
 
 	// The guide is not a task and must not disturb the store.
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil || len(tasks) != 0 {
 		t.Errorf("List() = %d tasks, %v; want 0 and no error", len(tasks), err)
 	}
 
 	// Running again rewrites nothing.
-	written, err = SyncAgentsDocs(store)
+	written, err = SyncAgentsDocs(st)
 	if err != nil {
 		t.Fatalf("second SyncAgentsDocs: %v", err)
 	}
@@ -52,13 +56,13 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 }
 
 func TestSyncAgentsDocsRefreshesAStaleGuide(t *testing.T) {
-	store := newTestStore(t)
-	path := filepath.Join(store.Dir, AgentsFileName)
+	st := tqtest.NewStore(t)
+	path := filepath.Join(st.Dir, AgentsFileName)
 	if err := os.WriteFile(path, []byte("out of date\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := SyncAgentsDocs(store); err != nil {
+	if _, err := SyncAgentsDocs(st); err != nil {
 		t.Fatalf("SyncAgentsDocs: %v", err)
 	}
 	guide, err := os.ReadFile(path)
@@ -71,11 +75,11 @@ func TestSyncAgentsDocsRefreshesAStaleGuide(t *testing.T) {
 }
 
 func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
-	root := testRoot(t)
+	root := tqtest.Root(t)
 	elsewhere := filepath.Join(root, "docs", "queue")
 	t.Setenv(config.EnvTaskDir, elsewhere)
 
-	store, err := InitStore(root)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +89,7 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	written, err := SyncAgentsDocs(store)
+	written, err := SyncAgentsDocs(st)
 	if err != nil {
 		t.Fatalf("SyncAgentsDocs: %v", err)
 	}
@@ -101,7 +105,7 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 	if string(got) != instructions {
 		t.Errorf("AGENTS.md was touched:\ngot:\n%s\nwant:\n%s", got, instructions)
 	}
-	if pointer := GuidePointer(store); !strings.HasSuffix(pointer, "queue/AGENTS.md") {
+	if pointer := GuidePointer(st); !strings.HasSuffix(pointer, "queue/AGENTS.md") {
 		t.Errorf("GuidePointer() = %q, want it to name the configured guide", pointer)
 	}
 }

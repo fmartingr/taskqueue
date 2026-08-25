@@ -13,14 +13,18 @@ import (
 	"github.com/fmartingr/taskqueue/internal/task"
 
 	"github.com/fmartingr/taskqueue/internal/config"
+
+	"github.com/fmartingr/taskqueue/internal/store"
+
+	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
 
-func newTestServer(t *testing.T) (*httptest.Server, *Store) {
+func newTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()
-	store := newTestStore(t)
-	srv := httptest.NewServer(newAPIRouter(store))
+	st := tqtest.NewStore(t)
+	srv := httptest.NewServer(newAPIRouter(st))
 	t.Cleanup(srv.Close)
-	return srv, store
+	return srv, st
 }
 
 func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Response, string) {
@@ -77,9 +81,9 @@ func expectError(t *testing.T, resp *http.Response, payload string, status int, 
 }
 
 func TestAPIListTasks(t *testing.T) {
-	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Add task API", Priority: task.PriorityHigh, Labels: []string{"backend"}, Assignee: "agent-api"})
-	mustCreate(t, store, CreateTaskInput{Title: "Build board", Labels: []string{"frontend"}, DependsOn: []string{"TQ-0001"}})
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Add task API", Priority: task.PriorityHigh, Labels: []string{"backend"}, Assignee: "agent-api"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Build board", Labels: []string{"frontend"}, DependsOn: []string{"TQ-0001"}})
 
 	resp, payload := do(t, srv, "GET", "/api/tasks", "")
 	if resp.StatusCode != http.StatusOK {
@@ -114,9 +118,9 @@ func TestAPIListTasks(t *testing.T) {
 }
 
 func TestAPIReadyFilterValues(t *testing.T) {
-	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Unblocked"})
-	mustCreate(t, store, CreateTaskInput{Title: "Blocked", DependsOn: []string{"TQ-0404"}})
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Unblocked"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Blocked", DependsOn: []string{"TQ-0404"}})
 
 	for _, value := range []string{"true", "1"} {
 		_, payload := do(t, srv, "GET", "/api/tasks?ready="+value, "")
@@ -136,9 +140,9 @@ func TestAPIReadyFilterValues(t *testing.T) {
 }
 
 func TestAPIFilesystemFailuresAreServerErrors(t *testing.T) {
-	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Gone in a moment"})
-	if err := os.RemoveAll(store.Dir); err != nil {
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Gone in a moment"})
+	if err := os.RemoveAll(st.Dir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -151,7 +155,7 @@ func TestAPIFilesystemFailuresAreServerErrors(t *testing.T) {
 }
 
 func TestAPICreateTask(t *testing.T) {
-	srv, store := newTestServer(t)
+	srv, st := newTestServer(t)
 
 	resp, payload := do(t, srv, "POST", "/api/tasks", `{
 		"title": "Implement authentication",
@@ -172,7 +176,7 @@ func TestAPICreateTask(t *testing.T) {
 		t.Errorf("Location = %q", loc)
 	}
 
-	stored, err := store.Get("TQ-0001")
+	stored, err := st.Get("TQ-0001")
 	if err != nil {
 		t.Fatalf("task not persisted: %v", err)
 	}
@@ -194,8 +198,8 @@ func TestAPICreateTask(t *testing.T) {
 }
 
 func TestAPIGetTask(t *testing.T) {
-	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Findable"})
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Findable"})
 
 	resp, payload := do(t, srv, "GET", "/api/tasks/TQ-0001", "")
 	if resp.StatusCode != http.StatusOK {
@@ -213,8 +217,8 @@ func TestAPIGetTask(t *testing.T) {
 }
 
 func TestAPIPatchTask(t *testing.T) {
-	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Drag me", Body: "Body."})
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Drag me", Body: "Body."})
 
 	resp, payload := do(t, srv, "PATCH", "/api/tasks/TQ-0001", `{"status": "in-progress"}`)
 	if resp.StatusCode != http.StatusOK {
@@ -223,7 +227,7 @@ func TestAPIPatchTask(t *testing.T) {
 	if tk := decode[task.Task](t, payload); tk.Status != task.StatusInProgress {
 		t.Errorf("task = %+v", tk)
 	}
-	if stored, _ := store.Get("TQ-0001"); stored.Status != task.StatusInProgress || stored.Body != "Body." {
+	if stored, _ := st.Get("TQ-0001"); stored.Status != task.StatusInProgress || stored.Body != "Body." {
 		t.Errorf("stored = %+v", stored)
 	}
 
@@ -248,8 +252,8 @@ func TestAPIPatchTask(t *testing.T) {
 }
 
 func TestAPIAddNote(t *testing.T) {
-	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Note me", Body: "Description."})
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Note me", Body: "Description."})
 
 	resp, payload := do(t, srv, "POST", "/api/tasks/TQ-0001/notes", `{"text": "API implemented; tests still failing."}`)
 	if resp.StatusCode != http.StatusOK {
@@ -260,7 +264,7 @@ func TestAPIAddNote(t *testing.T) {
 		t.Errorf("body = %q", tk.Body)
 	}
 
-	stored, _ := store.Get("TQ-0001")
+	stored, _ := st.Get("TQ-0001")
 	if stored.Body != tk.Body {
 		t.Errorf("stored body differs from the response:\n%q\n%q", stored.Body, tk.Body)
 	}
@@ -273,8 +277,8 @@ func TestAPIAddNote(t *testing.T) {
 }
 
 func TestAPIStatusAndVersion(t *testing.T) {
-	srv, store := newTestServer(t)
-	mustCreate(t, store, CreateTaskInput{Title: "One"})
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "One"})
 
 	_, payload := do(t, srv, "GET", "/api/status", "")
 	status := decode[struct {
@@ -283,7 +287,7 @@ func TestAPIStatusAndVersion(t *testing.T) {
 		TaskDir   string `json:"task_dir"`
 		Version   string `json:"version"`
 	}](t, payload)
-	if !status.OK || status.TaskCount != 1 || status.TaskDir != store.Dir || status.Version != version {
+	if !status.OK || status.TaskCount != 1 || status.TaskDir != st.Dir || status.Version != version {
 		t.Errorf("status = %+v", status)
 	}
 
@@ -300,8 +304,8 @@ func TestAPIUnknownRouteReturnsJSON(t *testing.T) {
 }
 
 func TestAPIMalformedTaskFile(t *testing.T) {
-	srv, store := newTestServer(t)
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0001-broken.md"), []byte("no frontmatter"), 0o644); err != nil {
+	srv, st := newTestServer(t)
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0001-broken.md"), []byte("no frontmatter"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -313,8 +317,8 @@ func TestAPIMalformedTaskFile(t *testing.T) {
 }
 
 func TestRouterServesEmbeddedFrontend(t *testing.T) {
-	store := newTestStore(t)
-	handler, err := newRouter(store, false)
+	st := tqtest.NewStore(t)
+	handler, err := newRouter(st, false)
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
@@ -354,10 +358,10 @@ func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv, store := newTestServer(t)
+	srv, st := newTestServer(t)
 	do(t, srv, "POST", "/api/tasks", `{"title": "Implement REST API", "priority": "high", "labels": ["backend"]}`)
 	do(t, srv, "PATCH", "/api/tasks/TQ-0001", `{"status": "in-progress"}`)
-	httpFile, err := os.ReadFile(filepath.Join(store.Dir, "TQ-0001-implement-rest-api.md"))
+	httpFile, err := os.ReadFile(filepath.Join(st.Dir, "TQ-0001-implement-rest-api.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,8 +383,8 @@ func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 
 // The HTTP surface reaches the same store, so it must refuse the same title.
 func TestAPIRejectsAMultiLineTitle(t *testing.T) {
-	srv, store := newTestServer(t)
-	created := mustCreate(t, store, CreateTaskInput{Title: "Fix the parser"})
+	srv, st := newTestServer(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Fix the parser"})
 
 	body := strings.NewReader(`{"title":"line1\n---\nline2"}`)
 	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/api/tasks/"+created.ID, body)
@@ -397,7 +401,7 @@ func TestAPIRejectsAMultiLineTitle(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
-	after, err := store.Get(created.ID)
+	after, err := st.Get(created.ID)
 	if err != nil {
 		t.Fatalf("the task should still be readable: %v", err)
 	}
@@ -409,7 +413,7 @@ func TestAPIRejectsAMultiLineTitle(t *testing.T) {
 // The board reads the project's configuration through the API, the same file
 // the CLI reads, resolved the same way.
 func TestAPIConfig(t *testing.T) {
-	srv, store := newTestServer(t)
+	srv, st := newTestServer(t)
 
 	resp, err := srv.Client().Get(srv.URL + "/api/config")
 	if err != nil {
@@ -432,7 +436,7 @@ func TestAPIConfig(t *testing.T) {
 	if got.Version != config.ConfigVersion {
 		t.Errorf("version = %d, want %d", got.Version, config.ConfigVersion)
 	}
-	if got.TaskDir != store.Dir {
-		t.Errorf("task_dir = %q, want %q", got.TaskDir, store.Dir)
+	if got.TaskDir != st.Dir {
+		t.Errorf("task_dir = %q, want %q", got.TaskDir, st.Dir)
 	}
 }

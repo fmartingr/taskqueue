@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/fmartingr/taskqueue/internal/config"
+	"github.com/fmartingr/taskqueue/internal/store"
+	"github.com/fmartingr/taskqueue/internal/task"
 )
 
 // Isolate removes the configuration that could send a test outside its own
@@ -48,4 +50,26 @@ func WriteConfig(t *testing.T, dir, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// NewStore returns a store backed by a fresh task directory inside an isolated
+// root. The store package keeps its own copy of this: a package whose tests
+// reach its internals cannot import a helper that builds one of its own values.
+func NewStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.InitStore(Root(t))
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	return s
+}
+
+// MustCreate adds a task or fails the test.
+func MustCreate(t *testing.T, s *store.Store, in store.CreateTaskInput) task.Task {
+	t.Helper()
+	created, err := s.Create(in)
+	if err != nil {
+		t.Fatalf("Create(%+v): %v", in, err)
+	}
+	return created
 }

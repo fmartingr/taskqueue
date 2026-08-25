@@ -1,7 +1,7 @@
 ---
 id: TQ-0073
 title: 'Integration coverage: the surfaces the harness does not reach yet'
-status: in-progress
+status: done
 priority: normal
 labels:
   - tests
@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0038
 created: 2026-08-25T20:12:25+02:00
-updated: 2026-08-25T21:33:04+02:00
+updated: 2026-08-25T21:38:55+02:00
 ---
 
 ## Why
@@ -145,3 +145,10 @@ much a wrong answer would cost:
 - 2026-08-25T20:12:43+02:00 — Written from the command table in internal/cli/cli.go, the route table in internal/web/server.go and what the eight existing tests actually call, not from memory. Covered today: eight commands, three flags, two of eight routes.
 - 2026-08-25T20:12:43+02:00 — TQ-0018, the -- terminator, is listed here because this is the layer that proves it. That ticket stays the place it gets fixed.
 - 2026-08-25T20:12:43+02:00 — The browser layer is named but deliberately out of scope: 695 lines of DOM behaviour in app.ts with no test at any level, and covering it means Playwright and a node_modules, which the plan rules out. It needs its own ticket and a decision.
+- 2026-08-25T21:38:55+02:00 — Implemented in the five slices this ticket proposed. The suite grew from 8 tests to 136 cases and still runs in about 1.2 seconds, all parallel.
+- 2026-08-25T21:38:55+02:00 — Slice 1 found the bug it was meant to prove. The -- terminator test failed in both directions exactly as TQ-0018 described, so that ticket was fixed and closed in its own commit, with a unit test beside the integration one.
+- 2026-08-25T21:38:55+02:00 — Two of my own assumptions were wrong and the tests were corrected, not the code. The API error envelope is flat, {code, error}, not nested, and a malformed body has its own invalid_json code; a malformed task id is a 400 rather than a 404, because that id could never exist.
+- 2026-08-25T21:38:55+02:00 — A third was a Go trap worth remembering: reusing a decode target across two show calls made an absent depends_on field look unchanged, so remove-dependency appeared broken when it was not. Each decode now goes into a fresh value.
+- 2026-08-25T21:38:55+02:00 — Covered now: update and add on every flag, retitling keeping a task reachable, list and ready filters singly and combined, help and usage exit codes, all eight API routes, the error envelope across eleven cases, query filters including the deliberate 400, notes over HTTP, the served page referencing its assets, running from a subdirectory, marker path and TQ_DIR precedence, a bare .tasks not being adopted, the three broken-config messages, init writing both files and never overwriting a hand-written config, the stamped version through the CLI and the API, TQ_HOST and TQ_PORT, request logging, and a real SIGTERM shutdown.
+- 2026-08-25T21:38:55+02:00 — The harness now builds with the same -ldflags as make build, which is what makes the version contract testable at all.
+- 2026-08-25T21:38:55+02:00 — Left undone deliberately: the browser layer, which needs Playwright and a node_modules and its own decision, and bun tests for the pure helpers in app.ts. Both were named here as separate tickets and neither is silently absorbed.

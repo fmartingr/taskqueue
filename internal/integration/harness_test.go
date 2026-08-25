@@ -27,6 +27,10 @@ import (
 // binary is built once for the whole run and reused by every test.
 var binary string
 
+// stampedVersion is what the test build passes to -ldflags, so the version
+// command has something to report that the default would not produce.
+const stampedVersion = "0.0.0-integration"
+
 func TestMain(m *testing.M) {
 	// The environment is neutralised here rather than per test: these are
 	// separate processes, so t.Setenv would not reach them, and a developer
@@ -43,7 +47,11 @@ func TestMain(m *testing.M) {
 	}
 	binary = filepath.Join(dir, "tq")
 
-	build := exec.Command("go", "build", "-o", binary, "../../cmd/tq")
+	// Built the way `make build` does, so `tq version` reports a stamped string
+	// rather than the "dev" default. That contract is only visible here.
+	build := exec.Command("go", "build",
+		"-ldflags", "-X github.com/fmartingr/taskqueue.version="+stampedVersion,
+		"-o", binary, "../../cmd/tq")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "integration: building tq: %v\n", err)
@@ -304,3 +312,26 @@ func fetchInto(t *testing.T, s *server, path string, w *strings.Builder) {
 	}
 	w.Write(body)
 }
+
+// readAddress reads the serve banner and returns the base URL it names.
+func readAddress(t *testing.T, stdout io.Reader) string {
+	t.Helper()
+	lines := bufio.NewScanner(stdout)
+	for lines.Scan() {
+		_, addr, found := strings.Cut(lines.Text(), "http://")
+		if found {
+			go func() {
+				for lines.Scan() {
+				}
+			}()
+			return "http://" + strings.TrimSpace(addr)
+		}
+	}
+	t.Fatal("serve printed no address")
+	return ""
+}
+
+// mkdirAll and writeFile keep the test files free of os import noise.
+func mkdirAll(dir string) error { return os.MkdirAll(dir, 0o755) }
+
+func writeFile(path, body string) error { return os.WriteFile(path, []byte(body), 0o644) }

@@ -6,8 +6,10 @@ priority: high
 labels:
   - bug
   - component/store
+depends_on:
+  - TQ-0029
 created: 2026-08-25T17:44:26+02:00
-updated: 2026-08-25T18:42:55+02:00
+updated: 2026-08-25T18:49:56+02:00
 ---
 
 ## Finding

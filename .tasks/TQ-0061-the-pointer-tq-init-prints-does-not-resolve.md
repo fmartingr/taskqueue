@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T17:44:51+02:00
-updated: 2026-08-25T18:42:55+02:00
+updated: 2026-08-25T18:50:04+02:00
 ---
 
 ## Finding
@@ -48,3 +48,4 @@ Found by `/code-review` over 20b06d2.
 ## Notes
 
 - 2026-08-25T18:42:55+02:00 — After TQ-0029 the pointer has an unambiguous base — the directory holding .taskqueue.yaml — instead of being inferred from the guide's own location. This fix likely collapses into that one; sequence it after, not before.
+- 2026-08-25T18:50:04+02:00 — Affected by TQ-0029 but deliberately not blocked on it: the pointer is wrong today. If TQ-0029 is imminent, do them together — the marker's directory is the unambiguous base this fix needs.

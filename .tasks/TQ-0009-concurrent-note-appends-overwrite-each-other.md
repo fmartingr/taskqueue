@@ -6,8 +6,9 @@ priority: high
 labels:
   - bug
   - component/api
+  - wontfix
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T18:40:49+02:00
+updated: 2026-08-25T18:42:18+02:00
 ---
 
 ## Finding
@@ -34,3 +35,6 @@ Filed from a `/code-review` pass at max effort.
 - 2026-08-25T18:40:49+02:00 — Verified against this ticket's own reproduction rather than assumed: 20 concurrent POSTs to /api/tasks/TQ-0001/notes against a live tq serve now leave 20 notes in the file, where this ticket recorded 2. All 20 returned 200.
 - 2026-08-25T18:40:49+02:00 — The cross-process half of this ticket is not fixed and cannot be by a mutex, which is all the Suggested fix here proposes. Measured: 10 separate tq note processes leave 2 of 10 notes. That is the deliberate limitation the README lists.
 - 2026-08-25T18:40:49+02:00 — Sharpened that README entry instead of leaving it. Last-writer-wins understates losing an append, and it said nothing about the in-process guarantee now being real. It states both, with the numbers behind them.
+- 2026-08-25T18:42:18+02:00 — Reclassified as wontfix rather than done. No work was done for this ticket: the half that was fixable was already fixed under TQ-0067, and the half that remains — losing an appended note across processes — is not going to be fixed.
+- 2026-08-25T18:42:18+02:00 — Cross-process safety would need file locking, which contradicts the design this project states: Markdown files are the source of truth, every read hits the disk, and simultaneous edits are last-writer-wins by choice. The README says so, now with the measured numbers.
+- 2026-08-25T18:42:18+02:00 — Reopen if the same note loss is shown inside a single process, which is the part that carries a real guarantee.

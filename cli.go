@@ -135,11 +135,18 @@ func (c *cli) runInit(args []string) int {
 		return c.fail(err)
 	}
 
-	// Keep the agent instructions current: the guide inside the task directory
-	// and the pointer to it from the repository's own AGENTS.md/CLAUDE.md.
-	written, err := SyncAgentsDocs(store)
-	if err != nil {
-		return c.fail(err)
+	// Write the guide only into a task directory this project owns. Discovery
+	// has no bound in a project without a repository root, so the store may
+	// belong to somebody else, and .tasks is meant to be committed: writing
+	// there would dirty another repository's working tree.
+	var written []string
+	if withinInvokedTree(store.Dir, c.dir) {
+		written, err = SyncAgentsDocs(store)
+		if err != nil {
+			return c.fail(err)
+		}
+	} else if !*jsonOut {
+		fmt.Fprintf(c.stderr, "note: %s was found above this directory; leaving its guide alone\n", store.Dir)
 	}
 
 	if *jsonOut {
@@ -162,6 +169,25 @@ func (c *cli) runInit(args []string) int {
 	// put there. One line, written once, and the guide comes with it.
 	fmt.Fprintf(c.stdout, "\nAdd this line to your AGENTS.md or CLAUDE.md so agents read the guide:\n\n    %s\n", GuidePointer(store))
 	return exitOK
+}
+
+// withinInvokedTree reports whether a task directory belongs to the tree the
+// command was invoked in: the enclosing repository when there is one, and the
+// working directory otherwise. A directory further up belongs to whatever
+// project holds it, which may not be this one.
+func withinInvokedTree(taskDir, workingDir string) bool {
+	base, err := filepath.Abs(workingDir)
+	if err != nil {
+		return false
+	}
+	if root, ok := repositoryRoot(base); ok {
+		base = root
+	}
+	rel, err := filepath.Rel(base, taskDir)
+	if err != nil {
+		return false
+	}
+	return rel == "." || !strings.HasPrefix(rel, "..")
 }
 
 func (c *cli) runAdd(args []string) int {

@@ -777,3 +777,61 @@ func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 		t.Errorf("the CLI fixture wrote into the directory %s names: %d entries", EnvTaskDir, len(entries))
 	}
 }
+
+// tq init must not write a guide into a task directory belonging to another
+// project. The fixture is deliberately unanchored, because a project with no
+// repository root is the shape where discovery has no bound; a queue at the
+// temp root stops the walk inside the fixture, so nothing escapes it.
+func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
+	t.Setenv(EnvTaskDir, "")
+	t.Setenv(EnvWalkForever, "")
+	root := t.TempDir()
+
+	outside := filepath.Join(root, TaskDirName)
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(root, "projects", "foo")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep}, t: t, stdout: stdout, stderr: stderr, root: deep}
+	tc.mustRun("init")
+
+	if _, err := os.Stat(filepath.Join(outside, AgentsFileName)); !os.IsNotExist(err) {
+		t.Errorf("init wrote a guide into %s, which belongs to another project", outside)
+	}
+	if strings.Contains(stdout.String(), "Wrote ") {
+		t.Errorf("init reported a write it must not make: %q", stdout)
+	}
+	if !strings.Contains(stderr.String(), outside) {
+		t.Errorf("stderr should say which directory was left alone, got %q", stderr)
+	}
+}
+
+// The ordinary cases must keep their guide: init at the root of a project, and
+// init anywhere inside a repository.
+func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
+	tc := newTestCLI(t)
+	guide := filepath.Join(tc.root, TaskDirName, AgentsFileName)
+	if _, err := os.Stat(guide); err != nil {
+		t.Fatalf("guide not written at the project root: %v", err)
+	}
+
+	deep := filepath.Join(tc.root, "src", "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(guide); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep}, t: t, stdout: stdout, stderr: stderr, root: tc.root}
+	sub.mustRun("init")
+
+	if _, err := os.Stat(guide); err != nil {
+		t.Errorf("init inside the repository should still write the guide: %v", err)
+	}
+}

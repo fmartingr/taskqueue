@@ -1,13 +1,13 @@
 ---
 id: TQ-0053
 title: CLI init tests adopt and write into a real queue above TMPDIR
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - tests
 created: 2026-08-25T14:47:08+02:00
-updated: 2026-08-25T14:47:08+02:00
+updated: 2026-08-25T15:52:02+02:00
 ---
 
 ## Finding
@@ -40,3 +40,9 @@ Anchor the fixtures: set `TQ_DIR`, or bound discovery at the repository root
 (TQ-0050), which also fixes this.
 
 Found by `/code-review` over 004aa72~1..HEAD.
+
+---
+
+## Notes
+
+- 2026-08-25T15:52:02+02:00 — Resolved by reverting cad90f9: the init tests no longer walk up, so they cannot reach a queue above TMPDIR. Full suite green after the revert. If TQ-0047 is redone, anchor the fixtures at the same time.

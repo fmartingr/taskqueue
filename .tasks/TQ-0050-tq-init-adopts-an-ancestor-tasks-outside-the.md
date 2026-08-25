@@ -1,13 +1,13 @@
 ---
 id: TQ-0050
 title: tq init adopts an ancestor .tasks outside the repository and creates none
-status: todo
+status: done
 priority: urgent
 labels:
   - bug
   - component/cli
 created: 2026-08-25T14:46:51+02:00
-updated: 2026-08-25T14:46:51+02:00
+updated: 2026-08-25T15:52:02+02:00
 ---
 
 ## Finding
@@ -50,3 +50,10 @@ root cause (discovery walking past the repository root) at priority low; this
 diff sharpens it considerably and the two should be fixed together.
 
 Found by `/code-review` over 004aa72~1..HEAD; reproduced by hand.
+
+---
+
+## Notes
+
+- 2026-08-25T15:52:01+02:00 — Resolved by reverting cad90f9 rather than by a forward fix: init no longer discovers, so it cannot adopt an ancestor queue. Verified — a fresh repo below an ancestor .tasks now reports created=true, task_dir repo/.tasks, and a pointer inside the repo.
+- 2026-08-25T15:52:01+02:00 — The root cause survives the revert: DiscoverTaskDir still walks past the repository root, which is TQ-0017. That must be fixed before TQ-0047 is attempted again, or the same regression returns.

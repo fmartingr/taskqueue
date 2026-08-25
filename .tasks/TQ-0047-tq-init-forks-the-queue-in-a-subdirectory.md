@@ -1,13 +1,13 @@
 ---
 id: TQ-0047
 title: tq init forks the queue in a subdirectory instead of discovering the parent
-status: done
+status: todo
 priority: high
 labels:
   - bug
   - component/cli
 created: 2026-08-25T13:56:09+02:00
-updated: 2026-08-25T14:47:40+02:00
+updated: 2026-08-25T15:51:39+02:00
 ---
 
 ## Finding
@@ -55,3 +55,5 @@ Found by `/code-review` on TQ-0041; reproduced by hand.
 - 2026-08-25T14:11:31+02:00 — Not fixed, out of scope: init from a subdirectory of a non-Git project still creates a pointer AGENTS.md in that subdirectory, because SyncAgentsDocs derives its doc root from the working directory, not from the discovered task dir. The pointer is at least correct now -- it links ../.tasks/AGENTS.md instead of a forked queue.
 - 2026-08-25T14:11:31+02:00 — TQ-0049 is unaffected: re-checked by hand that a hand-written root AGENTS.md is still overwritten when TQ_DIR makes the task dir the repo root. That path never went through InitStore(c.dir), so this change neither fixes nor worsens it.
 - 2026-08-25T14:47:40+02:00 — Regression: this fix overshot. DiscoverTaskDir walks past the repository root while taskDirTarget stops at it, so tq init in a fresh repo now adopts an ancestor .tasks outside it and creates none. Filed as TQ-0050 (urgent). Also made the CLI init tests write into a real queue above TMPDIR — TQ-0053.
+- 2026-08-25T15:51:39+02:00 — Reverted. Commit cad90f9 backed out because it traded a subdirectory-fork bug for a worse cross-repo one (TQ-0050): init adopted an ancestor .tasks outside the repository and created none. This ticket is open again — the original forking bug is back.
+- 2026-08-25T15:51:39+02:00 — Redo condition: bound discovery at the repository root first (TQ-0017 / TQ-0050 root cause), then make runInit discover. Discovering without that bound is what caused the regression, and it also let the CLI init tests write into a real queue above TMPDIR (TQ-0053).

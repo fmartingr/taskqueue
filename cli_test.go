@@ -15,6 +15,8 @@ import (
 	"github.com/fmartingr/taskqueue/internal/store"
 
 	"github.com/fmartingr/taskqueue/internal/tqtest"
+
+	"github.com/fmartingr/taskqueue/internal/guide"
 )
 
 type testCLI struct {
@@ -818,7 +820,7 @@ func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
 	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep}, t: t, stdout: stdout, stderr: stderr, root: deep}
 	tc.mustRun("init")
 
-	if _, err := os.Stat(filepath.Join(outside, AgentsFileName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(outside, guide.AgentsFileName)); !os.IsNotExist(err) {
 		t.Errorf("init wrote a guide into %s, which belongs to another project", outside)
 	}
 	if strings.Contains(stdout.String(), "Wrote ") {
@@ -833,7 +835,7 @@ func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
 // init anywhere inside a repository.
 func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
 	tc := newTestCLI(t)
-	guide := filepath.Join(tc.root, config.TaskDirName, AgentsFileName)
+	guide := filepath.Join(tc.root, config.TaskDirName, guide.AgentsFileName)
 	if _, err := os.Stat(guide); err != nil {
 		t.Fatalf("guide not written at the project root: %v", err)
 	}
@@ -933,5 +935,39 @@ func TestCLIReportsABrokenConfig(t *testing.T) {
 	}
 	if !strings.Contains(tc.stderr.String(), "newer tq") {
 		t.Errorf("stderr = %q, want it to say the file needs a newer tq", tc.stderr)
+	}
+}
+
+func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
+	tc := newBareCLI(t)
+
+	out := tc.mustRun("init")
+	guidePath := filepath.Join(tc.root, config.TaskDirName, guide.AgentsFileName)
+	if !strings.Contains(out, guidePath) {
+		t.Errorf("init should report the guidePath it wrote, got %q", out)
+	}
+	if _, err := os.Stat(guidePath); err != nil {
+		t.Fatalf("guidePath not written: %v", err)
+	}
+
+	// tq no longer manages the repository's own agent instructions: it says
+	// what to add instead of writing the file.
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if _, err := os.Stat(filepath.Join(tc.root, name)); !os.IsNotExist(err) {
+			t.Errorf("init created %s; it must leave those files to the user", name)
+		}
+	}
+	if !strings.Contains(out, "@"+config.TaskDirName+"/"+guide.AgentsFileName) {
+		t.Errorf("init should print the line to add, got %q", out)
+	}
+
+	// Re-running refreshes without reporting spurious writes, but still says
+	// what to add — the file it names may not exist yet.
+	out = tc.mustRun("init")
+	if strings.Contains(out, "Wrote ") {
+		t.Errorf("nothing should be rewritten on a second init, got %q", out)
+	}
+	if !strings.Contains(out, "@"+config.TaskDirName+"/"+guide.AgentsFileName) {
+		t.Errorf("the second init should still print the line to add, got %q", out)
 	}
 }

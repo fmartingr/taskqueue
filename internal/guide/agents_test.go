@@ -1,4 +1,4 @@
-package taskqueue
+package guide
 
 import (
 	"os"
@@ -107,40 +107,6 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 	}
 	if pointer := GuidePointer(st); !strings.HasSuffix(pointer, "queue/AGENTS.md") {
 		t.Errorf("GuidePointer() = %q, want it to name the configured guide", pointer)
-	}
-}
-
-func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
-	tc := newBareCLI(t)
-
-	out := tc.mustRun("init")
-	guide := filepath.Join(tc.root, config.TaskDirName, AgentsFileName)
-	if !strings.Contains(out, guide) {
-		t.Errorf("init should report the guide it wrote, got %q", out)
-	}
-	if _, err := os.Stat(guide); err != nil {
-		t.Fatalf("guide not written: %v", err)
-	}
-
-	// tq no longer manages the repository's own agent instructions: it says
-	// what to add instead of writing the file.
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
-		if _, err := os.Stat(filepath.Join(tc.root, name)); !os.IsNotExist(err) {
-			t.Errorf("init created %s; it must leave those files to the user", name)
-		}
-	}
-	if !strings.Contains(out, "@"+config.TaskDirName+"/"+AgentsFileName) {
-		t.Errorf("init should print the line to add, got %q", out)
-	}
-
-	// Re-running refreshes without reporting spurious writes, but still says
-	// what to add — the file it names may not exist yet.
-	out = tc.mustRun("init")
-	if strings.Contains(out, "Wrote ") {
-		t.Errorf("nothing should be rewritten on a second init, got %q", out)
-	}
-	if !strings.Contains(out, "@"+config.TaskDirName+"/"+AgentsFileName) {
-		t.Errorf("the second init should still print the line to add, got %q", out)
 	}
 }
 

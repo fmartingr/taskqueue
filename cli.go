@@ -16,6 +16,8 @@ import (
 	"github.com/fmartingr/taskqueue/internal/config"
 
 	"github.com/fmartingr/taskqueue/internal/store"
+
+	"github.com/fmartingr/taskqueue/internal/guide"
 )
 
 // Exit codes are part of the agent-facing contract and must stay stable.
@@ -115,7 +117,7 @@ Exit codes:
 
 func (c *cli) usage(w io.Writer) {
 	fmt.Fprintf(w, usageText,
-		config.TaskDirName, filepath.Join(config.TaskDirName, AgentsFileName),
+		config.TaskDirName, filepath.Join(config.TaskDirName, guide.AgentsFileName),
 		strings.Join(task.Statuses, ", "),
 		strings.Join(task.Priorities, ", "), task.PriorityNormal,
 		config.EnvTaskDir, config.TaskDirName,
@@ -162,7 +164,7 @@ func (c *cli) runInit(args []string) int {
 			written = append(written, st.ConfigWritten)
 		}
 
-		guide, err := SyncAgentsDocs(st)
+		guide, err := guide.SyncAgentsDocs(st)
 		if err != nil {
 			return c.fail(err)
 		}
@@ -176,7 +178,7 @@ func (c *cli) runInit(args []string) int {
 			"task_dir": st.Dir,
 			"created":  st.Created,
 			"written":  written,
-			"pointer":  GuidePointer(st),
+			"pointer":  guide.GuidePointer(st),
 		})
 	}
 	if st.Created {
@@ -189,7 +191,7 @@ func (c *cli) runInit(args []string) int {
 	}
 	// tq does not edit the repository's own agent instructions, so say what to
 	// put there. One line, written once, and the guide comes with it.
-	fmt.Fprintf(c.stdout, "\nAdd this line to your AGENTS.md or CLAUDE.md so agents read the guide:\n\n    %s\n", GuidePointer(st))
+	fmt.Fprintf(c.stdout, "\nAdd this line to your AGENTS.md or CLAUDE.md so agents read the guide:\n\n    %s\n", guide.GuidePointer(st))
 	return exitOK
 }
 

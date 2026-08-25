@@ -1,13 +1,13 @@
 ---
 id: TQ-0014
 title: tq init overwrites a hand-written Task management section
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/cli
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T14:47:28+02:00
+updated: 2026-08-25T16:09:21+02:00
 ---
 
 ## Finding
@@ -31,3 +31,7 @@ Filed from a `/code-review` pass at max effort.
 ## Notes
 
 - 2026-08-25T14:47:28+02:00 — Widened by TQ-0045 (commit 004aa72), confirmed by /code-review: the pointer guard was narrowed from the whole document to only the lines inside the found section, so a document that links to the guide from anywhere else — an intro paragraph, a reference-style link, a ./-prefixed path — now falls through to the rewrite branch and loses the entire body of a hand-written Task management section. Those documents were protected by the old whole-document guard and are not now. Recording here rather than as a new ticket, since this ticket already covers the shape.
+- 2026-08-25T16:09:20+02:00 — Fixed. withTaskSection now rewrites a Task management section only when it holds nothing but the stub tq writes — the generated See [AGENTS.md](...) line whatever it points at, or an @-include. Anything else is a person's and the document is left untouched.
+- 2026-08-25T16:09:20+02:00 — SyncAgentsDocs returns a SyncReport with Written and Skipped, and tq init names the skipped files on stderr so the refusal is visible without polluting --json stdout. The JSON gains a skipped key alongside written, which is additive and keeps the agent API compatible.
+- 2026-08-25T16:09:20+02:00 — Two other halves of the ticket: the blank line before the following heading is put back when the section is spliced, and root docs are now written through writeAtomic, the same CreateTemp/Chmod/Sync/Rename dance Store.write already used for task files. The fenced-block half was already fixed by TQ-0045.
+- 2026-08-25T16:09:20+02:00 — Deliberate contract change: TQ-0045 asserted that a fence inside the section is destroyed with the rest of it, since the section was regenerated wholesale. A fence is something a person wrote, so it now makes the section off limits instead. That test was rewritten to assert the document is left untouched.

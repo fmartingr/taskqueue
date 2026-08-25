@@ -132,7 +132,7 @@ func (c *cli) runInit(args []string) int {
 
 	// Keep the agent instructions current: the guide inside the task directory
 	// and the pointer to it from the repository's own AGENTS.md/CLAUDE.md.
-	written, err := SyncAgentsDocs(store, c.dir)
+	report, err := SyncAgentsDocs(store, c.dir)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -141,7 +141,8 @@ func (c *cli) runInit(args []string) int {
 		return c.printJSON(map[string]any{
 			"task_dir": store.Dir,
 			"created":  store.Created,
-			"written":  written,
+			"written":  report.Written,
+			"skipped":  report.Skipped,
 		})
 	}
 	if store.Created {
@@ -149,8 +150,12 @@ func (c *cli) runInit(args []string) int {
 	} else {
 		fmt.Fprintf(c.stdout, "Task queue already initialized in %s\n", store.Dir)
 	}
-	for _, path := range written {
+	for _, path := range report.Written {
 		fmt.Fprintf(c.stdout, "Wrote %s\n", path)
+	}
+	// A warning, not data: the file still has no pointer at the guide.
+	for _, path := range report.Skipped {
+		fmt.Fprintf(c.stderr, "Left %s alone: its %q section is not the stub tq writes\n", path, taskSectionTitle)
 	}
 	return exitOK
 }

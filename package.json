@@ -5,5 +5,8 @@
   "scripts": {
     "build": "bun run frontend/build.ts",
     "dev": "bun run frontend/build.ts --watch"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
   }
 }

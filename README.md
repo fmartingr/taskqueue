@@ -272,6 +272,9 @@ before binding to `0.0.0.0`.
 make help        # list targets
 make dev         # Bun watch + Go server with DEV=1 (frontend served from ./public)
 make test        # go test ./...
+make test-frontend    # Bun unit tests for the pure frontend helpers
+make test-integration # drives the compiled binary
+make test-browser     # drives the board in a real Chromium (make browser-install first)
 make lint        # golangci-lint
 make format      # go fmt + go mod tidy
 make frontend    # rebuild public/ with Bun

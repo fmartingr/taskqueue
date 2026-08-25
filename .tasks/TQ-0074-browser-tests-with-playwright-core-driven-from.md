@@ -1,14 +1,14 @@
 ---
 id: TQ-0074
 title: Browser tests with playwright-core, driven from bun test
-status: todo
+status: done
 priority: normal
 labels:
   - tests
   - component/frontend
   - component/ci
 created: 2026-08-25T22:39:54+02:00
-updated: 2026-08-25T22:46:21+02:00
+updated: 2026-08-25T23:27:22+02:00
 ---
 
 ## Decision
@@ -95,3 +95,6 @@ The parts of `frontend/app.ts` that no test reaches today:
 - 2026-08-25T22:40:15+02:00 — The cost that is easy to miss: playwright-core ships no browser, and it only worked here because this machine already had Playwright's cache. A clean checkout and CI both need playwright install chromium and a cache step.
 - 2026-08-25T22:46:21+02:00 — Correction: this is not a rule change. The no-JavaScript-dependencies line was about the frontend runtime and its build — npm, Node, a bundler other than Bun — not about test tooling, so a browser driver needs no exception.
 - 2026-08-25T22:46:21+02:00 — AGENTS.md said 'no JavaScript dependencies at all', which is what made this read as a bigger decision than it is. Reworded so the constraint is on what the built public/ output depends on. bun.lock is simply committed, like any dev dependency.
+- 2026-08-25T22:58:44+02:00 — Harness up: browser/harness.ts builds tq once, gives each test a temp project with its own .taskqueue.yaml, starts tq serve --port 0 and reads the banner, resolves Chromium from PLAYWRIGHT_BROWSERS_PATH or the platform cache. First 7 tests pass in 6s — real HTML5 drag and drop works through Playwright's CDP drag interception, no synthetic events needed.
+- 2026-08-25T23:23:26+02:00 — Found the real flake, and it was not the browser: tq serve logs every request on stderr, and a Go process that writes to a broken pipe on fd 1 or 2 is killed by SIGPIPE. Draining the pipes from Bun was not reliable enough — a cancelled or collected stream killed the server mid-test. The server's stdout and stderr now go to files, which cannot break, and stderr() reads the file back for failure messages.
+- 2026-08-25T23:27:22+02:00 — Suite covers all six behaviours from the ticket, 22 tests in ~38s: drag and drop between columns (and the move reaching the API), the composer, the task dialog, the notes editor, the poll refreshing the board, and the poll standing down while dragging, composing or with either dialog open. make test-browser and make browser-install added, plus a CI job that caches ~/.cache/ms-playwright keyed on bun.lock. Verified test-only: build.ts is byte-identical and internal/web/public/ is unchanged by a rebuild.

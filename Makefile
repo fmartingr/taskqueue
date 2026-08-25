@@ -67,6 +67,16 @@ test-integration:
 test-frontend:
 	bun test frontend/
 
+## test-browser: Drive the board in a real browser against the real binary
+.PHONY: test-browser
+test-browser:
+	bun test browser/
+
+## browser-install: Install the Chromium the browser tests drive
+.PHONY: browser-install
+browser-install:
+	bunx playwright-core install chromium
+
 ## format: Format code and tidy modules
 .PHONY: format
 format:

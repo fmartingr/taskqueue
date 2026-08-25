@@ -30,6 +30,7 @@ internal/fsx/      Atomic file write, shared by the two generators
 internal/tqtest/   Test fixtures shared across packages
 internal/integration/ Tests that drive the compiled binary (build tag)
 frontend/          app.ts, board.ts, notes.ts, index.html, style.css, build.ts (Bun)
+browser/           Tests that drive the board in a real Chromium (bun test)
 ```
 
 Dependencies run one way: `task` <- `config` <- `store` <- `guide`, `web`, `cli`.
@@ -40,6 +41,7 @@ Dependencies run one way: `task` <- `config` <- `store` <- `guide`, `web`, `cli`
 make test           # run after backend changes
 make test-integration # drives the compiled binary; slower, tagged
 make test-frontend  # Bun unit tests for the pure frontend helpers
+make test-browser   # drives the board in a real browser; needs Chromium
 make frontend       # run after frontend changes (updates public/, which is committed)
 make build          # run before completing a task
 make lint           # golangci-lint
@@ -53,6 +55,8 @@ make dev            # Bun watch + DEV=1 server
 - Run `make frontend` after frontend changes and commit the `public/` output,
   and `make test-frontend` when the change touches logic that is unit-tested
   (the pure helpers in `frontend/`, currently `notes.ts` and `board.ts`).
+- Run `make test-browser` after changes to `app.ts`, the board's markup or its
+  styles. It needs a Chromium: `make browser-install` puts one in the cache.
 - Run `make build` before completing a task.
 - Do not add a database, an index file, a cache or a filesystem watcher. Markdown
   files are the source of truth and every read hits the disk — that is what makes
@@ -103,8 +107,17 @@ stays fast. It builds `tq` once and runs it as a process: real exit codes throug
 listener, and the CLI and a running server reading each other's writes. Anything
 that only shows up in a compiled binary belongs there rather than in a unit test.
 
-There is deliberately no browser test stack; anything that touches the DOM is
-verified manually.
+`make test-browser` is the layer above that, and the only one that sees a DOM:
+`bun test` drives a real Chromium through `playwright-core` against a real `tq
+serve`, one temp project per test on a port the OS picks. It covers what only a
+browser can show — native drag and drop, `<dialog>`, focus and blur, and the
+poll standing down while the user is working. The dependency is test-only:
+`frontend/build.ts` imports nothing, and nothing under `node_modules/` reaches
+`internal/web/public/`.
+
+The browser is not part of the dependency: `playwright-core` ships no binary, so
+a clean checkout needs `make browser-install` once. The suite says so, and names
+that command, when it cannot find one.
 
 ## Task management
 

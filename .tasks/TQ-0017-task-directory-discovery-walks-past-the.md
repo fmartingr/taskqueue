@@ -2,12 +2,12 @@
 id: TQ-0017
 title: Task directory discovery walks past the repository root
 status: todo
-priority: low
+priority: high
 labels:
   - bug
   - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T16:31:54+02:00
 ---
 
 ## Finding
@@ -22,6 +22,57 @@ I reproduced the primary case: with a .tasks directory in a parent folder and a 
 
 ## Suggested fix
 
-Decide whether discovery should stop at the repository root the way `taskDirTarget` does. Walking to the filesystem root is what the plan specified, so this may just need documenting.
+Decided: discovery stops at the repository root, the way `taskDirTarget`
+already does. The documented promise — "the task directory is created on demand
+at the root of the enclosing Git repository" — becomes true of finding one as
+well as making one, and a queue above your project can no longer capture it.
+
+`TQ_WALK_FOREVER=true` restores the old behaviour and walks to the filesystem
+root. It is for the layout the original plan had in mind: a queue deliberately
+kept above several repositories, shared by all of them. Anything other than
+`true` leaves the default in place.
+
+`TQ_DIR` is unaffected and still wins outright; it names a directory rather
+than starting a search.
+
+### What the change touches
+
+- `DiscoverTaskDir` (`store.go`): stop the walk once the current directory is
+  the repository root, unless `TQ_WALK_FOREVER` is set. `repositoryRoot` is
+  already there and is what `taskDirTarget` uses.
+- A new `EnvWalkForever = "TQ_WALK_FOREVER"` alongside `EnvTaskDir`.
+- The not-found error should say the walk stopped at the repository root, and
+  name the variable that lifts the bound — otherwise the failure looks like
+  tq simply cannot see a queue that is plainly there.
+- README and the generated guide (`taskGuide` in `agents.go`) both document
+  `TQ_DIR`; both should mention this too.
+
+### Out of scope
+
+The two amplifiers stay open, and neither is fixed by the bound:
+
+- A permission error on a candidate `.tasks` is swallowed by
+  `err == nil && info.IsDir()`, so tq walks past a queue it merely could not
+  read, with no diagnostic.
+- `filepath.Abs` does not resolve symlinks, so a symlinked working directory
+  climbs the wrong parents.
+
+Both survive inside a single repository and deserve their own tickets.
+
+### Unblocks
+
+TQ-0047 was reverted because it made `tq init` discover rather than create,
+and unbounded discovery then let init adopt a queue outside the repository
+(TQ-0050). With the bound in place that fix becomes safe to redo, and the test
+hazards in TQ-0021 and TQ-0023 lose their reach as well.
+
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T16:31:54+02:00 — Decision recorded: discovery stops at the repository root by default, with TQ_WALK_FOREVER=true to walk to the filesystem root as before. The open question in the original Suggested fix is settled; the section now describes the change rather than asking for a choice.
+- 2026-08-25T16:31:54+02:00 — Reproduced again on the current build before writing it up: a .tasks in a parent directory captured tq add from a fresh git repo underneath, filing TQ-0002 into the parent and never creating a queue in the repo.
+- 2026-08-25T16:31:54+02:00 — Raised from low to high: this blocks TQ-0047, which had to be reverted because unbounded discovery let tq init adopt a queue outside the repository (TQ-0050).

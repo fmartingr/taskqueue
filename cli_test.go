@@ -694,7 +694,12 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 	}
 	// Directly, not through InitStore: the enclosing anchor would send it to
 	// the repository root, and the point here is a queue the project owns.
+	// The marker is what makes it the project's queue rather than a directory
+	// that happens to be named .tasks.
 	if err := os.MkdirAll(filepath.Join(project, TaskDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ConfigFileName), []byte("version: 1\npath: "+TaskDirName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -791,6 +796,11 @@ func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// With a marker above it, the deep directory discovers this queue — which
+	// is the situation the guide must not be written into.
+	if err := os.WriteFile(filepath.Join(root, ConfigFileName), []byte("version: 1\npath: "+TaskDirName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	deep := filepath.Join(root, "projects", "foo")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
@@ -855,5 +865,65 @@ func TestCLIUpdateRejectsAMultiLineTitle(t *testing.T) {
 	listing := tc.mustRun("list")
 	if !strings.Contains(listing, "Fix the parser") {
 		t.Errorf("the task should be untouched, got %q", listing)
+	}
+}
+
+// tq init leaves the marker, so the next command finds the queue by the file
+// rather than by guessing at directory names.
+func TestCLIInitWritesTheConfigMarker(t *testing.T) {
+	tc := newBareCLI(t)
+	out := tc.mustRun("init")
+
+	path := filepath.Join(tc.root, ConfigFileName)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("%s not written: %v", ConfigFileName, err)
+	}
+	if !strings.Contains(out, path) {
+		t.Errorf("init should report the config it wrote, got %q", out)
+	}
+
+	cfg, err := FindConfig(tc.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TaskDir() != filepath.Join(tc.root, TaskDirName) {
+		t.Errorf("config points at %q", cfg.TaskDir())
+	}
+
+	// Re-running writes nothing: the file is the user's.
+	tc.reset()
+	if out := tc.mustRun("init"); strings.Contains(out, "Wrote "+path) {
+		t.Errorf("a second init rewrote the config: %q", out)
+	}
+}
+
+// A config naming a path is what moves the queue, from any subdirectory.
+func TestCLIFollowsTheConfigPath(t *testing.T) {
+	tc := newBareCLI(t)
+	if err := os.WriteFile(filepath.Join(tc.root, ConfigFileName), []byte("version: 1\npath: docs/queue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tc.mustRun("add", "configured")
+
+	if _, err := os.Stat(filepath.Join(tc.root, "docs", "queue")); err != nil {
+		t.Fatalf("the task directory should follow the config: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tc.root, TaskDirName)); !os.IsNotExist(err) {
+		t.Error("the default directory should not have been created")
+	}
+}
+
+// A broken config is reported as a config problem, not as a missing queue.
+func TestCLIReportsABrokenConfig(t *testing.T) {
+	tc := newBareCLI(t)
+	if err := os.WriteFile(filepath.Join(tc.root, ConfigFileName), []byte("version: 99\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := tc.run("list"); code == exitOK {
+		t.Error("exit = 0, want a failure for a config tq cannot use")
+	}
+	if !strings.Contains(tc.stderr.String(), "newer tq") {
+		t.Errorf("stderr = %q, want it to say the file needs a newer tq", tc.stderr)
 	}
 }

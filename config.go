@@ -1,0 +1,159 @@
+package taskqueue
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ConfigFileName is the project marker. It sits at the root of the repository,
+// not inside the task directory, which is what makes discovery unambiguous:
+// there is one file to find, it says where the tasks live, and the search has a
+// definite stopping point instead of guessing at directory names on the way up.
+const ConfigFileName = ".taskqueue.yaml"
+
+// ConfigVersion is the highest config version this binary understands. It only
+// changes on a breaking change; everything else is additive, so a file written
+// by a newer tq still reads here with the keys this version knows.
+const ConfigVersion = 1
+
+// nearMissConfigName is the spelling people reach for. Ignoring it silently
+// would put the queue somewhere the author did not intend, so it is an error
+// that names the file tq actually reads.
+const nearMissConfigName = ".taskqueue.yml"
+
+// ErrConfig marks a config file that exists but cannot be used. Callers
+// distinguish it from a missing task directory, which is not an error at all.
+var ErrConfig = errors.New("invalid config")
+
+// Config is the project configuration. Only the keys tq understands appear
+// here; unknown keys are ignored on purpose, so a file written by a newer
+// version stays readable.
+type Config struct {
+	Version int    `yaml:"version" json:"version"`
+	Path    string `yaml:"path" json:"path"`
+
+	// File is where this config was read from, and dir is the directory
+	// holding it. Path resolves against dir, never against the working
+	// directory, so the same committed file means the same thing wherever a
+	// command runs.
+	File string `yaml:"-" json:"file"`
+	dir  string
+}
+
+// TaskDir is the task directory this config declares, as an absolute path.
+func (c *Config) TaskDir() string {
+	if filepath.IsAbs(c.Path) {
+		return filepath.Clean(c.Path)
+	}
+	return filepath.Join(c.dir, c.Path)
+}
+
+// FindConfig reads the nearest config at or above startDir. It returns nil
+// without an error when there is none: the file is optional, and a project
+// without one keeps working on the defaults.
+//
+// The walk stops at the first config found. It is bounded the same way task
+// directory discovery is, so a stray config above a project cannot capture it.
+func FindConfig(startDir string) (*Config, error) {
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return nil, err
+	}
+
+	stopAt := walkBoundary(dir)
+	for {
+		path := filepath.Join(dir, ConfigFileName)
+		switch _, err := os.Stat(path); {
+		case err == nil:
+			return loadConfig(path)
+		case errors.Is(err, os.ErrPermission):
+			// A config tq cannot read is not the same as one that is not
+			// there: walking past it would silently use the wrong queue.
+			return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+		}
+		// Anything else — missing, or a non-directory somewhere on the way up
+		// — simply means there is no config at this level.
+
+		// A typo is not an absent config. Reported here rather than at the end
+		// of the walk, so the message names the file the author actually wrote.
+		nearMiss := filepath.Join(dir, nearMissConfigName)
+		if _, err := os.Stat(nearMiss); err == nil {
+			return nil, fmt.Errorf("%w: %s: tq reads %s, rename it", ErrConfig, nearMiss, ConfigFileName)
+		}
+
+		parent := filepath.Dir(dir)
+		if dir == stopAt || parent == dir {
+			return nil, nil
+		}
+		dir = parent
+	}
+}
+
+// loadConfig reads one config file. Unknown keys are tolerated: the version
+// field exists so that additive changes stay readable by older binaries, and
+// tq never rewrites this file, so nothing is lost by ignoring what it does not
+// recognise.
+func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+	}
+
+	cfg := Config{File: path, dir: filepath.Dir(path)}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+	}
+	if cfg.Version > ConfigVersion {
+		return nil, fmt.Errorf("%w: %s: version %d needs a newer tq (this one understands %d)",
+			ErrConfig, path, cfg.Version, ConfigVersion)
+	}
+	if cfg.Path == "" {
+		cfg.Path = TaskDirName
+	}
+	return &cfg, nil
+}
+
+// configTarget is where `tq init` writes a config when a project has none: the
+// root of the enclosing repository, or the working directory when there is no
+// repository to anchor to.
+func configTarget(startDir string) (string, error) {
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", err
+	}
+	if root, ok := repositoryRoot(dir); ok {
+		dir = root
+	}
+	return filepath.Join(dir, ConfigFileName), nil
+}
+
+// writeConfigIfMissing writes the marker for a task directory that has none,
+// and reports the path when it wrote one. Unlike the generated guide, this file
+// is the user's: an existing one is never touched, whatever it says.
+func writeConfigIfMissing(startDir, taskDir string) (string, error) {
+	existing, err := FindConfig(startDir)
+	if err != nil || existing != nil {
+		return "", err
+	}
+
+	path, err := configTarget(startDir)
+	if err != nil {
+		return "", err
+	}
+
+	// The path is written relative to the config, so the committed file means
+	// the same thing on every machine.
+	rel, err := filepath.Rel(filepath.Dir(path), taskDir)
+	if err != nil {
+		rel = taskDir
+	}
+	body := fmt.Appendf(nil, "version: %d\npath: %s\n", ConfigVersion, filepath.ToSlash(rel))
+	if err := writeAtomic(path, body); err != nil {
+		return "", err
+	}
+	return path, nil
+}

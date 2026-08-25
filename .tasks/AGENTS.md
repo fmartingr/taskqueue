@@ -60,7 +60,17 @@ Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 
     /Users/fmartingr/Code/task-queue/.tasks
 
-Set `TQ_DIR` to point tq at a different task directory. The search for one
-walks up from the working directory and stops at the repository root, so a
-queue above the project does not capture it. Set `TQ_WALK_FOREVER=true` to let
-it walk on to the filesystem root.
+The project marker is `.taskqueue.yaml` at the repository root, and it says
+where the tasks live:
+
+    version: 1
+    path: .tasks
+
+`path` is resolved against the directory holding that file. The marker is
+the only thing tq looks for, and the search stops at the repository root: a
+directory merely named .tasks is not a queue. The first command that needs one
+writes both, so nothing has to be created by hand.
+
+Set `TQ_DIR` to point tq at a different task directory, which overrides
+the marker. Set `TQ_WALK_FOREVER=true` to let the search walk past the
+repository root.

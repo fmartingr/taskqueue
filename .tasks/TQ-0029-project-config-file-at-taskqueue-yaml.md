@@ -1,13 +1,13 @@
 ---
 id: TQ-0029
 title: Project config file at .taskqueue.yaml
-status: todo
+status: done
 priority: normal
 labels:
   - component/config
   - feature
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-25T18:42:55+02:00
+updated: 2026-08-25T19:11:32+02:00
 ---
 
 ## Proposal
@@ -104,3 +104,15 @@ the file is two lines.
 ## Notes
 
 - 2026-08-25T18:42:55+02:00 — Impact audit for the move to .taskqueue.yaml. Superseded or re-scoped by the marker: TQ-0058 (TQ_WALK_FOREVER), TQ-0059 (.git file bound), TQ-0062 (shadowed queue), TQ-0064 (projects without Git). Needs reworking in the same change or straight after: TQ-0060 (init exit codes), TQ-0061 (guide pointer base), TQ-0063 (test isolation pins), TQ-0038 (integration harness plants .git), TQ-0066 and TQ-0054 (init docs), TQ-0044 (guide), TQ-0033 (fingerprint must include the marker). Sequencing: six of those are high while this is normal, and doing them first means hardening heuristics this ticket deletes — this should go first, or they should wait for it.
+- 2026-08-25T18:59:23+02:00 — Implemented. config.go holds the marker, its loader and path resolution; discovery and creation both consult it; tq init writes it; GET /api/config exposes it; README and the generated guide describe it.
+- 2026-08-25T18:59:23+02:00 — Decision on the open question about other commands creating the queue: they write the marker too, as the ticket recommended. A queue without its marker is the ambiguity the marker removes, so InitStore writes it wherever it creates a directory, not just under tq init.
+- 2026-08-25T18:59:24+02:00 — Decision on unknown keys: tolerated silently, no warning. The version field is what carries breaking changes, everything else is additive, and tq never rewrites this file, so ignoring what it does not know loses nothing. A test pins that a file with columns and severities still reads.
+- 2026-08-25T18:59:24+02:00 — One case the ticket did not cover: tq init in a directory whose queue was adopted from outside the invoked tree. Writing a marker there would bind that directory to another project's queue for good, so it is skipped under the same ownership rule TQ-0056 applied to the guide, with a note on stderr.
+- 2026-08-25T18:59:24+02:00 — A stat failure walking up is not a broken config: a non-directory on the path just means there is none at that level. Permission errors are still reported, because walking past a config tq cannot read would silently use the wrong queue. Two existing uncreatable-directory tests caught this.
+- 2026-08-25T18:59:24+02:00 — Verified against each acceptance criterion with the built binary: no config behaves as before and creates on demand; init writes version and path and leaves a hand-written file untouched; path moves the queue and is found from a deep subdirectory; TQ_DIR still wins; future version, malformed YAML and the .yml typo each name the file and exit 1, none as a task error; GET /api/config returns version, path, task_dir and file.
+- 2026-08-25T18:59:24+02:00 — This repository has no marker yet, and I did not run tq init here to add one — that is a change to the project's committed files and is the user's call.
+- 2026-08-25T19:08:23+02:00 — Traversal corrected after the user restated the intent. My first cut kept a fallback: no marker meant walking up for a directory named .tasks. That is gone. The marker is the only thing tq looks for, the walk stops at a .git, and TQ_WALK_FOREVER lets it run to the filesystem root.
+- 2026-08-25T19:08:23+02:00 — That removes discovery step 3 from this ticket's own plan. A bare .tasks with no marker above it is not adopted, because the guessing that would take is exactly what the marker replaces.
+- 2026-08-25T19:08:23+02:00 — So that existing projects do not break, InitStore writes the marker for a task directory it merely found as well as one it created. Verified against a copy of this repository, which has 72 tasks and no marker: the first command wrote the marker pointing at .tasks, every task stayed visible, and subdirectories still resolve.
+- 2026-08-25T19:08:23+02:00 — Verified the corrected rule end to end: a bare .tasks above a subdirectory is ignored and the repo root gets its own queue and marker; a marker outside the repository is ignored because the walk stops at .git; and TQ_WALK_FOREVER=true reaches that outer marker instead.
+- 2026-08-25T19:11:32+02:00 — Removed the migration path I had added for projects predating the marker. Nothing is published, so that situation does not exist: InitStore writes the marker only when it makes a queue, and this repository simply carries a committed .taskqueue.yaml like any other project would.

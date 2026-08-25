@@ -984,3 +984,135 @@ func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
 		t.Errorf("Labels = %v, want %d of them", after.Labels, labels)
 	}
 }
+
+// The config is the marker discovery looks for: its path decides where the
+// tasks live, from anywhere in the project.
+func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
+	root := testRoot(t)
+	writeConfig(t, root, "version: 1\npath: docs/queue\n")
+	want := filepath.Join(root, "docs", "queue")
+	if err := os.MkdirAll(want, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "src", "deep")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, err := DiscoverTaskDir(nested)
+	if err != nil {
+		t.Fatalf("DiscoverTaskDir: %v", err)
+	}
+	if dir != want {
+		t.Errorf("dir = %q, want %q", dir, want)
+	}
+}
+
+// A config naming a directory that does not exist yet is not an error: the
+// queue is created where it says.
+func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
+	root := testRoot(t)
+	writeConfig(t, root, "version: 1\npath: docs/queue\n")
+
+	store, err := InitStore(filepath.Join(root, "src"))
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if want := filepath.Join(root, "docs", "queue"); store.Dir != want {
+		t.Errorf("Dir = %q, want %q", store.Dir, want)
+	}
+}
+
+// TQ_DIR is the task directory, full stop — the config's path is ignored.
+func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
+	root := testRoot(t)
+	writeConfig(t, root, "version: 1\npath: from-config\n")
+	override := filepath.Join(root, "from-env")
+	if err := os.MkdirAll(override, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvTaskDir, override)
+
+	dir, err := DiscoverTaskDir(root)
+	if err != nil {
+		t.Fatalf("DiscoverTaskDir: %v", err)
+	}
+	if dir != override {
+		t.Errorf("dir = %q, want the override %q", dir, override)
+	}
+}
+
+// The marker is the only thing tq looks for. A directory that happens to be
+// called .tasks, with no marker above it, is somebody else's business — the
+// guessing it would take to claim it is what the marker replaces.
+func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
+	root := testRoot(t)
+	if err := os.MkdirAll(filepath.Join(root, TaskDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := DiscoverTaskDir(root)
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("err = %v, want ErrProjectNotFound", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), ConfigFileName) {
+		t.Errorf("err = %q, want it to name the file tq looks for", err)
+	}
+}
+
+// A broken config must not read as "no task directory": the caller has to know
+// their file is wrong, not have a queue created somewhere else.
+func TestDiscoverTaskDirReportsABrokenConfig(t *testing.T) {
+	root := testRoot(t)
+	writeConfig(t, root, "version: 99\n")
+
+	_, err := DiscoverTaskDir(root)
+	if !errors.Is(err, ErrConfig) {
+		t.Errorf("err = %v, want it to wrap ErrConfig", err)
+	}
+	if errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("err = %v, must not be reported as a missing task directory", err)
+	}
+}
+
+// Creating a queue leaves the marker behind, so the next command finds it by
+// the file rather than by guessing at directory names.
+func TestInitStoreWritesTheConfigMarker(t *testing.T) {
+	root := testRoot(t)
+
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	cfg, err := FindConfig(root)
+	if err != nil {
+		t.Fatalf("FindConfig: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("no config written")
+	}
+	if cfg.TaskDir() != store.Dir {
+		t.Errorf("config points at %q, want the created %q", cfg.TaskDir(), store.Dir)
+	}
+	if cfg.Version != ConfigVersion {
+		t.Errorf("Version = %d, want %d", cfg.Version, ConfigVersion)
+	}
+}
+
+// The config is the user's file, not a generated one.
+func TestInitStoreLeavesAnExistingConfigAlone(t *testing.T) {
+	root := testRoot(t)
+	body := "version: 1\npath: mine\n# hand written\n"
+	path := writeConfig(t, root, body)
+
+	if _, err := InitStore(root); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != body {
+		t.Errorf("config was rewritten:\ngot:\n%s\nwant:\n%s", after, body)
+	}
+}

@@ -135,18 +135,34 @@ func (c *cli) runInit(args []string) int {
 		return c.fail(err)
 	}
 
-	// Write the guide only into a task directory this project owns. Discovery
-	// has no bound in a project without a repository root, so the store may
-	// belong to somebody else, and .tasks is meant to be committed: writing
-	// there would dirty another repository's working tree.
+	// Only a task directory this project owns gets a marker and a guide.
+	// Discovery has no bound in a project without a repository root, so the
+	// store may belong to somebody else: writing a guide there would dirty
+	// another repository's working tree, and writing a marker here would bind
+	// this directory to their queue for good.
 	var written []string
 	if withinInvokedTree(store.Dir, c.dir) {
-		written, err = SyncAgentsDocs(store)
+		// A queue that predates the marker gets one now: init is the command
+		// that says "this project uses tq", and the file is what later
+		// commands find.
+		if store.ConfigWritten == "" {
+			config, err := writeConfigIfMissing(c.dir, store.Dir)
+			if err != nil {
+				return c.fail(err)
+			}
+			store.ConfigWritten = config
+		}
+		if store.ConfigWritten != "" {
+			written = append(written, store.ConfigWritten)
+		}
+
+		guide, err := SyncAgentsDocs(store)
 		if err != nil {
 			return c.fail(err)
 		}
+		written = append(written, guide...)
 	} else if !*jsonOut {
-		fmt.Fprintf(c.stderr, "note: %s was found above this directory; leaving its guide alone\n", store.Dir)
+		fmt.Fprintf(c.stderr, "note: %s was found above this directory; leaving it and its guide alone\n", store.Dir)
 	}
 
 	if *jsonOut {

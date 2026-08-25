@@ -40,6 +40,7 @@ func newAPIRouter(store *Store) *http.ServeMux {
 	mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
 	mux.HandleFunc("PATCH /api/tasks/{id}", s.handlePatchTask)
 	mux.HandleFunc("POST /api/tasks/{id}/notes", s.handleAddNote)
+	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/version", s.handleVersion)
 
@@ -190,6 +191,29 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+// handleConfig reports the project configuration the board is looking at. The
+// effective values are returned whether or not a config file exists, so the
+// board never has to know the defaults; file is empty when there is none.
+func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	cfg, err := FindConfig(s.store.Dir)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	out := map[string]any{
+		"version":  ConfigVersion,
+		"path":     TaskDirName,
+		"task_dir": s.store.Dir,
+		"file":     "",
+	}
+	if cfg != nil {
+		out["version"] = cfg.Version
+		out["path"] = cfg.Path
+		out["file"] = cfg.File
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {

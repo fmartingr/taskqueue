@@ -401,3 +401,34 @@ func TestAPIRejectsAMultiLineTitle(t *testing.T) {
 		t.Errorf("Title = %q, want it unchanged", after.Title)
 	}
 }
+
+// The board reads the project's configuration through the API, the same file
+// the CLI reads, resolved the same way.
+func TestAPIConfig(t *testing.T) {
+	srv, store := newTestServer(t)
+
+	resp, err := srv.Client().Get(srv.URL + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var got struct {
+		Version int    `json:"version"`
+		Path    string `json:"path"`
+		TaskDir string `json:"task_dir"`
+		File    string `json:"file"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != ConfigVersion {
+		t.Errorf("version = %d, want %d", got.Version, ConfigVersion)
+	}
+	if got.TaskDir != store.Dir {
+		t.Errorf("task_dir = %q, want %q", got.TaskDir, store.Dir)
+	}
+}

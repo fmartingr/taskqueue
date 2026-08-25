@@ -115,16 +115,38 @@ A task is **ready** when it is neither `done` nor `in-progress`, and every task
 in `depends_on` exists and is `done`. A missing dependency blocks a task rather
 than silently making it ready, so a typo shows up as blocked work.
 
-`tq` finds `.tasks/` by walking up from the current directory, so agents can run
-it from any subdirectory, and creates it at the repository root when it does not
-exist yet. The search stops at that same repository root, so a queue in a parent
-directory — a stray `~/.tasks`, say — cannot capture a project that has none of
-its own.
+### Where the tasks live
 
-`TQ_DIR=/path/to/.tasks` overrides both the search and where the directory is
-created. `TQ_WALK_FOREVER=true` lifts the bound instead of replacing it, letting
-the search continue past the repository root to the filesystem root; use it when
-one queue above several repositories is what you want.
+`tq init` writes a marker at the repository root:
+
+```yaml
+# .taskqueue.yaml
+version: 1
+path: .tasks
+```
+
+That file is what `tq` looks for, walking up from the current directory and
+stopping at the repository root, so any subdirectory of the project reaches the
+same queue and a marker outside the repository is none of its business.
+`path` is resolved against the directory holding the config — never against the
+working directory — so the committed file means the same thing on every machine,
+and moving the queue is a one-line edit.
+
+The marker is the only thing `tq` looks for. A directory that happens to be
+called `.tasks`, with no marker above it, is not adopted: guessing at names on
+the way up is exactly what this replaces. You never have to write the file by
+hand, though — the first command that needs a queue creates it and the marker
+together, so a fresh repository still needs no setup step. `tq` never rewrites a
+config you wrote.
+
+`version` only changes on a breaking change; anything else is additive, so a
+file written by a newer `tq` still reads here, and unknown keys are ignored. A
+file declaring a version this binary does not understand is an error that says
+so, rather than a silent partial read.
+
+`TQ_DIR=/path/to/.tasks` overrides the search and `path` alike.
+`TQ_WALK_FOREVER=true` lets the search continue past the repository root, for
+one queue shared above several repositories.
 
 ### Exit codes
 

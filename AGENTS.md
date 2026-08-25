@@ -21,6 +21,7 @@ tq.go          Main entry point and version variable
 cli.go         Commands, flags, human/JSON output, exit codes
 server.go      net/http server, REST API, static serving, tq serve
 store.go       Filesystem store: discovery, atomic writes, ID allocation
+config.go      .taskqueue.yaml: the project marker, its loader and path
 task.go        Task model, validation, filters, dependencies, notes
 frontmatter.go YAML frontmatter parse/render
 embed.go       go:embed public/

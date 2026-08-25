@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/fmartingr/taskqueue/internal/fsx"
 )
 
 // ConfigFileName is the project marker. It sits at the root of the repository,
@@ -152,7 +154,7 @@ func writeConfigIfMissing(startDir, taskDir string) (string, error) {
 		rel = taskDir
 	}
 	body := fmt.Appendf(nil, "version: %d\npath: %s\n", ConfigVersion, filepath.ToSlash(rel))
-	if err := writeAtomic(path, body); err != nil {
+	if err := fsx.WriteAtomic(path, body); err != nil {
 		return "", err
 	}
 	return path, nil

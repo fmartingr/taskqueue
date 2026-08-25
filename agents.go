@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/fmartingr/taskqueue/internal/task"
+
+	"github.com/fmartingr/taskqueue/internal/fsx"
 )
 
 // AgentsFileName is the guide `tq init` keeps inside the task directory, and
@@ -59,41 +61,10 @@ func writeIfChanged(path string, content []byte) (bool, error) {
 	} else if err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
-	if err := writeAtomic(path, content); err != nil {
+	if err := fsx.WriteAtomic(path, content); err != nil {
 		return false, err
 	}
 	return true, nil
-}
-
-// writeAtomic replaces a file in one step, the way Store.write does for task
-// files. These are documents tq did not author, so a truncating write that
-// fails halfway would leave a person's instructions destroyed.
-func writeAtomic(path string, content []byte) (err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tq-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		if err != nil { // leave nothing behind when the write failed
-			_ = tmp.Close()
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	if _, err = tmp.Write(content); err != nil {
-		return err
-	}
-	if err = tmp.Chmod(0o644); err != nil {
-		return err
-	}
-	if err = tmp.Sync(); err != nil {
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }
 
 // taskGuide is the agent-facing cheat sheet stored next to the tasks. It is

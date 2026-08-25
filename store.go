@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,11 @@ var (
 // server on its next request, with no cache to invalidate.
 type Store struct {
 	Dir string
+
+	// mu serialises ID allocation. The HTTP server shares one Store across
+	// handlers, so without it two requests scan the directory, see the same
+	// highest number, and both claim it.
+	mu sync.Mutex
 
 	// Created reports that this call made the task directory, so the CLI can
 	// say where a queue appeared instead of creating one silently.
@@ -337,14 +343,14 @@ func (s *Store) readFile(name string) (Task, error) {
 
 // Create allocates the next ID and writes a new task file.
 func (s *Store) Create(in CreateTaskInput) (Task, error) {
-	id, err := s.NextID()
-	if err != nil {
-		return Task{}, err
-	}
+	// Allocating a number and claiming it must happen together, or a
+	// concurrent caller allocates the same one. A task sharing its ID with
+	// another is unreachable: locate refuses to guess between them.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	now := time.Now().Truncate(time.Second)
 	task := Task{
-		ID:        id,
 		Title:     strings.TrimSpace(in.Title),
 		Status:    orDefault(in.Status, StatusTodo),
 		Priority:  orDefault(in.Priority, PriorityNormal),
@@ -355,13 +361,26 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 		Updated:   now,
 		Body:      strings.Trim(in.Body, "\n"),
 	}
-	if err := task.ValidateForWrite(); err != nil {
-		return Task{}, err
+	// Another process shares no mutex with this one, so the claim can still
+	// fail. Take the next free number rather than replacing its file.
+	for attempt := 0; attempt < createAttempts; attempt++ {
+		id, err := s.NextID()
+		if err != nil {
+			return Task{}, err
+		}
+		task.ID = id
+		if err := task.ValidateForWrite(); err != nil {
+			return Task{}, err
+		}
+		if _, err := s.writeNew(task); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return Task{}, err
+		}
+		return task, nil
 	}
-	if _, err := s.write(task); err != nil {
-		return Task{}, err
-	}
-	return task, nil
+	return Task{}, fmt.Errorf("could not claim a task ID after %d attempts", createAttempts)
 }
 
 // Update rewrites an existing task and refreshes its updated timestamp. The
@@ -462,7 +481,14 @@ func (s *Store) NextID() (string, error) {
 
 // write renders the task and replaces the destination file atomically, so a
 // crash mid-write can never leave a half-written task on disk.
-func (s *Store) write(task Task) (name string, err error) {
+// createAttempts bounds the retry when another process claims the ID first.
+// Each attempt rescans, so the number only rises; this is a guard against a
+// pathological loop, not an expected path.
+const createAttempts = 10
+
+// stage renders a task into a temporary file beside the tasks and returns its
+// path. The caller moves it into place, or removes it.
+func (s *Store) stage(task Task) (path string, err error) {
 	data, err := RenderTask(task)
 	if err != nil {
 		return "", err
@@ -493,8 +519,35 @@ func (s *Store) write(task Task) (name string, err error) {
 		return "", err
 	}
 
-	name = TaskFileName(task)
-	if err = os.Rename(tmpName, filepath.Join(s.Dir, name)); err != nil {
+	return tmpName, nil
+}
+
+// write puts a task on disk, replacing whatever was at its filename.
+func (s *Store) write(task Task) (string, error) {
+	tmpName, err := s.stage(task)
+	if err != nil {
+		return "", err
+	}
+	name := TaskFileName(task)
+	if err := os.Rename(tmpName, filepath.Join(s.Dir, name)); err != nil {
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	return name, nil
+}
+
+// writeNew is write for a task that must not exist yet. Linking fails when the
+// name is taken, where renaming would replace the file — and the file it would
+// replace is another task nobody asked to lose.
+func (s *Store) writeNew(task Task) (string, error) {
+	tmpName, err := s.stage(task)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(tmpName) }()
+
+	name := TaskFileName(task)
+	if err := os.Link(tmpName, filepath.Join(s.Dir, name)); err != nil {
 		return "", err
 	}
 	return name, nil

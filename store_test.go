@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -847,5 +849,81 @@ func TestFixturesStayInsideTempDirWhenTMPDIRIsInARepository(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("the fixture wrote into the repository's queue: %d entries", len(entries))
+	}
+}
+
+// The HTTP server hands one *Store to net/http, so concurrent handlers share
+// it. Allocating an ID by scanning the directory and writing later gives every
+// racer the same number, and a task that shares its ID with another is
+// unreachable: locate refuses to guess between them.
+func TestCreateUnderConcurrencyGivesEveryTaskItsOwnID(t *testing.T) {
+	store := newTestStore(t)
+
+	const racers = 20
+	var wg sync.WaitGroup
+	ids := make([]string, racers)
+	errs := make([]error, racers)
+
+	for i := range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			task, err := store.Create(CreateTaskInput{Title: fmt.Sprintf("task %d", i)})
+			ids[i], errs[i] = task.ID, err
+		}()
+	}
+	wg.Wait()
+
+	seen := make(map[string]int, racers)
+	for i, id := range ids {
+		if errs[i] != nil {
+			t.Fatalf("Create: %v", errs[i])
+		}
+		seen[id]++
+	}
+	if len(seen) != racers {
+		t.Errorf("got %d distinct ids from %d creates: %v", len(seen), racers, seen)
+	}
+
+	// Every task must still be reachable by its ID.
+	for _, id := range ids {
+		if _, err := store.Get(id); err != nil {
+			t.Errorf("Get(%s): %v", id, err)
+		}
+	}
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != racers {
+		t.Errorf("List() = %d tasks, want %d", len(tasks), racers)
+	}
+}
+
+// Racers sharing a title used to produce the same filename, so the second
+// rename replaced the first and a task vanished behind a successful return.
+func TestCreateUnderConcurrencyKeepsTasksWithTheSameTitle(t *testing.T) {
+	store := newTestStore(t)
+
+	const racers = 10
+	var wg sync.WaitGroup
+	for range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := store.Create(CreateTaskInput{Title: "same title"}); err != nil {
+				t.Errorf("Create: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != racers {
+		t.Errorf("List() = %d tasks, want %d: a create was lost", len(tasks), racers)
 	}
 }

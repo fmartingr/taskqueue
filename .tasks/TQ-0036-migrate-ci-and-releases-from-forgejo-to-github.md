@@ -7,7 +7,7 @@ labels:
   - ci
   - build
 created: 2026-08-25T12:13:06+02:00
-updated: 2026-08-25T12:13:06+02:00
+updated: 2026-08-25T12:13:36+02:00
 ---
 
 ## Why
@@ -81,3 +81,7 @@ so in the README, because `go install` from the GitHub path will not work.
 - No `git.nakama.town`, `gitea` or `FORGEJO_TOKEN` reference remains in the
   workflows or in `.goreleaser.yml`, and the module-path decision is recorded in
   the README either way.
+
+## Notes
+
+- 2026-08-25T12:13:36+02:00 — The README in the working tree now advertises 'go install github.com/fmartingr/task-queue@latest', which settles the module-path question: go.mod still says git.nakama.town/fmartingr/task-queue, and that go install command fails until it matches the repository. Treat the module path rename as required work in this ticket, not an option.

@@ -173,7 +173,6 @@ button.ghost {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 160px;
   padding: 10px;
   background: var(--surface-alt);
   border: 1px solid transparent;
@@ -210,7 +209,13 @@ button.ghost {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 40px;
+}
+
+/* An empty column is just its header and the composer: without this the
+   zero-height list still claims a gap on both sides. Dropping is unaffected,
+   the whole column is the drop target. */
+.column-tasks:empty {
+  display: none;
 }
 
 /* ── Quick add ───────────────────────────────────────────────── */

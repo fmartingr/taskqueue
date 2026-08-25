@@ -9,7 +9,7 @@ files are the only source of truth.
 
 ## Tech stack
 
-- **Backend**: Go (standard library, plus `gopkg.in/yaml.v3` for frontmatter)
+- **Backend**: Go (standard library as much as possible)
 - **Frontend**: vanilla TypeScript + CSS, built with Bun, embedded via `go:embed`
   (no JavaScript dependencies at all, so there is no lockfile to commit)
 - **Layout**: one `package main` at the repository root, flat files by responsibility

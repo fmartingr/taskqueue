@@ -7,7 +7,7 @@ labels:
   - tests
   - bug
 created: 2026-08-25T17:45:14+02:00
-updated: 2026-08-25T17:45:14+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -48,3 +48,9 @@ TQ-0056's test uses. Then restore the dropped repository-root case, tighten the
 loose assertions to exact strings, and assert preconditions.
 
 Found by `/code-review` over 20b06d2; mutation-verified here.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — TQ-0029 makes 'no Git' stop being a special configuration: the marker anchors discovery whether or not .git exists. Recheck which fixture configurations are still worth restoring once it lands.

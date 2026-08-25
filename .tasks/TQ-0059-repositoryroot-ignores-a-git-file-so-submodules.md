@@ -7,7 +7,7 @@ labels:
   - bug
   - component/store
 created: 2026-08-25T17:44:26+02:00
-updated: 2026-08-25T17:44:26+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -35,3 +35,9 @@ look through to the superproject — then cover both `.git` shapes in the
 fixtures. Confirm the reported behaviour first.
 
 Found by `/code-review` over 20b06d2.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — TQ-0029 moves the source of truth to a .taskqueue.yaml marker, so discovery stops bounding on .git. What survives here is whatever still calls repositoryRoot — the creation target and where the guide is written — so re-measure the blast radius after TQ-0029 instead of hardening the .git bound as it stands.

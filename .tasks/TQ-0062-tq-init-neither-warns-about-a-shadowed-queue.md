@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T17:44:51+02:00
-updated: 2026-08-25T17:44:51+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -35,3 +35,9 @@ reports. Then decide whether init should prefer the repository root over a
 nearer stray directory, which is a behaviour question rather than a bug.
 
 Found by `/code-review` over 20b06d2.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — 'Shadowed' is currently defined by the .git bound. After TQ-0029 it becomes 'a marker above, a stray .tasks here', which is a different and much clearer check. Re-scope once the marker exists.

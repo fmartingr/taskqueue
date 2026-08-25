@@ -8,7 +8,7 @@ labels:
   - component/frontend
   - feature
 created: 2026-08-25T12:07:30+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## How the board updates today
@@ -106,3 +106,9 @@ change and keep the rules honest.
 - With the stream unavailable the board still updates on the fallback poll.
 - Repeated connect/disconnect shows no goroutine or memory growth (test).
 - Docs and architecture rules updated in the same change.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — The change fingerprint has to cover .taskqueue.yaml as well as the task directory (TQ-0034 builds on it), so the marker's own edits reach the board.

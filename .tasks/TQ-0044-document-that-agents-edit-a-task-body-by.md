@@ -7,7 +7,7 @@ labels:
   - docs
   - component/cli
 created: 2026-08-25T13:45:10+02:00
-updated: 2026-08-25T13:53:59+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -53,3 +53,4 @@ CLI" rule whole.
 ## Notes
 
 - 2026-08-25T13:53:59+02:00 — Line one. - bullet a - bullet b
+- 2026-08-25T18:42:55+02:00 — Once TQ-0029 lands the guide should also point at .taskqueue.yaml and explain path:, since that is where an agent learns which directory holds the tasks.

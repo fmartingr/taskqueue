@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T17:44:51+02:00
-updated: 2026-08-25T17:44:51+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -36,3 +36,9 @@ directory" — then make the message agree with it and pin init with a test.
 Whichever way it goes, record the decision, because this is a contract.
 
 Found by `/code-review` over 20b06d2.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — tq init will also write .taskqueue.yaml (TQ-0029), which adds a second failure to classify: an unusable task directory and an unwritable config. Settle the exit-code mapping for both in one go.

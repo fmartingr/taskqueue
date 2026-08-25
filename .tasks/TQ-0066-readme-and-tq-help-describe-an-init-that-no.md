@@ -7,7 +7,7 @@ labels:
   - docs
   - component/cli
 created: 2026-08-25T17:45:33+02:00
-updated: 2026-08-25T17:47:31+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -43,3 +43,4 @@ Found by `/code-review` over 20b06d2.
 ## Notes
 
 - 2026-08-25T17:47:31+02:00 — Sharpened by rejecting TQ-0057: adoption in a project without a repository root is now accepted behaviour, not a bug awaiting a fix. The README sentence claiming a parent queue cannot capture such a project is therefore permanently false and must be rewritten to describe what tq actually does.
+- 2026-08-25T18:42:55+02:00 — Write this after TQ-0029 or it documents an init that changes again: the marker, path:, and what init writes are one story.

@@ -7,7 +7,7 @@ labels:
   - bug
   - component/cli
 created: 2026-08-25T17:44:51+02:00
-updated: 2026-08-25T17:44:51+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -42,3 +42,9 @@ Introduced by TQ-0055. The fallback branch has no coverage: the assertion in
 why the output changed inside TQ-0023 with no test diff.
 
 Found by `/code-review` over 20b06d2.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — After TQ-0029 the pointer has an unambiguous base — the directory holding .taskqueue.yaml — instead of being inferred from the guide's own location. This fix likely collapses into that one; sequence it after, not before.

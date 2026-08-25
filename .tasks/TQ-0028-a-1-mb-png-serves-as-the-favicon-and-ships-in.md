@@ -1,13 +1,13 @@
 ---
 id: TQ-0028
 title: A 1 MB PNG serves as the favicon and ships in every binary
-status: todo
+status: in-progress
 priority: low
 labels:
   - component/build
   - performance
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T18:42:42+02:00
 ---
 
 ## Finding

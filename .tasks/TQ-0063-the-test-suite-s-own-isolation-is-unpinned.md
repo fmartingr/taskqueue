@@ -7,7 +7,7 @@ labels:
   - tests
   - bug
 created: 2026-08-25T17:45:14+02:00
-updated: 2026-08-25T17:45:14+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Finding
@@ -45,3 +45,9 @@ Assert on where the store landed rather than on environment variables. Take a
 snapshot of the environment at init so `isolate()` itself can be pinned.
 
 Found by `/code-review` over 20b06d2.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — Pin the isolation against marker-based discovery (TQ-0029), not the .git bound, or the pins land on a mechanism that is about to be replaced.

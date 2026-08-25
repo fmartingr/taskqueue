@@ -8,7 +8,7 @@ labels:
   - component/cli
   - component/ci
 created: 2026-08-25T12:25:12+02:00
-updated: 2026-08-25T12:25:12+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Why
@@ -116,3 +116,9 @@ with no new dependency — worth doing, also separately. This ticket stays Go.
   misbehaves (check by breaking something on purpose).
 - A CI job runs them. If TQ-0036 has not landed yet, add the job in whichever
   workflow format is current and move it with the rest.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — The harness plants a .git marker to bound discovery. After TQ-0029 it should plant .taskqueue.yaml instead — closer to what a real project has, and independent of Git.

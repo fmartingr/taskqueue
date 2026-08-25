@@ -7,7 +7,7 @@ labels:
   - component/config
   - feature
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-25T18:37:59+02:00
+updated: 2026-08-25T18:42:55+02:00
 ---
 
 ## Proposal
@@ -98,3 +98,9 @@ the file is two lines.
 - CLI and server share one loader, and `GET /api/config` returns it as JSON.
 - README and the generated `.tasks/AGENTS.md` describe the file and its
   location.
+
+---
+
+## Notes
+
+- 2026-08-25T18:42:55+02:00 — Impact audit for the move to .taskqueue.yaml. Superseded or re-scoped by the marker: TQ-0058 (TQ_WALK_FOREVER), TQ-0059 (.git file bound), TQ-0062 (shadowed queue), TQ-0064 (projects without Git). Needs reworking in the same change or straight after: TQ-0060 (init exit codes), TQ-0061 (guide pointer base), TQ-0063 (test isolation pins), TQ-0038 (integration harness plants .git), TQ-0066 and TQ-0054 (init docs), TQ-0044 (guide), TQ-0033 (fingerprint must include the marker). Sequencing: six of those are high while this is normal, and doing them first means hardening heuristics this ticket deletes — this should go first, or they should wait for it.

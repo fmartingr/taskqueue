@@ -385,7 +385,52 @@ func (s *Store) Create(in CreateTaskInput) (Task, error) {
 
 // Update rewrites an existing task and refreshes its updated timestamp. The
 // returned task is exactly what was written to disk.
+// Update saves a task the caller has already read and changed. It is
+// last-write-wins by nature: two callers that read the same version both write
+// their whole copy. Use Mutate when the change depends on what is there.
 func (s *Store) Update(task Task) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.update(task)
+}
+
+// Mutate reads a task, applies a change and saves it, holding the lock across
+// all three. A read-modify-write split across Get and Update loses everything
+// the other caller did; an append like a note loses information nobody can
+// reconstruct.
+func (s *Store) Mutate(id string, apply func(*Task) error) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, err := s.Get(id)
+	if err != nil {
+		return Task{}, err
+	}
+	if err := apply(&task); err != nil {
+		return Task{}, err
+	}
+	return s.update(task)
+}
+
+// Patch applies a change to a task and saves it in one step. Adding a label or
+// a dependency is an append, so a caller doing this through Get and Update
+// loses whatever another caller added in between.
+func (s *Store) Patch(id string, patch TaskPatch) (Task, error) {
+	return s.Mutate(id, func(task *Task) error {
+		*task = ApplyPatch(*task, patch)
+		return nil
+	})
+}
+
+// Note appends a timestamped note to a task and saves it in one step.
+func (s *Store) Note(id, text string) (Task, error) {
+	return s.Mutate(id, func(task *Task) error {
+		task.Body = AppendNote(task.Body, text, time.Now().Truncate(time.Second))
+		return nil
+	})
+}
+
+func (s *Store) update(task Task) (Task, error) {
 	current, err := s.locate(task.ID)
 	if err != nil {
 		return Task{}, err

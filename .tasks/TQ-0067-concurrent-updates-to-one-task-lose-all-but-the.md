@@ -1,13 +1,13 @@
 ---
 id: TQ-0067
 title: Concurrent updates to one task lose all but the last write
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/store
 created: 2026-08-25T18:04:35+02:00
-updated: 2026-08-25T18:04:35+02:00
+updated: 2026-08-25T18:16:08+02:00
 ---
 
 ## Finding
@@ -42,3 +42,13 @@ Cross-process races remain the documented limitation.
 
 Distinct from TQ-0008, which was ID allocation: this survives that fix.
 Found while implementing it.
+
+---
+
+## Notes
+
+- 2026-08-25T18:16:07+02:00 — Reproduced both losses first: ten concurrent notes on one task kept 1, and ten concurrent label adds kept 1.
+- 2026-08-25T18:16:08+02:00 — Fixed by closing the round trip inside the store, as the ticket suggested. Mutate holds the lock across the read, the change and the write; Note and Patch are built on it. The CLI and the HTTP handlers now call those instead of doing Get, change, Update themselves, so the racy sequence is no longer reachable from either surface.
+- 2026-08-25T18:16:08+02:00 — Update keeps its old shape and now takes the lock, but it stays last-write-wins by nature: the caller already read the task outside it. Its doc comment says so and points at Mutate.
+- 2026-08-25T18:16:08+02:00 — Verified against a live tq serve: ten concurrent note requests kept all ten, where the probe that opened this ticket kept one. Mutation-checked by removing the lock from Mutate, which loses notes again.
+- 2026-08-25T18:16:08+02:00 — Scope note: this covers one process, which is the server and anything embedding the store. Ten separate tq processes racing still lose, and that stays the documented cross-process limitation carried over from TQ-0008.

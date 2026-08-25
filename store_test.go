@@ -927,3 +927,60 @@ func TestCreateUnderConcurrencyKeepsTasksWithTheSameTitle(t *testing.T) {
 		t.Errorf("List() = %d tasks, want %d: a create was lost", len(tasks), racers)
 	}
 }
+
+// A note is an append, so a lost one is information nobody can reconstruct.
+// Two agents working the same task is what the queue exists for.
+func TestNoteUnderConcurrencyKeepsEveryNote(t *testing.T) {
+	store := newTestStore(t)
+	task := mustCreate(t, store, CreateTaskInput{Title: "probe"})
+
+	const notes = 10
+	var wg sync.WaitGroup
+	for i := range notes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := store.Note(task.ID, fmt.Sprintf("note %d", i)); err != nil {
+				t.Errorf("Note: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	after, err := store.Get(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range notes {
+		if want := fmt.Sprintf("note %d", i); !strings.Contains(after.Body, want) {
+			t.Errorf("%q was lost:\n%s", want, after.Body)
+		}
+	}
+}
+
+// --add-label is an append too, so concurrent patches must not lose one.
+func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
+	store := newTestStore(t)
+	task := mustCreate(t, store, CreateTaskInput{Title: "probe"})
+
+	const labels = 10
+	var wg sync.WaitGroup
+	for i := range labels {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := store.Patch(task.ID, TaskPatch{AddLabels: []string{fmt.Sprintf("label-%d", i)}}); err != nil {
+				t.Errorf("Patch: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	after, err := store.Get(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Labels) != labels {
+		t.Errorf("Labels = %v, want %d of them", after.Labels, labels)
+	}
+}

@@ -457,11 +457,7 @@ func (c *cli) runUpdate(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	task, err := store.Get(positional[0])
-	if err != nil {
-		return c.fail(err)
-	}
-	task, err = store.Update(ApplyPatch(task, patch))
+	task, err := store.Patch(positional[0], patch)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -490,13 +486,7 @@ func (c *cli) runNote(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	task, err := store.Get(positional[0])
-	if err != nil {
-		return c.fail(err)
-	}
-
-	task.Body = AppendNote(task.Body, text, time.Now().Truncate(time.Second))
-	task, err = store.Update(task)
+	task, err := store.Note(positional[0], text)
 	if err != nil {
 		return c.fail(err)
 	}

@@ -163,12 +163,7 @@ func (s *server) handlePatchTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.store.Get(r.PathValue("id"))
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	task, err = s.store.Update(ApplyPatch(task, patch))
+	task, err := s.store.Patch(r.PathValue("id"), patch)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -189,13 +184,7 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.store.Get(r.PathValue("id"))
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	task.Body = AppendNote(task.Body, text, time.Now().Truncate(time.Second))
-	task, err = s.store.Update(task)
+	task, err := s.store.Note(r.PathValue("id"), text)
 	if err != nil {
 		writeStoreError(w, err)
 		return

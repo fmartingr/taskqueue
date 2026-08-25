@@ -603,6 +603,19 @@ func (c *cli) filterFlags(fs *flag.FlagSet, withStatus bool) (*task.Filter, *boo
 // ok is false when the command must stop — help was printed, parsing failed, or
 // the argument count is wrong — and code is what tq should exit with.
 func (c *cli) parse(fs *flag.FlagSet, args []string, want int) (positional []string, code int, ok bool) {
+	// Everything after a "--" is an argument, whatever it looks like. Split it
+	// off before parsing: the loop below re-feeds what flag.Parse hands back,
+	// which would re-enable flag parsing and leave the guarantee true only for
+	// the first argument after the terminator.
+	var terminated []string
+	for i, arg := range args {
+		if arg == "--" {
+			terminated = args[i+1:]
+			args = args[:i]
+			break
+		}
+	}
+
 	for {
 		if err := fs.Parse(args); err != nil {
 			if errors.Is(err, flag.ErrHelp) { // -h/--help: usage was already printed
@@ -620,6 +633,7 @@ func (c *cli) parse(fs *flag.FlagSet, args []string, want int) (positional []str
 		positional = append(positional, rest[0])
 		args = rest[1:]
 	}
+	positional = append(positional, terminated...)
 
 	if len(positional) != want {
 		fmt.Fprintf(c.stderr, "error: %s expects %d argument(s), got %d (quote arguments that contain spaces)\n",

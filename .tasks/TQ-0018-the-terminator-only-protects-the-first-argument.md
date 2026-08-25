@@ -1,13 +1,13 @@
 ---
 id: TQ-0018
 title: The -- terminator only protects the first argument
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/cli
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-25T21:34:38+02:00
 ---
 
 ## Finding
@@ -25,3 +25,10 @@ I verified both directions. `tq note -- TQ-0001 "-1 failing"` — the form the c
 Once `--` is seen, treat every remaining argument as positional instead of re-entering flag parsing on the next iteration.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-25T21:34:38+02:00 — Fixed while adding the integration coverage in TQ-0073, which is the layer that proves it. parse now splits everything after -- off before parsing, instead of re-feeding what flag.Parse returns, which re-enabled flag parsing on every later argument.
+- 2026-08-25T21:34:38+02:00 — Both directions verified against the real binary: tq note -- TQ-0001 '-1 test still failing' now exits 0 and keeps the note, and tq add -- '-weird title' --json now fails as two positionals rather than honouring --json.

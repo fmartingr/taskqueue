@@ -1,7 +1,7 @@
 ---
 id: TQ-0073
 title: 'Integration coverage: the surfaces the harness does not reach yet'
-status: todo
+status: in-progress
 priority: normal
 labels:
   - tests
@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0038
 created: 2026-08-25T20:12:25+02:00
-updated: 2026-08-25T20:12:43+02:00
+updated: 2026-08-25T21:33:04+02:00
 ---
 
 ## Why

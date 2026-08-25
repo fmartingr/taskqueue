@@ -1022,3 +1022,22 @@ func TestCLIServePrintsTheAddressItActuallyGot(t *testing.T) {
 		t.Fatal("serve did not shut down")
 	}
 }
+
+// The terminator's guarantee has to hold for every argument after it, not just
+// the first: the parse loop used to re-feed the rest through flag.Parse.
+func TestCLITerminatorProtectsEveryArgumentAfterIt(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "a task")
+
+	tc.reset()
+	if code := tc.run("note", "--", "TQ-0001", "-1 test still failing"); code != exitOK {
+		t.Errorf("exit = %d, want 0: both arguments are after the terminator\nstderr: %s", code, tc.stderr)
+	}
+
+	// And the inverse: a flag written after "--" is an argument, so this is a
+	// second positional and the command must refuse it.
+	tc.reset()
+	if code := tc.run("add", "--", "-weird title", "--json"); code == exitOK {
+		t.Errorf("exit = 0, want a failure: --json after -- is an argument, not a flag")
+	}
+}

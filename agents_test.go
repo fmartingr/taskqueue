@@ -241,3 +241,40 @@ func TestCLIInitWritesAgentDocs(t *testing.T) {
 		t.Errorf("nothing should be rewritten on a second init, got %q", out)
 	}
 }
+
+// The guide has to read as a workflow, not a menu: an agent that follows it
+// top to bottom claims a task before editing and closes it before reporting
+// the work done. Numbering the commands is what carries that.
+func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
+	guide := string(taskGuide(filepath.Join("project", ".tasks")))
+
+	// The framing carries as much as the numbering: without these the steps
+	// read as a menu again.
+	for _, want := range []string{
+		"## Working a task",
+		"Claim a task before the first edit and close it before you report the work",
+		"`tq note <id> \"what happened\"`",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("guide is missing %q", want)
+		}
+	}
+
+	at := -1
+	for _, step := range []string{
+		"1. `tq ready --json`",
+		"2. `tq show <id> --json`",
+		"3. `tq move <id> in-progress`",
+		"4. `tq note <id> \"what happened\"`",
+		"5. `tq done <id>`",
+	} {
+		i := strings.Index(guide, step)
+		if i < 0 {
+			t.Fatalf("guide is missing the step %q", step)
+		}
+		if i < at {
+			t.Errorf("step %q is out of lifecycle order", step)
+		}
+		at = i
+	}
+}

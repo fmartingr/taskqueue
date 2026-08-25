@@ -10,17 +10,20 @@ Use the CLI rather than editing files by hand — it validates, keeps timestamps
 and filenames in sync, and writes atomically. Every command below works from any
 subdirectory of the repository.
 
-## Pick up work
+## Working a task
 
-    tq ready --json                 tasks that are unblocked and unclaimed
-    tq show <id> --json             the full task, body included
-    tq move <id> in-progress        claim it
+Claim a task before the first edit and close it before you report the work
+done. These are steps in the task, not bookkeeping around it.
 
-## Report progress
+1. `tq ready --json` — the tasks that are unblocked and unclaimed.
+2. `tq show <id> --json` — read it in full, body included.
+3. `tq move <id> in-progress` — claim it, before you touch a file.
+4. `tq note <id> "what happened"` — append a timestamped note as you go:
+   decisions, surprises, anything the next reader would need. One note per
+   point; each becomes a single line.
+5. `tq done <id>` — close it once the work is verified.
 
-    tq note <id> "what happened"    append a timestamped note
-    tq done <id>                    finish it
-    tq move <id> <status>           any other transition
+Use `tq move <id> <status>` for any other transition.
 
 ## Find things
 

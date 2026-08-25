@@ -49,6 +49,14 @@ func SyncAgentsDocs(store *Store, workingDir string) ([]string, error) {
 
 	for _, name := range rootDocNames {
 		path := filepath.Join(root, name)
+		if sameFile(path, guide) {
+			// The task directory is the doc root, so this file is the guide
+			// itself. A document cannot point at itself: appending the section
+			// would bury the guide under it, and the next run would strip the
+			// section and append it again, forever.
+			continue
+		}
+
 		existing, err := os.ReadFile(path)
 		if err != nil {
 			if !os.IsNotExist(err) {
@@ -100,6 +108,25 @@ func containsAnyRootDoc(root string) bool {
 		}
 	}
 	return false
+}
+
+// sameFile reports whether two paths lead to the same file. One of them comes
+// from TQ_DIR and the other from the repository root, so they can differ as
+// strings and still name one file — through a symlink, or on a
+// case-insensitive filesystem. Paths that cannot be stat'ed are compared
+// literally, which is all that is left to go on.
+func sameFile(a, b string) bool {
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+	if errA == nil && errB == nil {
+		return os.SameFile(infoA, infoB)
+	}
+	if errA == nil || errB == nil {
+		return false // one exists and the other does not
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && absA == absB
 }
 
 func writeIfChanged(path string, content []byte) (bool, error) {

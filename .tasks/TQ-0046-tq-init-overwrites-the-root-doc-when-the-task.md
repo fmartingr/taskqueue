@@ -1,13 +1,13 @@
 ---
 id: TQ-0046
 title: tq init overwrites the root doc when the task dir is the repo root, and never converges
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/cli
 created: 2026-08-25T13:55:55+02:00
-updated: 2026-08-25T13:55:55+02:00
+updated: 2026-08-25T14:07:15+02:00
 ---
 
 ## Finding
@@ -42,3 +42,11 @@ skip the ones that are the same file.
 
 Distinct from TQ-0043 (`docRoot` ignoring `TQ_DIR`) and survives fixing it.
 Found by `/code-review` on TQ-0041; reproduced by hand.
+
+---
+
+## Notes
+
+- 2026-08-25T14:06:47+02:00 — Fixed by a path-identity check: SyncAgentsDocs now skips any root doc that is the same file as the guide it just wrote.
+- 2026-08-25T14:06:47+02:00 — The check is os.SameFile, not a string compare, because TQ_DIR and the discovered doc root can name one file by two paths (symlink, case-insensitive FS); it falls back to comparing absolute paths only when neither file exists.
+- 2026-08-25T14:06:47+02:00 — Reproduced the ticket in a throwaway git repo with a binary built outside this repo: run 1 now writes the guide and CLAUDE.md once each, runs 2 and 3 write nothing, and CLAUDE.md keeps its hand-written content plus a See [AGENTS.md](AGENTS.md) pointer.

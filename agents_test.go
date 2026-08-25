@@ -192,6 +192,115 @@ func TestSyncAgentsDocsLinksToTheConfiguredTaskDir(t *testing.T) {
 	}
 }
 
+// A task directory that is the repository root makes the guide and the root
+// document one and the same file. Pointing a document at itself would both
+// bury the guide under a self-referential section and never settle: the guide
+// write drops the section, the pointer write puts it back, forever.
+func TestSyncAgentsDocsSkipsARootDocThatIsTheGuide(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvTaskDir, root)
+
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Dir != root {
+		t.Fatalf("store.Dir = %q, want the repository root %q", store.Dir, root)
+	}
+
+	guide := filepath.Join(root, AgentsFileName)
+	written, err := SyncAgentsDocs(store, root)
+	if err != nil {
+		t.Fatalf("SyncAgentsDocs: %v", err)
+	}
+	if len(written) != 1 || written[0] != guide {
+		t.Errorf("written = %v, want the guide %q once", written, guide)
+	}
+
+	doc, err := os.ReadFile(guide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(doc) != string(taskGuide(store.Dir)) {
+		t.Errorf("the guide should not gain a pointer to itself:\n%s", doc)
+	}
+
+	// Run 2 has nothing left to do.
+	written, err = SyncAgentsDocs(store, root)
+	if err != nil {
+		t.Fatalf("second SyncAgentsDocs: %v", err)
+	}
+	if len(written) != 0 {
+		t.Errorf("written = %v, want nothing on a second run", written)
+	}
+}
+
+// The same file can be reached by two different paths, so the identity check
+// cannot be a string comparison: here TQ_DIR goes through a symlink and the
+// doc root does not.
+func TestSyncAgentsDocsSkipsARootDocReachedThroughASymlink(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(t.TempDir(), "queue")
+	if err := os.Symlink(root, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv(EnvTaskDir, link)
+
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := SyncAgentsDocs(store, root); err != nil {
+		t.Fatalf("SyncAgentsDocs: %v", err)
+	}
+	doc, err := os.ReadFile(filepath.Join(root, AgentsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(doc), taskSectionTitle) {
+		t.Errorf("the guide should not gain a pointer to itself:\n%s", doc)
+	}
+
+	written, err := SyncAgentsDocs(store, root)
+	if err != nil {
+		t.Fatalf("second SyncAgentsDocs: %v", err)
+	}
+	if len(written) != 0 {
+		t.Errorf("written = %v, want nothing on a second run", written)
+	}
+}
+
+// Only the guide itself is exempt: a second root document beside it is still
+// pointed at the guide, and by the path it actually sits at.
+func TestSyncAgentsDocsPointsASiblingDocAtAGuideInTheRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(EnvTaskDir, root)
+
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := "# Project\n\nSome instructions.\n"
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := SyncAgentsDocs(store, root); err != nil {
+		t.Fatalf("SyncAgentsDocs: %v", err)
+	}
+	doc, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(doc), existing) {
+		t.Errorf("CLAUDE.md lost its original content:\n%s", doc)
+	}
+	if !strings.Contains(string(doc), "## Task management\n\nSee [AGENTS.md](AGENTS.md)") {
+		t.Errorf("CLAUDE.md should point at the guide beside it:\n%s", doc)
+	}
+}
+
 func TestSyncAgentsDocsUsesTheRepositoryRoot(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {

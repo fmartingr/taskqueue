@@ -804,6 +804,10 @@ func (c *cli) runServe(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
+	// Ends the event streams and the scan behind them. Deferred for the paths
+	// that never reach the signal handler below, and idempotent so both can
+	// call it.
+	defer func() { _ = handler.Close() }()
 
 	addr := net.JoinHostPort(*host, *port)
 	httpServer := &http.Server{
@@ -836,6 +840,11 @@ func (c *cli) runServe(args []string) int {
 	shutdown := make(chan struct{})
 	go func() {
 		<-signals
+		// The event streams close first. Shutdown waits for handlers to
+		// return, and a stream is a request that never finishes on its own, so
+		// leaving them open would hold shutdown until the timeout expired.
+		_ = handler.Close()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(ctx); err != nil {

@@ -5447,6 +5447,67 @@ function describe(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// frontend/events.ts
+var RECONNECT_MIN_MS = 500;
+var RECONNECT_MAX_MS = 15000;
+function backoffDelay(attempt) {
+  if (attempt <= 0)
+    return RECONNECT_MIN_MS;
+  const grown = RECONNECT_MIN_MS * 2 ** attempt;
+  return Number.isFinite(grown) ? Math.min(grown, RECONNECT_MAX_MS) : RECONNECT_MAX_MS;
+}
+var SILENCE_TIMEOUT_MS = 65000;
+function connectEvents(handlers, url = "/api/events") {
+  let source = null;
+  let timer;
+  let watchdog;
+  let attempt = 0;
+  let stopped = false;
+  const drop = () => {
+    clearTimeout(watchdog);
+    source?.close();
+    source = null;
+    handlers.onConnected(false);
+    if (stopped)
+      return;
+    timer = setTimeout(open, backoffDelay(attempt));
+    attempt += 1;
+  };
+  const heard = () => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(drop, SILENCE_TIMEOUT_MS);
+  };
+  const open = () => {
+    if (stopped)
+      return;
+    source = new EventSource(url);
+    heard();
+    source.addEventListener("open", () => {
+      attempt = 0;
+      heard();
+      handlers.onConnected(true);
+    });
+    source.addEventListener("ping", heard);
+    source.addEventListener("tasks", () => {
+      heard();
+      handlers.onTasks();
+    });
+    source.addEventListener("scan-failed", (message) => {
+      heard();
+      handlers.onScanFailed(message.data);
+    });
+    source.addEventListener("error", drop);
+  };
+  open();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    clearTimeout(watchdog);
+    source?.close();
+    source = null;
+  };
+}
+
 // frontend/board.ts
 var STATUSES = ["backlog", "todo", "in-progress", "done"];
 function indexTasks(tasks) {
@@ -5578,6 +5639,8 @@ var priorities = ref(FALLBACK_PRIORITIES);
 var taskDir = ref("");
 var version2 = ref("");
 var loaded = ref(false);
+var streaming = ref(null);
+var stale = ref(false);
 var index = computed2(() => indexTasks(tasks.value));
 var visible = computed2(() => visibleTasks(tasks.value, filters));
 var statusLine = computed2(() => {
@@ -5586,7 +5649,8 @@ var statusLine = computed2(() => {
   const total = tasks.value.length;
   const shown = visible.value.length;
   const counts = shown === total ? `${total} tasks` : `${shown} of ${total} tasks`;
-  return [counts, taskDir.value, version2.value && `tq ${version2.value}`].filter(Boolean).join(" · ");
+  const link = streaming.value === false ? "polling" : "";
+  return [counts, taskDir.value, version2.value && `tq ${version2.value}`, link].filter(Boolean).join(" · ");
 });
 var dragging = ref(null);
 var composing = ref(null);
@@ -5604,10 +5668,15 @@ function toast(message, kind = "error") {
   }, TOAST_MS);
 }
 var lastPayload = "";
+var issued = 0;
 async function refresh() {
+  const ticket = ++issued;
   const fetched = await fetchTasks();
+  if (ticket !== issued)
+    return;
   const payload = JSON.stringify(fetched);
   loaded.value = true;
+  stale.value = false;
   if (payload === lastPayload)
     return;
   lastPayload = payload;
@@ -5617,6 +5686,7 @@ async function refreshQuietly() {
   try {
     await refresh();
   } catch (error) {
+    stale.value = true;
     console.error("refresh failed", error);
   }
 }
@@ -5662,11 +5732,38 @@ async function start() {
   } catch (error) {
     toast(`Could not load tasks: ${describe(error)}`);
   }
+  listen();
   setInterval(() => {
     if (busy.value)
       return;
+    if (streaming.value === true && !stale.value)
+      return;
     refreshQuietly();
   }, POLL_INTERVAL_MS);
+}
+var queued = false;
+function listen() {
+  connectEvents({
+    onTasks() {
+      if (busy.value) {
+        queued = true;
+        return;
+      }
+      refreshQuietly();
+    },
+    onScanFailed(message) {
+      toast(`The server cannot read the queue: ${message}`);
+    },
+    onConnected(connected) {
+      streaming.value = connected;
+    }
+  });
+  watch2(busy, (isBusy) => {
+    if (isBusy || !queued)
+      return;
+    queued = false;
+    refreshQuietly();
+  });
 }
 
 // frontend/notes.ts
@@ -6624,8 +6721,8 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
     const content = ref(opened.content);
     const notes = ref(opened.notes.map((note) => ({ ...note })));
     const noteDraft = ref("");
-    const stale = [priority.value];
-    const priorityChoices = computed2(() => priorityOptions(priorities.value, stale));
+    const stale2 = [priority.value];
+    const priorityChoices = computed2(() => priorityOptions(priorities.value, stale2));
     const pending = pendingDependencies(props.task, index.value);
     const timestamps = `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`;
     onMounted(() => dialog.value?.showModal());

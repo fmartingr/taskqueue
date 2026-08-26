@@ -25,7 +25,9 @@ const testVersion = "test-version"
 func newTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()
 	st := tqtest.NewStore(t)
-	srv := httptest.NewServer(newAPIRouter(st, testVersion))
+	router := newAPIRouter(st, testVersion, eventInterval)
+	srv := httptest.NewServer(router)
+	t.Cleanup(func() { _ = router.Close() })
 	t.Cleanup(srv.Close)
 	return srv, st
 }
@@ -325,6 +327,8 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
+	// The router owns the event hub's goroutine and ticker.
+	t.Cleanup(func() { _ = handler.Close() })
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
@@ -444,7 +448,9 @@ func TestAPIConfigCarriesTheProjectsOwnLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newAPIRouter(st, testVersion))
+	router := newAPIRouter(st, testVersion, eventInterval)
+	srv := httptest.NewServer(router)
+	t.Cleanup(func() { _ = router.Close() })
 	t.Cleanup(srv.Close)
 
 	resp, payload := do(t, srv, http.MethodGet, "/api/config", "")
@@ -476,7 +482,9 @@ func serverWithPriorities(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newAPIRouter(st, testVersion))
+	router := newAPIRouter(st, testVersion, eventInterval)
+	srv := httptest.NewServer(router)
+	t.Cleanup(func() { _ = router.Close() })
 	t.Cleanup(srv.Close)
 	return srv
 }

@@ -326,7 +326,14 @@ export type Seed = (project: Project) => void;
  *
  * Call it once at the top level of a test file.
  */
-export function useBoard(): (seed?: Seed) => Promise<Board> {
+/**
+ * Runs against a page before it is pointed at the board, for a test that needs
+ * the page configured before the first render — intercepting a request the
+ * board makes on load, say, which is too late to do after goto.
+ */
+export type BeforeLoad = (page: Page) => Promise<void>;
+
+export function useBoard(): (seed?: Seed, before?: BeforeLoad) => Promise<Board> {
   setDefaultTimeout(TEST_TIMEOUT_MS);
 
   // One Chromium per test file, held in this closure rather than in a module
@@ -359,7 +366,7 @@ export function useBoard(): (seed?: Seed) => Promise<Board> {
     browser = undefined;
   });
 
-  return async (seed?: Seed): Promise<Board> => {
+  return async (seed?: Seed, before?: BeforeLoad): Promise<Board> => {
     if (!browser) throw new Error("the board was opened outside a test");
 
     const project = new Project();
@@ -372,6 +379,7 @@ export function useBoard(): (seed?: Seed) => Promise<Board> {
     const board = { project, server, page };
     opened.push(board);
 
+    await before?.(page);
     await page.goto(server.url, { waitUntil: "domcontentloaded" });
     await page.waitForSelector(".column[data-status='todo']", { timeout: READY_TIMEOUT_MS });
     return board;

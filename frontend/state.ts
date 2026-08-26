@@ -12,9 +12,10 @@
  * about Vue and keep their own unit tests.
  */
 
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 
 import { createTask, describe, fetchConfig, fetchStatus, fetchTasks, patchTask } from "./api";
+import { connectEvents } from "./events";
 import {
   indexTasks,
   visibleTasks,
@@ -62,6 +63,19 @@ export const version = ref("");
 /** False until the first listing lands, so the footer can say so. */
 export const loaded = ref(false);
 
+/**
+ * Whether the event stream is up: null until the first attempt has resolved
+ * either way.
+ *
+ * The three states matter. `false` makes the footer say the board is polling,
+ * and a plain boolean starting at false says it on every single load, for the
+ * moment between the first listing and the stream opening.
+ */
+export const streaming = ref<boolean | null>(null);
+
+/** Set when a refresh failed, and cleared when one succeeds. */
+export const stale = ref(false);
+
 export const index = computed(() => indexTasks(tasks.value));
 export const visible = computed(() => visibleTasks(tasks.value, filters));
 
@@ -72,7 +86,13 @@ export const statusLine = computed(() => {
   const total = tasks.value.length;
   const shown = visible.value.length;
   const counts = shown === total ? `${total} tasks` : `${shown} of ${total} tasks`;
-  return [counts, taskDir.value, version.value && `tq ${version.value}`].filter(Boolean).join(" · ");
+  // Nothing is said while the stream is up, which is the ordinary case, and
+  // nothing while it is still connecting. The word appears only once a
+  // connection has actually failed, when updates really have got slower.
+  const link = streaming.value === false ? "polling" : "";
+  return [counts, taskDir.value, version.value && `tq ${version.value}`, link]
+    .filter(Boolean)
+    .join(" · ");
 });
 
 // ── What the user is in the middle of ───────────────────────────
@@ -120,10 +140,25 @@ export function toast(message: string, kind: "error" | "info" = "error"): void {
 /** Serialized last response, so a poll that changed nothing changes nothing. */
 let lastPayload = "";
 
+/**
+ * Rises with every refresh started, so a response that resolves after a newer
+ * one can be recognised and dropped.
+ *
+ * The poll made this vanishingly unlikely — three seconds is a long time for
+ * two requests to overtake each other. The stream can ask twice in a second,
+ * and an older listing landing last would be held by the payload comparison
+ * below until something else changed.
+ */
+let issued = 0;
+
 export async function refresh(): Promise<void> {
+  const ticket = ++issued;
   const fetched = await fetchTasks();
+  if (ticket !== issued) return; // a newer refresh is already in flight
+
   const payload = JSON.stringify(fetched);
   loaded.value = true;
+  stale.value = false;
   if (payload === lastPayload) return;
   lastPayload = payload;
   tasks.value = fetched;
@@ -134,6 +169,10 @@ export async function refreshQuietly(): Promise<void> {
   try {
     await refresh();
   } catch (error) {
+    // Remembered, not just logged: the stream only speaks when the queue
+    // changes, so nothing would ask again until it did, and the board would sit
+    // on a stale listing indefinitely. This is what lets the poll pick it up.
+    stale.value = true;
     console.error("refresh failed", error);
   }
 }
@@ -198,8 +237,50 @@ export async function start(): Promise<void> {
     toast(`Could not load tasks: ${describe(error)}`);
   }
 
+  listen();
+
+  // The fallback. It does nothing while the stream is up, which is why it can
+  // stay at three seconds: it is what covers a server too old to have
+  // /api/events, and the gap while a dropped stream is being reconnected.
   setInterval(() => {
     if (busy.value) return;
+    // The stream covers the ordinary case, so the poll stands aside for it —
+    // except after a refresh that failed, which nothing else would ever retry.
+    if (streaming.value === true && !stale.value) return;
     void refreshQuietly();
   }, POLL_INTERVAL_MS);
+}
+
+/**
+ * A refresh the stream asked for while the user was in the middle of something.
+ *
+ * The poll drops these — it simply skips its turn — because another one is
+ * three seconds away. The stream has no next turn: it speaks when something
+ * changed, so a signal dropped here is a change the board never hears about.
+ * Holding it until the hand comes off is the difference.
+ */
+let queued = false;
+
+function listen(): void {
+  connectEvents({
+    onTasks() {
+      if (busy.value) {
+        queued = true;
+        return;
+      }
+      void refreshQuietly();
+    },
+    onScanFailed(message) {
+      toast(`The server cannot read the queue: ${message}`);
+    },
+    onConnected(connected) {
+      streaming.value = connected;
+    },
+  });
+
+  watch(busy, (isBusy) => {
+    if (isBusy || !queued) return;
+    queued = false;
+    void refreshQuietly();
+  });
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fmartingr/taskqueue/internal/task"
 
@@ -28,12 +29,33 @@ type server struct {
 	// rather than read from a package variable, because the build stamps it on
 	// the binary and this package is not the binary.
 	version string
+
+	// events is what /api/events streams from: one scan of the task directory
+	// serving every connected board.
+	events *hub
+}
+
+// Router is the handler plus the background work behind /api/events. It is an
+// http.Handler, so callers use it as one; Close ends the streams and the ticker
+// and must be called, or `tq serve` leaves a goroutine behind on shutdown.
+type Router struct {
+	http.Handler
+	events *hub
+}
+
+// Close stops the event hub. Safe to call more than once.
+func (r *Router) Close() error {
+	r.events.stop()
+	return nil
 }
 
 // newAPIRouter registers the REST API only. The frontend is added separately by
 // newRouter so tests can exercise the API without the embedded assets.
-func newAPIRouter(st *store.Store, version string) *http.ServeMux {
-	s := &server{st: st, version: version}
+func newAPIRouter(st *store.Store, version string, interval time.Duration) *Router {
+	events := newHub(st, interval)
+	events.start()
+
+	s := &server{st: st, version: version, events: events}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/tasks", s.handleListTasks)
@@ -44,6 +66,7 @@ func newAPIRouter(st *store.Store, version string) *http.ServeMux {
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/version", s.handleVersion)
+	mux.HandleFunc("GET /api/events", s.handleEvents)
 
 	// Unknown /api/ paths must stay JSON instead of falling through to the
 	// frontend handler and returning index.html.
@@ -51,18 +74,20 @@ func newAPIRouter(st *store.Store, version string) *http.ServeMux {
 		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no such endpoint: %s %s", r.Method, r.URL.Path))
 	})
 
-	return mux
+	return &Router{Handler: mux, events: events}
 }
 
-// newRouter is the full handler: REST API plus the Kanban frontend.
-func NewRouter(st *store.Store, dev bool, version string) (http.Handler, error) {
-	mux := newAPIRouter(st, version)
+// NewRouter is the full handler: REST API plus the Kanban frontend. The caller
+// owns the returned Router and must Close it.
+func NewRouter(st *store.Store, dev bool, version string) (*Router, error) {
+	router := newAPIRouter(st, version, eventInterval)
 	frontend, err := frontendHandler(dev)
 	if err != nil {
+		_ = router.Close()
 		return nil, err
 	}
-	mux.Handle("/", frontend)
-	return mux, nil
+	router.Handler.(*http.ServeMux).Handle("/", frontend)
+	return router, nil
 }
 
 // frontendHandler serves public/ from disk in development (so Bun rebuilds are
@@ -317,4 +342,15 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// Flush forwards to the writer underneath. Embedding http.ResponseWriter does
+// not carry http.Flusher across, so without this the event stream asks whether
+// it can flush, is told no, and /api/events fails with "this server cannot
+// stream" — but only behind the logger, which is why the API tests, which do
+// not wrap the handler, could not see it.
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }

@@ -95,8 +95,13 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
 - "New task" creates a task; the filter bar narrows the board by status,
   priority, assignee, label, or "ready only".
 - Cards show a blocked marker while a dependency is unfinished or missing.
-- The board polls every 3 seconds, so tasks an agent creates or moves appear on
-  their own.
+- The board is live: the server watches the queue and pushes, so a task an agent
+  creates or moves appears within about half a second, without a reload. A change
+  that arrives while you are mid-drag or have a dialog open is held and applied
+  the moment you are done, rather than moving the board under your hand. If the
+  stream cannot be opened the board falls back to a three second poll and the
+  footer says `polling`, so slower updates are always visible rather than
+  silent.
 
 ## The agent workflow
 
@@ -386,6 +391,7 @@ difference between an agent moving a task and a human dragging a card.
 | `PATCH` | `/api/tasks/{id}` | partial update; the drag-and-drop endpoint |
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
 | `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities"}` |
+| `GET` | `/api/events` | server-sent events; a `tasks` frame when the queue changes, `scan-failed` when it cannot be read |
 | `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version"}` |
 | `GET` | `/api/version` | `{"version"}` |
 
@@ -472,7 +478,12 @@ that still diffs. A clean checkout needs `bun install` before `make frontend`,
   read-modify-write is serialised, so concurrent notes all survive. Writes are
   atomic either way.
 - No authentication; the server binds to localhost.
-- Every request scans the task directory. Fine at PoC scale.
+- Every request scans the task directory, and so does the event ticker while a
+  board is connected. Fine at PoC scale.
 - The four statuses are fixed and the board is one project per server.
 - Task bodies are edited as plain Markdown; nothing is rendered.
-- The board polls instead of receiving pushes.
+- The board is pushed to over server-sent events, and falls back to a three
+  second poll when the stream is unavailable. The server notices changes by
+  re-reading the task directory twice a second rather than by watching the
+  filesystem, so that tick is the worst case a change ever waits — measured at
+  ~500 ms from `tq add` in a terminal to the board being told.

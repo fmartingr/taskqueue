@@ -1,14 +1,14 @@
 ---
 id: TQ-0033
 title: Push board updates over an event stream instead of polling
-status: todo
+status: done
 priority: normal
 labels:
   - component/api
   - component/frontend
   - feature
 created: 2026-08-25T12:07:30+02:00
-updated: 2026-08-25T18:42:55+02:00
+updated: 2026-08-26T14:00:20+02:00
 ---
 
 ## How the board updates today
@@ -112,3 +112,20 @@ change and keep the rules honest.
 ## Notes
 
 - 2026-08-25T18:42:55+02:00 — The change fingerprint has to cover .taskqueue.yaml as well as the task directory (TQ-0034 builds on it), so the marker's own edits reach the board.
+- 2026-08-26T14:00:20+02:00 — Done. SSE at GET /api/events, a ticker-driven fingerprint on the server, and the poll kept as the fallback.
+
+  Measured: ~500 ms from 'tq add' in a terminal to the board being told, worst case 501 ms. That is why the tick is 500 ms rather than the ~1s the ticket suggested — at one second I measured 1001 ms worst case, which fails 'well under a second' on the nose. The scan it doubles is a readdir and a stat per file, and it only runs while a board is connected.
+
+  Two bugs the layering caught that the layer below could not:
+
+  - RequestLogger wraps the ResponseWriter to record the status, and embedding http.ResponseWriter does not carry http.Flusher across. /api/events returned 'this server cannot stream' — but only behind the logger, which the API tests do not use, so all seven new Go tests passed against a broken server. The browser layer found it immediately. There is now a test that streams through the logger.
+  - browser/poll.test.ts had stopped testing the poll: all five passed on the new stream and would have kept passing if the poll were deleted. They now open with /api/events refused, and went from instant to 31s, which is the proof they are on the fallback path.
+
+  Design notes worth keeping:
+
+  - The server's error frame is called 'scan-failed', not 'error'. EventSource dispatches its own connection failures to a listener named 'error', so a server frame by that name arrives indistinguishable from the stream dropping.
+  - The keep-alive is a named 'ping' event rather than an SSE comment. A comment keeps the connection open but EventSource discards it without dispatching, so the page cannot use it to notice a half-open connection.
+  - A change arriving while the user is mid-drag or has a dialog open is held and applied when they finish, not dropped. The poll can drop — another turn is three seconds away — but the stream has no next turn.
+  - Deviated from one requirement: rather than dropping a slow client, each gets a one-slot mailbox with a non-blocking send. An event is a signal to refetch, not a record, so the pending one already covers the new one. Bounded memory, a tick that never blocks, and no board kicked off.
+
+  The review at high effort found ten things, all fixed. The three that mattered: the fallback poll was fully suppressed while streaming, so a single failed fetch left the board stale forever — nothing retries, because the stream only speaks when the fingerprint changes; a subscribe landing after the hub stopped would hold http.Server.Shutdown for its full timeout, reachable in practice because the board reconnects every 500 ms; and scan-failed was deduplicated per-hub, so reloading the page after the directory broke told the new board nothing. Also: overlapping refreshes could install an older listing, the footer flashed 'polling' on every load (streaming is tri-state now), and a newline in a path would have split an SSE frame.

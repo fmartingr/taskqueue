@@ -38,6 +38,8 @@ func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The router owns the event hub's goroutine and ticker.
+	t.Cleanup(func() { _ = handler.Close() })
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 

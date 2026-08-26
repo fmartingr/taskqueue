@@ -12,7 +12,20 @@ import { expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import { POLL_INTERVAL_MS, card, cardIn, idsIn, useBoard } from "./harness";
 
-const openBoard = useBoard();
+const useBoardFor = useBoard();
+
+/**
+ * A board with the event stream refused, so these tests exercise the fallback
+ * poll and nothing else.
+ *
+ * Without this they would all pass on the push from /api/events (TQ-0033) — and
+ * keep passing if the poll were deleted, which is precisely the coverage the
+ * fallback needs. The stream has its own tests in events.test.ts.
+ */
+const openBoard: typeof useBoardFor = (seed) =>
+  useBoardFor(seed, async (page) => {
+    await page.route("**/api/events", (route) => route.abort());
+  });
 
 /** Long enough that a poll due since the last change has run. */
 const AFTER_A_POLL = POLL_INTERVAL_MS + 750;

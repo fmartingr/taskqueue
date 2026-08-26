@@ -120,7 +120,7 @@ Commands:
   help                            Print this help
 
 Statuses:   %s
-Priorities: %s (highest first; default: %s)
+Priorities: %s (most severe first; default: %s)
 
 Common flags:
   --json                          Print JSON to stdout and nothing else
@@ -139,12 +139,34 @@ Exit codes:
 `
 
 func (c *cli) usage(w io.Writer) {
+	priorities := c.priorities()
 	fmt.Fprintf(w, usageText,
 		config.TaskDirName, filepath.Join(config.TaskDirName, guide.AgentsFileName),
 		strings.Join(task.Statuses, ", "),
-		strings.Join(task.Priorities, ", "), task.PriorityNormal,
+		strings.Join(priorities.Names(), ", "), priorities.Default(),
 		config.EnvTaskDir, config.TaskDirName,
 		config.TaskDirName)
+}
+
+// priorities is the vocabulary for help text and for the filters, which are
+// both needed before a command has opened a store. It resolves from the queue
+// the command will work on, not from the working directory, so TQ_DIR pointing
+// at another project's queue does not have the CLI offer this project's set.
+//
+// A config that cannot be read falls back to the built-in set rather than
+// failing: help must print, and a filter against a broken config is reported by
+// the read that follows it. The store is what validates a write, and it reads
+// the config itself.
+func (c *cli) priorities() task.Priorities {
+	dir := c.dir
+	if taskDir, err := store.DiscoverTaskDir(c.dir); err == nil {
+		dir = taskDir
+	}
+	cfg, err := config.FindConfig(dir)
+	if err != nil {
+		return task.Priorities{}
+	}
+	return cfg.Vocabulary()
 }
 
 // ── Commands ────────────────────────────────────────────────────
@@ -239,7 +261,9 @@ func withinInvokedTree(taskDir, workingDir string) bool {
 
 func (c *cli) runAdd(args []string) int {
 	fs := c.flagSet("add")
-	priority := fs.String("priority", "", "priority: "+strings.Join(task.Priorities, ", "))
+	priorities := c.priorities()
+	priority := fs.String("priority", "",
+		"priority: "+strings.Join(priorities.Names(), ", ")+" (default: "+priorities.Default()+")")
 	assignee := fs.String("assignee", "", "assignee")
 	body := fs.String("body", "", "Markdown body")
 	status := fs.String("status", "", "initial status (default: "+task.StatusTodo+")")
@@ -283,7 +307,7 @@ func (c *cli) runList(args []string) int {
 	if _, code, ok := c.parse(fs, args, 0); !ok {
 		return code
 	}
-	if err := filter.Validate(); err != nil {
+	if err := filter.Validate(c.priorities()); err != nil {
 		return c.fail(err)
 	}
 
@@ -311,7 +335,7 @@ func (c *cli) runReady(args []string) int {
 		return code
 	}
 	filter.Ready = true
-	if err := filter.Validate(); err != nil {
+	if err := filter.Validate(c.priorities()); err != nil {
 		return c.fail(err)
 	}
 
@@ -463,7 +487,7 @@ func (c *cli) runUpdate(args []string) int {
 	fs := c.flagSet("update")
 	title := fs.String("title", "", "new title")
 	status := fs.String("status", "", "new status")
-	priority := fs.String("priority", "", "new priority")
+	priority := fs.String("priority", "", "new priority: "+strings.Join(c.priorities().Names(), ", "))
 	assignee := fs.String("assignee", "", "new assignee")
 	var addLabels, removeLabels, addDeps, removeDeps stringList
 	fs.Var(&addLabels, "add-label", "add a label (repeatable)")
@@ -596,7 +620,7 @@ func (c *cli) filterFlags(fs *flag.FlagSet, withStatus bool) (*task.Filter, *boo
 	if withStatus {
 		fs.StringVar(&f.Status, "status", "", "filter by status")
 	}
-	fs.StringVar(&f.Priority, "priority", "", "filter by priority")
+	fs.StringVar(&f.Priority, "priority", "", "filter by priority: "+strings.Join(c.priorities().Names(), ", "))
 	fs.StringVar(&f.Label, "label", "", "filter by label")
 	fs.StringVar(&f.Assignee, "assignee", "", "filter by assignee")
 	return &f, fs.Bool("json", false, "print JSON output")

@@ -96,7 +96,7 @@ func TestSortTasks(t *testing.T) {
 		mk("TQ-0001", StatusInProgress, PriorityLow, 4),
 		mk("TQ-0006", StatusTodo, PriorityNormal, 0),
 	}
-	SortTasks(tasks)
+	SortTasks(tasks, Priorities{})
 
 	var got []string
 	for _, tk := range tasks {
@@ -152,13 +152,13 @@ func TestFilterTasks(t *testing.T) {
 }
 
 func TestFilterValidate(t *testing.T) {
-	if err := (Filter{Status: "nope"}).Validate(); err == nil {
+	if err := (Filter{Status: "nope"}).Validate(Priorities{}); err == nil {
 		t.Error("expected an invalid status error")
 	}
-	if err := (Filter{Priority: "nope"}).Validate(); err == nil {
+	if err := (Filter{Priority: "nope"}).Validate(Priorities{}); err == nil {
 		t.Error("expected an invalid priority error")
 	}
-	if err := (Filter{Status: StatusTodo, Priority: PriorityLow}).Validate(); err != nil {
+	if err := (Filter{Status: StatusTodo, Priority: PriorityLow}).Validate(Priorities{}); err != nil {
 		t.Errorf("Validate() = %v, want nil", err)
 	}
 }

@@ -12,11 +12,6 @@
   --danger: #b42318;
   --blocked: #b45309;
 
-  --urgent: #b42318;
-  --high: #c2410c;
-  --normal: #4b5563;
-  --low: #6b7280;
-
   --radius: 8px;
   --shadow: 0 1px 2px rgb(16 24 40 / 8%), 0 1px 3px rgb(16 24 40 / 6%);
 }
@@ -33,11 +28,6 @@
     --accent-text: #0d1117;
     --danger: #f97066;
     --blocked: #fbbf24;
-
-    --urgent: #f97066;
-    --high: #fdba74;
-    --normal: #9aa3b2;
-    --low: #7d879a;
 
     --shadow: 0 1px 2px rgb(0 0 0 / 40%);
   }
@@ -314,27 +304,13 @@ button.ghost {
   color: var(--muted);
 }
 
+/* Not uppercased: the text is the display name the project chose in
+   .taskqueue.yaml, the same as a label chip's, so the board renders the casing
+   it was given rather than shouting "P0 — DROP EVERYTHING" back. */
 .badge {
-  text-transform: uppercase;
   letter-spacing: 0.4px;
   font-weight: 700;
   border: none;
-}
-
-.priority-urgent {
-  color: var(--urgent);
-}
-
-.priority-high {
-  color: var(--high);
-}
-
-.priority-normal {
-  color: var(--normal);
-}
-
-.priority-low {
-  color: var(--low);
 }
 
 .assignee {
@@ -343,10 +319,11 @@ button.ghost {
   border-color: transparent;
 }
 
-/* A label the project configured carries its own colours, set inline from
-   .taskqueue.yaml, so it reads the same in both themes. One the project does
-   not declare keeps the neutral pill above. */
-.label.tinted {
+/* A label or priority the project configured carries its own colours, set
+   inline from .taskqueue.yaml, so it reads the same in both themes. One the
+   project does not declare keeps the neutral pill above. */
+.label.tinted,
+.badge.tinted {
   border-color: transparent;
   font-weight: 600;
 }

@@ -101,7 +101,12 @@ func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.Ready = ready
 	}
-	if err := filter.Validate(); err != nil {
+	priorities, err := s.st.Priorities()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if err := filter.Validate(priorities); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -208,10 +213,14 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		"path":     config.TaskDirName,
 		"task_dir": s.st.Dir,
 		"file":     "",
-		// The vocabulary is what lets the board colour and group its chips.
-		// LabelSet reads through a nil config, so this is the base set when the
-		// project has no file of its own.
+		// The vocabularies are what let the board colour its chips and badges,
+		// group the label filter and fill the priority selects. Both read
+		// through a nil config, so these are the built-in sets when the project
+		// has no file of its own.
 		"labels": cfg.LabelSet(),
+		// A list, not a map: priorities are ordered, most severe first, and
+		// that order is the board's sort and the order of its options.
+		"priorities": cfg.PrioritySet(),
 	}
 	if cfg != nil {
 		out["version"] = cfg.Version

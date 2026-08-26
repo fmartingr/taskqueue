@@ -193,6 +193,55 @@ Each chip carries its own background, with its text picked for contrast against
 that colour, so one set of colours stays readable in both the light and the dark
 theme.
 
+### Priorities
+
+Priorities are the closed set labels are not. `.taskqueue.yaml` declares them,
+and unlike labels they are **ordered** — the list *is* the ranking, most severe
+first, which is what `tq list` and the board sort by. That is why this key is a
+sequence and not a mapping: a YAML mapping has no order left to read once it is
+parsed, and a `rank:` field would be one more thing to keep in step with itself.
+
+```yaml
+priorities:
+  - name: p0
+    color: "#b60205"
+    display_name: "P0 — drop everything"
+  - name: p1
+    color: "#c2410c"
+    display_name: P1
+  - name: p2
+    color: "#4b5563"
+    display_name: P2
+    default: true
+```
+
+`name` is what task frontmatter stores and what `--priority` takes, so nothing
+about the file format changes: only which values are accepted, how they rank,
+and how the board draws them. Exactly one entry carries `default: true` — it is
+what a task filed without a priority gets — and zero or two is a config error
+that says which. Hex colours **must be quoted**, for the same reason they must
+be for labels.
+
+Writes validate against the set. `tq add --priority`, `tq update --priority`,
+`POST /api/tasks` and `PATCH /api/tasks/{id}` refuse anything else and list what
+is valid; so does filtering, since a filter naming a value the project cannot
+file would otherwise read as an empty queue.
+
+Reads stay tolerant, so that editing the set does not break the tasks already
+filed under the old one. A task carrying a value the project has since dropped
+keeps it, sorts last, and renders in a neutral colour — and can still be moved,
+retitled and closed. Only *changing* a priority has to agree with the vocabulary
+as it stands now. Sorting last is also how you find them after an edit: they
+collect at the bottom of `tq list`, where the old value is still in the column.
+
+The CLI's help and the `--priority` flag help read the configured set on every
+run, and the board builds its three selects and its badge colours from
+`GET /api/config`, so both follow an edit immediately. The generated
+`.tasks/AGENTS.md` prints the set too, but it is a file — **re-run `tq init`
+after changing the vocabulary** so the guide agents read stops claiming the old
+one. Removing the `priorities` key restores the built-in `urgent`, `high`,
+`normal`, `low`.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -262,8 +311,9 @@ Implement authentication using the existing OIDC provider.
 ```
 
 - Statuses: `backlog`, `todo`, `in-progress`, `done`.
-- Priorities: `urgent`, `high`, `normal` (default), `low` — highest first, which
-  is also the order `tq list` sorts by.
+- Priorities: `urgent`, `high`, `normal` (default), `low` — most severe first,
+  which is also the order `tq list` sorts by. The set is the project's, declared
+  in `.taskqueue.yaml`; see [Priorities](#priorities).
 - Notes are the last section of the body and are introduced by a horizontal
   rule, so a `## Notes` heading in the body itself is content like any other:
   only a `## Notes` that ends the document is read as notes. The blank line
@@ -294,7 +344,7 @@ difference between an agent moving a task and a human dragging a card.
 | `GET` | `/api/tasks/{id}` | one task |
 | `PATCH` | `/api/tasks/{id}` | partial update; the drag-and-drop endpoint |
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
-| `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels"}` |
+| `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities"}` |
 | `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version"}` |
 | `GET` | `/api/version` | `{"version"}` |
 
@@ -337,7 +387,7 @@ Layout — a single `package main` at the repository root, as in
 cmd/tq/               The binary
 internal/task/        Task model, validation, filtering, dependencies, notes
 internal/config/      .taskqueue.yaml: the project marker, its loader and the
-                      label vocabulary
+                      label and priority vocabularies
 internal/store/       Filesystem store: discovery, atomic writes, ID allocation
 internal/web/         net/http server, REST API, and the built frontend
 internal/cli/         Commands, flags, table/JSON output, exit codes

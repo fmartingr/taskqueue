@@ -22,7 +22,7 @@ tq.go              Main() and the version variable
 internal/task/     Model, validation, filters, dependencies, notes, frontmatter.
                    Imports nothing of ours.
 internal/config/   .taskqueue.yaml: the project marker, its loader, the walk,
-                   the label vocabulary
+                   the label and priority vocabularies
 internal/store/    Filesystem store: discovery, atomic writes, ID allocation
 internal/guide/    The generated .tasks/AGENTS.md
 internal/web/      REST API, the server, and public/ (embedded frontend)

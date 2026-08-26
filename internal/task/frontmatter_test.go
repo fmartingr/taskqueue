@@ -197,7 +197,6 @@ func TestParseTaskErrors(t *testing.T) {
 		{"missing id", "---\ntitle: x\nstatus: todo\n---\n", "id is required"},
 		{"bad id", "---\nid: nope\ntitle: x\nstatus: todo\n---\n", "must match TQ-<number>"},
 		{"invalid status", "---\nid: TQ-0001\ntitle: x\nstatus: shipped\n---\n", "invalid status"},
-		{"invalid priority", "---\nid: TQ-0001\ntitle: x\nstatus: todo\npriority: whenever\n---\n", "invalid priority"},
 		{"self dependency", "---\nid: TQ-0001\ntitle: x\nstatus: todo\ndepends_on:\n  - TQ-0001\n---\n", "cannot depend on itself"},
 		{"invalid dependency", "---\nid: TQ-0001\ntitle: x\nstatus: todo\ndepends_on:\n  - nope\n---\n", "invalid dependency"},
 		{"bad timestamp", "---\nid: TQ-0001\ntitle: x\nstatus: todo\ncreated: yesterday\n---\n", "invalid YAML"},
@@ -252,5 +251,23 @@ func TestParseTaskKeepsAnIndentedRuleInsideFrontmatter(t *testing.T) {
 	}
 	if task.Body != "Body." {
 		t.Errorf("Body = %q, want %q", task.Body, "Body.")
+	}
+}
+
+// A priority the project does not declare parses. The vocabulary belongs to
+// the config, this package does not know it, and a project that edits its set
+// must not find every task already filed under the old one unreadable —
+// including by the listing that would show it needs fixing. Priorities.Check
+// is what refuses such a value, and only on the way back to disk.
+func TestParseTaskKeepsAPriorityOutsideTheVocabulary(t *testing.T) {
+	tk, err := ParseTask("TQ-0001-x.md", []byte("---\nid: TQ-0001\ntitle: x\nstatus: todo\npriority: whenever\n---\n"))
+	if err != nil {
+		t.Fatalf("ParseTask() = %v, want a task carrying the unknown priority", err)
+	}
+	if tk.Priority != "whenever" {
+		t.Errorf("Priority = %q, want %q", tk.Priority, "whenever")
+	}
+	if err := (Priorities{}).Check(tk.Priority); err == nil {
+		t.Error("Check() on the parsed priority = nil, want it refused for a write")
 	}
 }

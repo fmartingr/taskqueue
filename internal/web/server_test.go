@@ -459,3 +459,106 @@ func TestAPIConfigCarriesTheProjectsOwnLabels(t *testing.T) {
 		t.Errorf("labels = %+v, want only the project's own", got.Labels)
 	}
 }
+
+// ── The project's priority vocabulary ────────────────────────────
+
+const customPriorities = "priorities:\n" +
+	"  - {name: p0, color: \"#b60205\", display_name: Critical}\n" +
+	"  - {name: p1, color: \"#c2410c\"}\n" +
+	"  - {name: p2, color: \"#4b5563\", default: true}\n"
+
+// serverWithPriorities returns a server over a project that declares p0..p2.
+func serverWithPriorities(t *testing.T) *httptest.Server {
+	t.Helper()
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: "+config.TaskDirName+"\n"+customPriorities)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newAPIRouter(st, testVersion))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The board builds its selects and colours its badges from this, so the
+// vocabulary has to reach it — as a list, since the order is the ranking.
+func TestAPIConfigCarriesThePrioritiesInRankOrder(t *testing.T) {
+	srv := serverWithPriorities(t)
+
+	resp, payload := do(t, srv, http.MethodGet, "/api/config", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	got := decode[struct {
+		Priorities []config.Priority `json:"priorities"`
+	}](t, payload)
+
+	if len(got.Priorities) != 3 {
+		t.Fatalf("priorities = %+v, want the project's three", got.Priorities)
+	}
+	names := make([]string, 0, 3)
+	for _, priority := range got.Priorities {
+		names = append(names, priority.Name)
+	}
+	if want := "p0,p1,p2"; strings.Join(names, ",") != want {
+		t.Errorf("priorities = %q, want %q (the order the config lists)", strings.Join(names, ","), want)
+	}
+	if got.Priorities[0].DisplayName != "Critical" || got.Priorities[0].Color != "#b60205" {
+		t.Errorf("p0 = %+v, want the configured display name and colour", got.Priorities[0])
+	}
+	if !got.Priorities[2].Default {
+		t.Error("p2 is not marked default, so the board has nothing to preselect")
+	}
+}
+
+// A project without a config of its own still gets a vocabulary, so the board
+// never has to know the built-in set.
+func TestAPIConfigCarriesTheBuiltInPriorities(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	_, payload := do(t, srv, http.MethodGet, "/api/config", "")
+	got := decode[struct {
+		Priorities []config.Priority `json:"priorities"`
+	}](t, payload)
+
+	if len(got.Priorities) != len(config.DefaultPriorities()) {
+		t.Fatalf("priorities = %d entries, want the %d built-in", len(got.Priorities), len(config.DefaultPriorities()))
+	}
+	if got.Priorities[0].Name != task.PriorityUrgent {
+		t.Errorf("first priority = %q, want %q", got.Priorities[0].Name, task.PriorityUrgent)
+	}
+}
+
+func TestAPIRejectsAPriorityOutsideTheVocabulary(t *testing.T) {
+	srv := serverWithPriorities(t)
+
+	resp, payload := do(t, srv, http.MethodPost, "/api/tasks", `{"title": "Nope", "priority": "urgent"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST status = %d, want %d (%s)", resp.StatusCode, http.StatusBadRequest, payload)
+	}
+	if !strings.Contains(payload, "p0, p1, p2") {
+		t.Errorf("POST error = %s, want it to list the valid values", payload)
+	}
+
+	resp, _ = do(t, srv, http.MethodPost, "/api/tasks", `{"title": "Fine", "priority": "p0"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	resp, payload = do(t, srv, http.MethodPatch, "/api/tasks/TQ-0001", `{"priority": "high"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PATCH status = %d, want %d (%s)", resp.StatusCode, http.StatusBadRequest, payload)
+	}
+
+	// Filtering on a value the project cannot file is refused rather than
+	// answered with an empty list, which would read as an empty queue.
+	resp, _ = do(t, srv, http.MethodGet, "/api/tasks?priority=urgent", "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("GET ?priority=urgent status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	resp, _ = do(t, srv, http.MethodGet, "/api/tasks?priority=p0", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET ?priority=p0 status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}

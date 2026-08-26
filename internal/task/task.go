@@ -25,8 +25,8 @@ type Task struct {
 	Body      string    `yaml:"-" json:"body"`
 }
 
-// The workflow is intentionally fixed during the PoC: four statuses, four
-// priorities. Both slices are also the display order (board columns, sorting).
+// The status workflow is fixed during the PoC, and the slice is also the
+// display order (board columns, sorting).
 const (
 	StatusBacklog    = "backlog"
 	StatusTodo       = "todo"
@@ -34,6 +34,9 @@ const (
 	StatusDone       = "done"
 )
 
+// The built-in priorities. A project can declare its own vocabulary, which is
+// what Priorities carries; these are what it starts from and what a project
+// without a config keeps.
 const (
 	PriorityLow    = "low"
 	PriorityNormal = "normal"
@@ -42,23 +45,20 @@ const (
 )
 
 var (
-	Statuses   = []string{StatusBacklog, StatusTodo, StatusInProgress, StatusDone}
-	Priorities = []string{PriorityUrgent, PriorityHigh, PriorityNormal, PriorityLow}
+	Statuses          = []string{StatusBacklog, StatusTodo, StatusInProgress, StatusDone}
+	builtinPriorities = []string{PriorityUrgent, PriorityHigh, PriorityNormal, PriorityLow}
 )
 
 // idPattern is the only accepted shape for task IDs (and therefore filenames).
 var idPattern = regexp.MustCompile(`^TQ-[0-9]+$`)
 
-func ValidID(id string) bool      { return idPattern.MatchString(id) }
-func ValidStatus(s string) bool   { return slices.Contains(Statuses, s) }
-func ValidPriority(p string) bool { return slices.Contains(Priorities, p) }
-func statusRank(s string) int     { return rankOf(Statuses, s) }
-func priorityRank(p string) int   { return rankOf(Priorities, p) }
-func rankOf(all []string, v string) int {
-	if i := slices.Index(all, v); i >= 0 {
+func ValidID(id string) bool    { return idPattern.MatchString(id) }
+func ValidStatus(s string) bool { return slices.Contains(Statuses, s) }
+func statusRank(s string) int {
+	if i := slices.Index(Statuses, s); i >= 0 {
 		return i
 	}
-	return len(all)
+	return len(Statuses)
 }
 
 // Validate reports the first problem that would make a task file unusable.
@@ -74,9 +74,10 @@ func (t Task) Validate() error {
 		return fmt.Errorf("status is required")
 	case !ValidStatus(t.Status):
 		return fmt.Errorf("invalid status %q (want one of %s)", t.Status, strings.Join(Statuses, ", "))
-	case t.Priority != "" && !ValidPriority(t.Priority):
-		return fmt.Errorf("invalid priority %q (want one of %s)", t.Priority, strings.Join(Priorities, ", "))
 	}
+	// Priority is deliberately absent: the vocabulary is the project's, this
+	// package does not know it, and a task filed under one the project has
+	// since dropped must still load. Priorities.Check guards the writes.
 	for _, dep := range t.DependsOn {
 		if dep == t.ID {
 			return fmt.Errorf("task %s cannot depend on itself", t.ID)
@@ -148,14 +149,16 @@ func IsReady(t Task, index map[string]Task) bool {
 }
 
 // SortTasks orders tasks by status, then priority, then creation time, then ID.
-func SortTasks(tasks []Task) {
+// The priority ranking is the project's, since the vocabulary is ordered and
+// the config file is the ranking; the zero value is the built-in order.
+func SortTasks(tasks []Task, priorities Priorities) {
 	sort.SliceStable(tasks, func(i, j int) bool {
 		a, b := tasks[i], tasks[j]
 		if a.Status != b.Status {
 			return statusRank(a.Status) < statusRank(b.Status)
 		}
 		if a.Priority != b.Priority {
-			return priorityRank(a.Priority) < priorityRank(b.Priority)
+			return priorities.Rank(a.Priority) < priorities.Rank(b.Priority)
 		}
 		if !a.Created.Equal(b.Created) {
 			return a.Created.Before(b.Created)
@@ -173,14 +176,15 @@ type Filter struct {
 	Ready    bool
 }
 
-func (f Filter) Validate() error {
+// Validate rejects a filter that could never match, naming what would.
+// Filtering on a priority outside the vocabulary is such a filter: the task it
+// would find is one the project can no longer file, and silently returning
+// nothing reads as an empty queue.
+func (f Filter) Validate(priorities Priorities) error {
 	if f.Status != "" && !ValidStatus(f.Status) {
 		return fmt.Errorf("invalid status %q (want one of %s)", f.Status, strings.Join(Statuses, ", "))
 	}
-	if f.Priority != "" && !ValidPriority(f.Priority) {
-		return fmt.Errorf("invalid priority %q (want one of %s)", f.Priority, strings.Join(Priorities, ", "))
-	}
-	return nil
+	return priorities.Check(f.Priority)
 }
 
 func (f Filter) matchFields(t Task) bool {

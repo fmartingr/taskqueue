@@ -28,13 +28,13 @@ Use `tq move <id> <status>` for any other transition.
 ## Find things
 
     tq list --json                  every task
-    tq list --status todo --label backend --priority high --assignee agent-api
+    tq list --status todo --label backend --priority urgent --assignee agent-api
     ls .tasks | grep auth               filenames carry a slug of the title
     grep -ril "oidc" .tasks             full-text search across tasks
 
 ## Create and change
 
-    tq add "Title" --priority high --label backend --depends-on TQ-0002 --body "…"
+    tq add "Title" --priority urgent --label backend --depends-on TQ-0002 --body "…"
     tq update <id> --title "New title" --assignee agent-api
     tq update <id> --add-label auth --remove-label backend
     tq update <id> --add-dependency TQ-0002 --remove-dependency TQ-0003
@@ -59,7 +59,10 @@ whole string, so `tq list --label component/backend` takes the whole key.
 ## Rules of the format
 
 - Statuses: backlog, todo, in-progress, done
-- Priorities: urgent, high, normal, low (default: normal)
+- Priorities: urgent, high, normal, low (default: normal).
+  Most severe first, and that order is the sort order. Unlike labels this is a
+  closed set, declared by the project in `.taskqueue.yaml`: a value outside it
+  is refused on write.
 - Notes are the last section of a body, introduced by a `---` rule with a blank
   line above it. A `## Notes` heading anywhere else is ordinary content, so a
   body can document notes without `tq note` mistaking prose for notes.

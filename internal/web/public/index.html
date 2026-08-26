@@ -24,12 +24,9 @@
         </label>
         <label>
           Priority
+          <!-- Filled from the project's vocabulary in GET /api/config. -->
           <select id="filter-priority">
             <option value="">any</option>
-            <option value="urgent">urgent</option>
-            <option value="high">high</option>
-            <option value="normal">normal</option>
-            <option value="low">low</option>
           </select>
         </label>
         <label>
@@ -85,12 +82,7 @@
           </label>
           <label>
             Priority
-            <select id="task-priority" name="priority">
-              <option value="urgent">urgent</option>
-              <option value="high">high</option>
-              <option value="normal">normal</option>
-              <option value="low">low</option>
-            </select>
+            <select id="task-priority" name="priority"></select>
           </label>
           <label>
             Assignee
@@ -155,12 +147,7 @@
           </label>
           <label>
             Priority
-            <select id="create-priority" name="priority">
-              <option value="urgent">urgent</option>
-              <option value="high">high</option>
-              <option value="normal" selected>normal</option>
-              <option value="low">low</option>
-            </select>
+            <select id="create-priority" name="priority"></select>
           </label>
           <label>
             Assignee

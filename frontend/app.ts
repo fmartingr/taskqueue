@@ -7,6 +7,7 @@
  */
 
 import {
+  defaultPriority,
   groupLabels,
   indexTasks,
   isReady,
@@ -14,10 +15,15 @@ import {
   labelDisplay,
   labelsInUse,
   pendingDependencies,
+  priorityChip,
+  priorityDisplay,
+  priorityOptions,
   visibleTasks,
   STATUSES,
   type Filters,
   type LabelSet,
+  type PriorityOption,
+  type PrioritySet,
   type Status,
   type Task,
 } from "./board";
@@ -47,9 +53,24 @@ interface ProjectConfig {
   task_dir: string;
   file: string;
   labels: LabelSet;
+  priorities: PrioritySet;
 }
 
 const POLL_INTERVAL_MS = 3000;
+
+/**
+ * The built-in vocabulary, mirroring internal/config/priorities.go. It stands
+ * in only when GET /api/config could not be read: priorities are a closed set,
+ * so with none the selects would be empty and the board could not file a task
+ * at all. A project that has no config of its own gets this set from the server
+ * anyway, so standing in with it is no worse than being one request behind.
+ */
+const FALLBACK_PRIORITIES: PrioritySet = [
+  { name: "urgent", color: "#b42318", display_name: "Urgent" },
+  { name: "high", color: "#c2410c", display_name: "High" },
+  { name: "normal", color: "#4b5563", display_name: "Normal", default: true },
+  { name: "low", color: "#6b7280", display_name: "Low" },
+];
 
 const state = {
   tasks: [] as Task[],
@@ -67,6 +88,8 @@ const state = {
   version: "",
   /** The project's label vocabulary, from GET /api/config. */
   labels: {} as LabelSet,
+  /** The project's priority vocabulary, in rank order, from GET /api/config. */
+  priorities: FALLBACK_PRIORITIES as PrioritySet,
   /** The option set the label filter was last built from, so a poll that
    * changes nothing does not rebuild the list under an open dropdown. */
   labelOptions: "",
@@ -330,6 +353,51 @@ function focusComposer(): void {
   input?.focus();
 }
 
+/**
+ * Fills the three priority selects — the filter bar and the two dialogs — from
+ * the project's vocabulary. They are built here rather than written into
+ * index.html because the set is the project's: hard-coding it would offer
+ * levels the store then refuses, and hide the ones it wants.
+ *
+ * Called once the vocabulary is in. The task dialog fills its own select when
+ * it opens, since which options it needs depends on the task being edited.
+ */
+function fillPrioritySelects(): void {
+  fillPriorityOptions(byId<HTMLSelectElement>("filter-priority"), [state.filters.priority], "any");
+
+  // The create dialog resets its form every time it opens, which restores each
+  // control to its *markup* default — so the configured default has to be the
+  // option's own default rather than a value assigned once after filling, or
+  // the second open silently falls back to the most severe level.
+  const create = byId<HTMLSelectElement>("create-priority");
+  fillPriorityOptions(create, []);
+  const fallback = defaultPriority(state.priorities);
+  for (const option of create.options) option.defaultSelected = option.value === fallback;
+  create.value = fallback;
+}
+
+function fillPriorityOptions(select: HTMLSelectElement, extras: string[], anyLabel?: string): void {
+  const selected = select.value;
+  const nodes: HTMLOptionElement[] = [];
+  if (anyLabel !== undefined) {
+    const any = element("option", undefined, anyLabel);
+    any.value = "";
+    nodes.push(any);
+  }
+  for (const option of priorityOptions(state.priorities, extras)) {
+    nodes.push(priorityOptionNode(option));
+  }
+  select.replaceChildren(...nodes);
+  select.value = selected;
+}
+
+function priorityOptionNode(option: PriorityOption): HTMLOptionElement {
+  const node = element("option", undefined, option.display);
+  node.value = option.name;
+  node.title = option.configured ? option.name : `${option.name} — not in the project's priority set`;
+  return node;
+}
+
 function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
   const card = element("article", "card");
   card.draggable = true;
@@ -337,10 +405,7 @@ function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
   card.tabIndex = 0;
 
   const top = element("div", "card-top");
-  top.append(
-    element("span", "task-id", task.id),
-    element("span", `badge priority-${task.priority ?? "normal"}`, task.priority ?? "normal"),
-  );
+  top.append(element("span", "task-id", task.id), priorityBadge(task.priority));
   card.append(top, element("p", "card-title", task.title));
 
   const meta = element("div", "card-meta");
@@ -376,6 +441,27 @@ function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
   });
 
   return card;
+}
+
+/**
+ * A card's priority badge, drawn from the project's vocabulary the way a label
+ * chip is drawn from its own: the configured colour behind text picked to
+ * contrast with it, or the neutral pill for a value the project no longer
+ * declares. The stored value is always the tooltip, since that is what the CLI
+ * and the filters take.
+ */
+function priorityBadge(priority: string | undefined): HTMLElement {
+  const name = priority || defaultPriority(state.priorities);
+  const badge = element("span", "badge", priorityDisplay(name, state.priorities));
+  badge.title = name;
+
+  const colors = priorityChip(name, state.priorities);
+  if (colors) {
+    badge.classList.add("tinted");
+    badge.style.background = colors.background;
+    badge.style.color = colors.text;
+  }
+  return badge;
 }
 
 /**
@@ -472,7 +558,12 @@ function openTask(id: string): void {
   byId<HTMLElement>("task-dialog-id").textContent = task.id;
   byId<HTMLInputElement>("task-title").value = task.title;
   byId<HTMLSelectElement>("task-status").value = task.status;
-  byId<HTMLSelectElement>("task-priority").value = task.priority ?? "normal";
+  // The task's own priority is offered even when the project has dropped it:
+  // the dialog writes every field back on save, so an option missing here is a
+  // priority the next save would silently erase.
+  const priority = task.priority || defaultPriority(state.priorities);
+  fillPriorityOptions(byId<HTMLSelectElement>("task-priority"), [priority]);
+  byId<HTMLSelectElement>("task-priority").value = priority;
   byId<HTMLInputElement>("task-assignee").value = task.assignee ?? "";
   byId<HTMLInputElement>("task-labels").value = (task.labels ?? []).join(", ");
   byId<HTMLInputElement>("task-depends-on").value = (task.depends_on ?? []).join(", ");
@@ -712,17 +803,22 @@ async function loadServerStatus(): Promise<void> {
 }
 
 /**
- * Reads the project's label vocabulary once at start-up. It is read from the
- * config rather than hard-coded here so a project's own colours and names are
- * what the board draws. Failing is survivable: every label then renders the way
- * an unconfigured one does.
+ * Reads the project's vocabularies once at start-up. They are read from the
+ * config rather than hard-coded here so a project's own colours, names and
+ * priority levels are what the board draws and offers.
+ *
+ * Failing is survivable: labels then render the way an unconfigured one does,
+ * and the priority selects keep FALLBACK_PRIORITIES.
  */
 async function loadProjectConfig(): Promise<void> {
   try {
-    state.labels = (await api<ProjectConfig>("/api/config")).labels ?? {};
+    const config = await api<ProjectConfig>("/api/config");
+    state.labels = config.labels ?? {};
+    if (config.priorities?.length) state.priorities = config.priorities;
   } catch (error) {
     console.error("config failed", error);
   }
+  fillPrioritySelects();
 }
 
 async function start(): Promise<void> {

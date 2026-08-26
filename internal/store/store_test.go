@@ -1136,3 +1136,125 @@ func TestInitStoreLeavesAnExistingConfigAlone(t *testing.T) {
 		t.Errorf("config was rewritten:\ngot:\n%s\nwant:\n%s", after, body)
 	}
 }
+
+// ── The project's priority vocabulary ────────────────────────────
+
+const customPriorities = `version: 1
+path: .tasks
+priorities:
+  - name: p0
+    color: "#b60205"
+  - name: p1
+    color: "#c2410c"
+  - name: p2
+    color: "#4b5563"
+    default: true
+`
+
+// storeWithPriorities returns a store whose project declares p0..p2.
+func storeWithPriorities(t *testing.T) *Store {
+	t.Helper()
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
+	root := testRoot(t)
+	writeConfig(t, root, customPriorities)
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	return store
+}
+
+func TestCreateUsesTheConfiguredDefault(t *testing.T) {
+	store := storeWithPriorities(t)
+
+	tk := mustCreate(t, store, CreateTaskInput{Title: "Defaulted"})
+	if tk.Priority != "p2" {
+		t.Errorf("Priority = %q, want p2 (the entry marked default)", tk.Priority)
+	}
+}
+
+func TestCreateRejectsAPriorityOutsideTheVocabulary(t *testing.T) {
+	store := storeWithPriorities(t)
+
+	_, err := store.Create(CreateTaskInput{Title: "Nope", Priority: task.PriorityUrgent})
+	if err == nil {
+		t.Fatal("Create() = nil, want an error: urgent is not in this project's set")
+	}
+	if !strings.Contains(err.Error(), "p0, p1, p2") {
+		t.Errorf("error = %q, want it to list the valid values", err)
+	}
+}
+
+func TestListSortsByTheConfiguredRank(t *testing.T) {
+	store := storeWithPriorities(t)
+	mustCreate(t, store, CreateTaskInput{Title: "middle", Priority: "p1"})
+	mustCreate(t, store, CreateTaskInput{Title: "least", Priority: "p2"})
+	mustCreate(t, store, CreateTaskInput{Title: "most", Priority: "p0"})
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := make([]string, 0, len(tasks))
+	for _, tk := range tasks {
+		got = append(got, tk.Priority)
+	}
+	if want := "p0,p1,p2"; strings.Join(got, ",") != want {
+		t.Errorf("order = %q, want %q (the order the config lists)", strings.Join(got, ","), want)
+	}
+}
+
+// A project can edit its vocabulary under tasks already filed. Those keep the
+// value they carry, still list, and sort last — and, crucially, can still be
+// moved and closed: refusing the write would freeze every one of them.
+func TestATaskKeepsAPriorityTheProjectHasDropped(t *testing.T) {
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
+	root := testRoot(t)
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	stale := mustCreate(t, store, CreateTaskInput{Title: "Filed earlier", Priority: task.PriorityUrgent})
+	fresh := mustCreate(t, store, CreateTaskInput{Title: "Filed after", Priority: task.PriorityLow})
+
+	// The vocabulary changes out from under both of them.
+	writeConfig(t, root, customPriorities)
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("List after the vocabulary changed: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("List() returned %d tasks, want both", len(tasks))
+	}
+	if tasks[0].ID != stale.ID || tasks[0].Priority != task.PriorityUrgent {
+		t.Errorf("first task = %s/%s, want %s still carrying urgent", tasks[0].ID, tasks[0].Priority, stale.ID)
+	}
+
+	// Moving it does not touch the priority, so it must not be refused.
+	stale.Status = task.StatusDone
+	if _, err := store.Update(stale); err != nil {
+		t.Errorf("Update() on a task under a dropped priority = %v, want it to save", err)
+	}
+	// Nor does a patch that leaves the priority alone.
+	if _, err := store.Patch(fresh.ID, task.TaskPatch{Title: ptr("Retitled")}); err != nil {
+		t.Errorf("Patch() on a task under a dropped priority = %v, want it to save", err)
+	}
+	// Restating the value a task already carries changes nothing, so it is not
+	// refused. The board's dialog sends every field at once, so this is exactly
+	// what saving such a task looks like on the wire.
+	if _, err := store.Patch(fresh.ID, task.TaskPatch{Priority: ptr(task.PriorityLow), Title: ptr("Same priority")}); err != nil {
+		t.Errorf("Patch() restating a dropped priority = %v, want it accepted", err)
+	}
+	// Filing one under it afresh is the mistake worth naming.
+	if _, err := store.Patch(fresh.ID, task.TaskPatch{Priority: ptr(task.PriorityUrgent)}); err == nil {
+		t.Error("Patch(priority: urgent) = nil, want it refused")
+	}
+	if _, err := store.Patch(fresh.ID, task.TaskPatch{Priority: ptr("p0")}); err != nil {
+		t.Errorf("Patch(priority: p0) = %v, want it accepted", err)
+	}
+}
+
+func ptr(s string) *string { return &s }

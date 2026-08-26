@@ -13,16 +13,16 @@
  */
 
 export const STATUSES = ["backlog", "todo", "in-progress", "done"] as const;
-export const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
 
 export type Status = (typeof STATUSES)[number];
-export type Priority = (typeof PRIORITIES)[number];
 
 export interface Task {
   id: string;
   title: string;
   status: Status;
-  priority?: Priority;
+  /** Whatever the file carries: the vocabulary is the project's, and a task
+   *  may still hold a value it has since dropped. */
+  priority?: string;
   assignee?: string;
   labels?: string[];
   depends_on?: string[];
@@ -39,6 +39,21 @@ export interface LabelDef {
 
 /** The vocabulary, keyed by the label exactly as task frontmatter stores it. */
 export type LabelSet = Record<string, LabelDef>;
+
+/**
+ * One level of the project's priority vocabulary, as GET /api/config returns
+ * it. A list rather than a map, because priorities are ordered: the position is
+ * the rank, most severe first, and that is the board's sort and the order of
+ * its options.
+ */
+export interface PriorityDef {
+  name: string;
+  color: string;
+  display_name: string;
+  default?: boolean;
+}
+
+export type PrioritySet = PriorityDef[];
 
 export interface Filters {
   status: string;
@@ -189,6 +204,77 @@ export function groupLabels(labels: LabelSet, inUse: string[]): LabelGroup[] {
   return [...groups.entries()]
     .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a < b ? -1 : 1))
     .map(([prefix, group]) => ({ prefix, labels: group }));
+}
+
+// ── Priorities ──────────────────────────────────────────────────
+
+/**
+ * Priorities are the closed set labels are not: the store refuses a value
+ * outside the project's vocabulary, so the selects offer exactly what it
+ * declares and nothing else.
+ *
+ * Reading stays tolerant all the same. A task filed before the vocabulary
+ * changed still carries the old value, and the board has to show it rather than
+ * quietly present some other one — the task dialog writes back whatever its
+ * select holds, so an option the board dropped is a priority the next save
+ * would erase. That is what the extras argument to priorityOptions is for.
+ */
+
+export function findPriority(name: string, priorities: PrioritySet): PriorityDef | undefined {
+  return priorities.find((priority) => priority.name === name);
+}
+
+/** What a task with no priority of its own is filed under. */
+export function defaultPriority(priorities: PrioritySet): string {
+  return (priorities.find((priority) => priority.default) ?? priorities[0])?.name ?? "";
+}
+
+/** What the board shows for a priority: its display name, or the value itself. */
+export function priorityDisplay(name: string, priorities: PrioritySet): string {
+  return findPriority(name, priorities)?.display_name || name;
+}
+
+/**
+ * How to draw a priority badge, or null when there is nothing to draw it with —
+ * a value the project no longer declares, or a colour this board cannot parse.
+ * A null chip is not a failure: it is the neutral rendering.
+ *
+ * A filled chip rather than coloured text, for the reason labelChip is one: the
+ * configured colour is what the text has to contrast with, and only a chip that
+ * carries its own background can promise that in both themes.
+ */
+export function priorityChip(name: string, priorities: PrioritySet): Chip | null {
+  const color = findPriority(name, priorities)?.color ?? "";
+  if (!HEX_COLOR.test(color)) return null;
+  return { background: color, text: readableText(color) };
+}
+
+export interface PriorityOption {
+  name: string;
+  display: string;
+  /** False for a value a task carries that the project does not declare. */
+  configured: boolean;
+}
+
+/**
+ * The options a priority select offers: the vocabulary in rank order, then any
+ * extra value that has to stay selectable — the priority of the task being
+ * edited, or the one the filter bar is on — even though the project has dropped
+ * it. Dropping such an option instead would leave the filter bar reading as one
+ * priority while the board hid everything, and the task dialog reading as
+ * another while its next save rewrote the file.
+ */
+export function priorityOptions(priorities: PrioritySet, extras: string[]): PriorityOption[] {
+  const options = priorities.map((priority) => ({
+    name: priority.name,
+    display: priority.display_name || priority.name,
+    configured: true,
+  }));
+
+  const unknown = [...new Set(extras)]
+    .filter((name) => name !== "" && !findPriority(name, priorities))
+    .sort();
+  return [...options, ...unknown.map((name) => ({ name, display: name, configured: false }))];
 }
 
 // ── Filtering ───────────────────────────────────────────────────

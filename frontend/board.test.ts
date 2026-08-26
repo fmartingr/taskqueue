@@ -11,9 +11,14 @@ import {
   labelsInUse,
   pendingDependencies,
   visibleTasks,
+  defaultPriority,
+  findPriority,
+  priorityChip,
+  priorityDisplay,
+  priorityOptions,
   type Filters,
   type LabelSet,
-  type Priority,
+  type PrioritySet,
   type Status,
   type Task,
 } from "./board";
@@ -139,7 +144,7 @@ describe("isReady", () => {
 describe("visibleTasks", () => {
   const tasks = [
     { ...task("TQ-0001", "done"), labels: ["backend"], assignee: "agent-api" },
-    { ...task("TQ-0002", "todo"), labels: ["backend", "auth"], assignee: "agent-ui", priority: "high" as Priority },
+    { ...task("TQ-0002", "todo"), labels: ["backend", "auth"], assignee: "agent-ui", priority: "high" },
     { ...task("TQ-0003", "in-progress"), labels: [], assignee: "" },
     { ...task("TQ-0004", "todo", "TQ-0003"), labels: ["Frontend"], assignee: "Agent-UI" },
   ];
@@ -350,5 +355,106 @@ describe("labels that collide with Object.prototype", () => {
     expect(isConfigured("toString", labels)).toBe(true);
     expect(labelDisplay("toString", labels)).toBe("Stringly");
     expect(labelChip("toString", labels)?.background).toBe("#0e8a16");
+  });
+});
+
+// ── Priorities ──────────────────────────────────────────────────
+
+const PRIORITIES: PrioritySet = [
+  { name: "p0", color: "#b60205", display_name: "Critical" },
+  { name: "p1", color: "#c2410c", display_name: "" },
+  { name: "p2", color: "#4b5563", display_name: "Ordinary", default: true },
+  { name: "p3", color: "not-a-colour", display_name: "Broken" },
+];
+
+describe("defaultPriority", () => {
+  test("the entry marked default", () => {
+    expect(defaultPriority(PRIORITIES)).toBe("p2");
+  });
+
+  test("the most severe when none is marked, so a card always has one to show", () => {
+    expect(defaultPriority([{ name: "a", color: "#111111", display_name: "A" }])).toBe("a");
+  });
+
+  test("an empty vocabulary has no default rather than an invented one", () => {
+    expect(defaultPriority([])).toBe("");
+  });
+});
+
+describe("findPriority", () => {
+  test("a configured value", () => {
+    expect(findPriority("p0", PRIORITIES)?.color).toBe("#b60205");
+  });
+
+  test("one the project has dropped", () => {
+    expect(findPriority("urgent", PRIORITIES)).toBeUndefined();
+  });
+});
+
+describe("priorityDisplay", () => {
+  test("a configured value shows its display name", () => {
+    expect(priorityDisplay("p0", PRIORITIES)).toBe("Critical");
+  });
+
+  test("an empty display name falls back to the value, which is what the CLI takes", () => {
+    expect(priorityDisplay("p1", PRIORITIES)).toBe("p1");
+  });
+
+  test("a value the project dropped shows itself", () => {
+    expect(priorityDisplay("urgent", PRIORITIES)).toBe("urgent");
+  });
+});
+
+describe("priorityChip", () => {
+  test("a configured colour, with text picked to contrast with it", () => {
+    expect(priorityChip("p0", PRIORITIES)).toEqual({ background: "#b60205", text: CHIP_LIGHT_TEXT });
+  });
+
+  test("a light colour takes dark text", () => {
+    expect(priorityChip("p1", [{ name: "p1", color: "#fbca04", display_name: "P1" }])).toEqual({
+      background: "#fbca04",
+      text: CHIP_DARK_TEXT,
+    });
+  });
+
+  test("a colour the board cannot parse draws nothing rather than guessing", () => {
+    expect(priorityChip("p3", PRIORITIES)).toBeNull();
+  });
+
+  test("a value the project dropped draws nothing", () => {
+    expect(priorityChip("urgent", PRIORITIES)).toBeNull();
+  });
+});
+
+describe("priorityOptions", () => {
+  test("the vocabulary in rank order, since the config is the ranking", () => {
+    expect(priorityOptions(PRIORITIES, []).map((option) => option.name)).toEqual(["p0", "p1", "p2", "p3"]);
+  });
+
+  test("display names come along, falling back to the value", () => {
+    const options = priorityOptions(PRIORITIES, []);
+    expect(options[0]).toEqual({ name: "p0", display: "Critical", configured: true });
+    expect(options[1]).toEqual({ name: "p1", display: "p1", configured: true });
+  });
+
+  // The dialog writes every field back on save, so an option the board dropped
+  // is a priority the next save would erase.
+  test("a value the project dropped stays selectable, marked unconfigured", () => {
+    const options = priorityOptions(PRIORITIES, ["urgent"]);
+    expect(options).toHaveLength(5);
+    expect(options[4]).toEqual({ name: "urgent", display: "urgent", configured: false });
+  });
+
+  test("an extra that is configured is not repeated", () => {
+    expect(priorityOptions(PRIORITIES, ["p0"])).toHaveLength(PRIORITIES.length);
+  });
+
+  test("extras are deduplicated, sorted, and never empty", () => {
+    const extras = priorityOptions(PRIORITIES, ["zzz", "aaa", "zzz", ""]).slice(PRIORITIES.length);
+    expect(extras.map((option) => option.name)).toEqual(["aaa", "zzz"]);
+  });
+
+  test("an empty vocabulary still offers what the task carries", () => {
+    expect(priorityOptions([], ["urgent"]).map((option) => option.name)).toEqual(["urgent"]);
   });
 });

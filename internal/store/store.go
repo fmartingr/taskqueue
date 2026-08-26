@@ -274,6 +274,21 @@ func (s *Store) locate(id string) (string, error) {
 	}
 }
 
+// Priorities is the vocabulary this queue is filed under: the values a write
+// may use, their ranking, and the default.
+//
+// It is read from the project's config on every call rather than held on the
+// Store. The config sits beside the tasks and is a source of truth the same way
+// they are, so an edit to it reaches a running server on its next request —
+// exactly as an edit to a task file does, and for the same reason.
+func (s *Store) Priorities() (task.Priorities, error) {
+	cfg, err := config.FindConfig(s.Dir)
+	if err != nil {
+		return task.Priorities{}, err
+	}
+	return cfg.Vocabulary(), nil
+}
+
 // List returns every task in the directory in the default order: status,
 // priority, creation time, ID.
 func (s *Store) List() ([]task.Task, error) {
@@ -298,7 +313,14 @@ func (s *Store) List() ([]task.Task, error) {
 		tasks = append(tasks, t)
 	}
 
-	task.SortTasks(tasks)
+	// The ranking is the project's, so sorting needs its vocabulary. A task
+	// filed under a value the project has since dropped keeps it and sorts
+	// last, rather than being refused by the listing that would show it.
+	priorities, err := s.Priorities()
+	if err != nil {
+		return nil, err
+	}
+	task.SortTasks(tasks, priorities)
 	return tasks, nil
 }
 
@@ -343,11 +365,19 @@ func (s *Store) Create(in CreateTaskInput) (task.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	priorities, err := s.Priorities()
+	if err != nil {
+		return task.Task{}, err
+	}
+	if err := priorities.Check(in.Priority); err != nil {
+		return task.Task{}, err
+	}
+
 	now := time.Now().Truncate(time.Second)
 	t := task.Task{
 		Title:     strings.TrimSpace(in.Title),
 		Status:    orDefault(in.Status, task.StatusTodo),
-		Priority:  orDefault(in.Priority, task.PriorityNormal),
+		Priority:  orDefault(in.Priority, priorities.Default()),
 		Assignee:  in.Assignee,
 		Labels:    normalizeList(in.Labels),
 		DependsOn: normalizeList(in.DependsOn),
@@ -382,6 +412,10 @@ func (s *Store) Create(in CreateTaskInput) (task.Task, error) {
 // Update saves a task the caller has already read and changed. It is
 // last-write-wins by nature: two callers that read the same version both write
 // their whole copy. Use Mutate when the change depends on what is there.
+//
+// The priority is not checked here, because there is nothing to check it
+// against: the task came out of this store, so its priority is whatever the
+// file already held. Create and Patch are where a caller supplies one.
 func (s *Store) Update(t task.Task) (task.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -409,8 +443,24 @@ func (s *Store) Mutate(id string, apply func(*task.Task) error) (task.Task, erro
 // Patch applies a change to a task and saves it in one step. Adding a label or
 // a dependency is an append, so a caller doing this through Get and Update
 // loses whatever another caller added in between.
+//
+// A patch is checked against the vocabulary only where it would *change* the
+// priority. Filing a task under a value the project does not have is a mistake
+// worth naming; restating the value it already carries changes nothing, and
+// refusing that would leave every task filed under a dropped value unable to be
+// moved, retitled or closed — the board's dialog sends all its fields at once,
+// so an untouched priority still arrives in the patch.
 func (s *Store) Patch(id string, patch task.TaskPatch) (task.Task, error) {
 	return s.Mutate(id, func(t *task.Task) error {
+		if patch.Priority != nil && *patch.Priority != t.Priority {
+			priorities, err := s.Priorities()
+			if err != nil {
+				return err
+			}
+			if err := priorities.Check(*patch.Priority); err != nil {
+				return err
+			}
+		}
 		*t = task.ApplyPatch(*t, patch)
 		return nil
 	})

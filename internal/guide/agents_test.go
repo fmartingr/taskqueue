@@ -1,6 +1,8 @@
 package guide
 
 import (
+	"github.com/fmartingr/taskqueue/internal/task"
+
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,7 +113,7 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 }
 
 func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
-	guide := string(taskGuide(filepath.Join("project", ".tasks")))
+	guide := string(taskGuide(filepath.Join("project", ".tasks"), task.Priorities{}))
 
 	// The framing carries as much as the numbering: without these the steps
 	// read as a menu again.
@@ -147,5 +149,55 @@ func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
 			t.Errorf("step %q is out of lifecycle order", step)
 		}
 		at = i
+	}
+}
+
+// The guide is the vocabulary an agent reads before filing anything, so it has
+// to print the project's own. Printing the built-in set beside a store that
+// refuses it is the drift generating this file exists to prevent.
+func TestSyncAgentsDocsPrintsTheConfiguredPriorities(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: "+config.TaskDirName+"\n"+
+		"priorities:\n"+
+		"  - {name: p0, color: \"#b60205\"}\n"+
+		"  - {name: p1, color: \"#c2410c\"}\n"+
+		"  - {name: p2, color: \"#4b5563\", default: true}\n")
+
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SyncAgentsDocs(st); err != nil {
+		t.Fatalf("SyncAgentsDocs: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(st.Dir, AgentsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := string(got)
+	if !strings.Contains(guide, "- Priorities: p0, p1, p2") {
+		t.Errorf("guide does not print the project's priorities:\n%s", guide)
+	}
+	if !strings.Contains(guide, "default: p2") {
+		t.Errorf("guide does not print the project's default:\n%s", guide)
+	}
+	// The examples name a priority too, so they have to come from the same set:
+	// `tq add --priority high` is as much a lie as the list would be.
+	if !strings.Contains(guide, "--priority p0") {
+		t.Errorf("guide examples do not use a configured priority:\n%s", guide)
+	}
+	// Nowhere does a built-in value survive as an actual priority. Checked per
+	// line and against "--priority x"/the list line, since "low" and "high" are
+	// also substrings of ordinary words in the prose around them.
+	for _, line := range strings.Split(guide, "\n") {
+		for _, gone := range []string{"urgent", "high", "normal", "low"} {
+			if strings.Contains(line, "--priority "+gone) {
+				t.Errorf("guide example still uses the built-in priority %q: %s", gone, line)
+			}
+			if strings.HasPrefix(line, "- Priorities: ") && strings.Contains(line, gone) {
+				t.Errorf("guide still lists the built-in priority %q: %s", gone, line)
+			}
+		}
 	}
 }

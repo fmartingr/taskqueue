@@ -65,6 +65,30 @@ function groupLabels(labels, inUse) {
   }
   return [...groups.entries()].sort(([a], [b]) => a === "" ? -1 : b === "" ? 1 : a < b ? -1 : 1).map(([prefix, group]) => ({ prefix, labels: group }));
 }
+function findPriority(name, priorities) {
+  return priorities.find((priority) => priority.name === name);
+}
+function defaultPriority(priorities) {
+  return (priorities.find((priority) => priority.default) ?? priorities[0])?.name ?? "";
+}
+function priorityDisplay(name, priorities) {
+  return findPriority(name, priorities)?.display_name || name;
+}
+function priorityChip(name, priorities) {
+  const color = findPriority(name, priorities)?.color ?? "";
+  if (!HEX_COLOR.test(color))
+    return null;
+  return { background: color, text: readableText(color) };
+}
+function priorityOptions(priorities, extras) {
+  const options = priorities.map((priority) => ({
+    name: priority.name,
+    display: priority.display_name || priority.name,
+    configured: true
+  }));
+  const unknown = [...new Set(extras)].filter((name) => name !== "" && !findPriority(name, priorities)).sort();
+  return [...options, ...unknown.map((name) => ({ name, display: name, configured: false }))];
+}
 function visibleTasks(tasks, filters) {
   const { status, priority, assignee, label, ready } = filters;
   const index = indexTasks(tasks);
@@ -190,6 +214,12 @@ function formatNote(note) {
 
 // frontend/app.ts
 var POLL_INTERVAL_MS = 3000;
+var FALLBACK_PRIORITIES = [
+  { name: "urgent", color: "#b42318", display_name: "Urgent" },
+  { name: "high", color: "#c2410c", display_name: "High" },
+  { name: "normal", color: "#4b5563", display_name: "Normal", default: true },
+  { name: "low", color: "#6b7280", display_name: "Low" }
+];
 var state = {
   tasks: [],
   filters: { status: "", priority: "", assignee: "", label: "", ready: false },
@@ -202,6 +232,7 @@ var state = {
   taskDir: "",
   version: "",
   labels: {},
+  priorities: FALLBACK_PRIORITIES,
   labelOptions: ""
 };
 function byId(id) {
@@ -399,13 +430,42 @@ function focusComposer() {
   const input = document.querySelector(".composer-input");
   input?.focus();
 }
+function fillPrioritySelects() {
+  fillPriorityOptions(byId("filter-priority"), [state.filters.priority], "any");
+  const create = byId("create-priority");
+  fillPriorityOptions(create, []);
+  const fallback = defaultPriority(state.priorities);
+  for (const option of create.options)
+    option.defaultSelected = option.value === fallback;
+  create.value = fallback;
+}
+function fillPriorityOptions(select, extras, anyLabel) {
+  const selected = select.value;
+  const nodes = [];
+  if (anyLabel !== undefined) {
+    const any = element("option", undefined, anyLabel);
+    any.value = "";
+    nodes.push(any);
+  }
+  for (const option of priorityOptions(state.priorities, extras)) {
+    nodes.push(priorityOptionNode(option));
+  }
+  select.replaceChildren(...nodes);
+  select.value = selected;
+}
+function priorityOptionNode(option) {
+  const node = element("option", undefined, option.display);
+  node.value = option.name;
+  node.title = option.configured ? option.name : `${option.name} — not in the project's priority set`;
+  return node;
+}
 function renderCard(task, index) {
   const card = element("article", "card");
   card.draggable = true;
   card.dataset.id = task.id;
   card.tabIndex = 0;
   const top = element("div", "card-top");
-  top.append(element("span", "task-id", task.id), element("span", `badge priority-${task.priority ?? "normal"}`, task.priority ?? "normal"));
+  top.append(element("span", "task-id", task.id), priorityBadge(task.priority));
   card.append(top, element("p", "card-title", task.title));
   const meta = element("div", "card-meta");
   if (task.assignee)
@@ -441,6 +501,18 @@ function renderCard(task, index) {
     }
   });
   return card;
+}
+function priorityBadge(priority) {
+  const name = priority || defaultPriority(state.priorities);
+  const badge = element("span", "badge", priorityDisplay(name, state.priorities));
+  badge.title = name;
+  const colors = priorityChip(name, state.priorities);
+  if (colors) {
+    badge.classList.add("tinted");
+    badge.style.background = colors.background;
+    badge.style.color = colors.text;
+  }
+  return badge;
 }
 function labelChipNode(name) {
   const chip = element("span", "label", labelDisplay(name, state.labels));
@@ -508,7 +580,9 @@ function openTask(id) {
   byId("task-dialog-id").textContent = task.id;
   byId("task-title").value = task.title;
   byId("task-status").value = task.status;
-  byId("task-priority").value = task.priority ?? "normal";
+  const priority = task.priority || defaultPriority(state.priorities);
+  fillPriorityOptions(byId("task-priority"), [priority]);
+  byId("task-priority").value = priority;
   byId("task-assignee").value = task.assignee ?? "";
   byId("task-labels").value = (task.labels ?? []).join(", ");
   byId("task-depends-on").value = (task.depends_on ?? []).join(", ");
@@ -710,10 +784,14 @@ async function loadServerStatus() {
 }
 async function loadProjectConfig() {
   try {
-    state.labels = (await api("/api/config")).labels ?? {};
+    const config = await api("/api/config");
+    state.labels = config.labels ?? {};
+    if (config.priorities?.length)
+      state.priorities = config.priorities;
   } catch (error) {
     console.error("config failed", error);
   }
+  fillPrioritySelects();
 }
 async function start() {
   wire();

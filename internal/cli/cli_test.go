@@ -1041,3 +1041,113 @@ func TestCLITerminatorProtectsEveryArgumentAfterIt(t *testing.T) {
 		t.Errorf("exit = 0, want a failure: --json after -- is an argument, not a flag")
 	}
 }
+
+// ── The project's priority vocabulary ────────────────────────────
+
+const customPriorities = `version: 1
+path: .tasks
+priorities:
+  - name: p0
+    color: "#b60205"
+    display_name: Critical
+  - name: p1
+    color: "#c2410c"
+  - name: p2
+    color: "#4b5563"
+    default: true
+`
+
+// cliWithPriorities returns a CLI over a project that declares p0..p2.
+func cliWithPriorities(t *testing.T) *testCLI {
+	t.Helper()
+	tc := newBareCLI(t)
+	tqtest.WriteConfig(t, tc.root, customPriorities)
+	if code := tc.run("init"); code != exitOK {
+		t.Fatalf("init failed: %d %s", code, tc.stderr)
+	}
+	return tc
+}
+
+// The round trip the vocabulary has to survive: create under a configured
+// value, default to the configured default, filter by one, and sort by the
+// order the file gives.
+func TestCLIRoundTripsACustomVocabulary(t *testing.T) {
+	tc := cliWithPriorities(t)
+
+	var created task.Task
+	tc.mustRunJSON(&created, "add", "Critical work", "--priority", "p0", "--json")
+	if created.Priority != "p0" {
+		t.Errorf("Priority = %q, want p0", created.Priority)
+	}
+
+	var defaulted task.Task
+	tc.mustRunJSON(&defaulted, "add", "Ordinary work", "--json")
+	if defaulted.Priority != "p2" {
+		t.Errorf("Priority = %q, want p2 (the configured default)", defaulted.Priority)
+	}
+
+	tc.mustRun("add", "Middling work", "--priority", "p1")
+
+	var listed []task.Task
+	tc.mustRunJSON(&listed, "list", "--json")
+	got := make([]string, 0, len(listed))
+	for _, tk := range listed {
+		got = append(got, tk.Priority)
+	}
+	if want := "p0,p1,p2"; strings.Join(got, ",") != want {
+		t.Errorf("list order = %q, want %q", strings.Join(got, ","), want)
+	}
+
+	var filtered []task.Task
+	tc.mustRunJSON(&filtered, "list", "--priority", "p0", "--json")
+	if len(filtered) != 1 || filtered[0].ID != created.ID {
+		t.Errorf("list --priority p0 = %+v, want just %s", filtered, created.ID)
+	}
+
+	var updated task.Task
+	tc.mustRunJSON(&updated, "update", created.ID, "--priority", "p2", "--json")
+	if updated.Priority != "p2" {
+		t.Errorf("Priority after update = %q, want p2", updated.Priority)
+	}
+}
+
+// A value from the built-in set is not special: once a project declares its
+// own, "urgent" is as invalid as anything else, and the message says what is.
+func TestCLIRejectsAPriorityOutsideTheVocabulary(t *testing.T) {
+	tc := cliWithPriorities(t)
+	tc.mustRun("add", "Something")
+
+	for _, args := range [][]string{
+		{"add", "Nope", "--priority", "urgent"},
+		{"update", "TQ-0001", "--priority", "urgent"},
+		{"list", "--priority", "urgent"},
+		{"ready", "--priority", "urgent"},
+	} {
+		if code := tc.run(args...); code != exitError {
+			t.Errorf("tq %s = exit %d, want %d", strings.Join(args, " "), code, exitError)
+		}
+		if !strings.Contains(tc.stderr.String(), "p0, p1, p2") {
+			t.Errorf("tq %s stderr = %q, want it to list the valid values", strings.Join(args, " "), tc.stderr)
+		}
+	}
+}
+
+// Help that names the built-in set while the store refuses it would be worse
+// than no help at all, so both the usage and the flag help read the config.
+func TestCLIHelpNamesTheConfiguredVocabulary(t *testing.T) {
+	tc := cliWithPriorities(t)
+
+	usage := tc.mustRun("help")
+	if !strings.Contains(usage, "Priorities: p0, p1, p2") {
+		t.Errorf("usage does not name the project's priorities:\n%s", usage)
+	}
+	if !strings.Contains(usage, "default: p2") {
+		t.Errorf("usage does not name the project's default:\n%s", usage)
+	}
+
+	// -h prints the flag help to stderr and exits 0.
+	tc.run("add", "-h")
+	if flags := tc.stderr.String(); !strings.Contains(flags, "p0, p1, p2") {
+		t.Errorf("add flag help does not name the project's priorities:\n%s", flags)
+	}
+}

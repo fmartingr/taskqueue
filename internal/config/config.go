@@ -43,6 +43,12 @@ type Config struct {
 	// the base set when the key is absent.
 	Labels map[string]Label `yaml:"labels" json:"labels"`
 
+	// Priorities is the project's priority vocabulary, most severe first: a
+	// sequence rather than a mapping, because the order is the ranking and a
+	// decoded YAML mapping has none. Read it through PrioritySet, or through
+	// Vocabulary for the values the store validates and sorts by.
+	Priorities []Priority `yaml:"priorities" json:"priorities"`
+
 	// File is where this config was read from, and dir is the directory
 	// holding it. Path resolves against dir, never against the working
 	// directory, so the same committed file means the same thing wherever a
@@ -124,6 +130,9 @@ func loadConfig(path string) (*Config, error) {
 	if err := validateLabels(cfg.Labels); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
 	}
+	if err := validatePriorities(cfg.Priorities); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+	}
 	return &cfg, nil
 }
 
@@ -161,11 +170,14 @@ func WriteConfigIfMissing(startDir, taskDir string) (string, error) {
 	if err != nil {
 		rel = taskDir
 	}
-	// The base set is seeded with the marker rather than left to `tq init`
-	// alone: any command can be the one that creates a queue, and a config the
-	// user never sees written would silently never get a vocabulary.
-	body := fmt.Appendf(nil, "version: %d\npath: %s\n%s",
-		ConfigVersion, filepath.ToSlash(rel), labelsYAML(DefaultLabels()))
+	// Both vocabularies are seeded with the marker rather than left to
+	// `tq init` alone: any command can be the one that creates a queue, and a
+	// config the user never sees written would silently never get one. The
+	// priorities come first, since they are the closed set and the one a
+	// project is most likely to want to change.
+	body := fmt.Appendf(nil, "version: %d\npath: %s\n%s%s",
+		ConfigVersion, filepath.ToSlash(rel),
+		prioritiesYAML(DefaultPriorities()), labelsYAML(DefaultLabels()))
 	if err := fsx.WriteAtomic(path, body); err != nil {
 		return "", err
 	}

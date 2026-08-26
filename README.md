@@ -371,6 +371,7 @@ before binding to `0.0.0.0`.
 make help        # list targets
 make dev         # Bun watch + Go server with DEV=1 (frontend served from ./public)
 make test        # go test ./...
+make typecheck   # tsc --noEmit over frontend/ and browser/
 make test-frontend    # Bun unit tests for the pure frontend helpers
 make test-integration # drives the compiled binary
 make test-browser     # drives the board in a real Chromium (make browser-install first)
@@ -402,6 +403,14 @@ instead of the embedded copy, so Bun rebuilds show up on reload.
 
 The frontend is vanilla TypeScript with no framework, no bundler beyond Bun, and
 no runtime dependencies.
+
+Types are checked separately from the build. `bun build` erases them without
+looking, so `make typecheck` is the only thing that reads them — without it a
+`const n: number = "x"` compiles, lands in the committed `public/app.js` and is
+embedded in the release binary. `typescript` is a pinned devDependency and never
+reaches the shipped output; the pin is exact because TypeScript 7's Go-native
+port ships no programmatic API, and the template-aware checkers cannot run on
+it yet.
 
 ## Known limitations (deliberate, for now)
 

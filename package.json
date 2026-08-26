@@ -7,6 +7,8 @@
     "dev": "bun run frontend/build.ts --watch"
   },
   "devDependencies": {
-    "playwright-core": "^1.62.1"
+    "@types/bun": "^1.4.0",
+    "playwright-core": "^1.62.1",
+    "typescript": "6.0.3"
   }
 }

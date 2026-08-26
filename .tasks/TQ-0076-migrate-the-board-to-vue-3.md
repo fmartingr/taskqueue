@@ -1,13 +1,13 @@
 ---
 id: TQ-0076
 title: Migrate the board to Vue 3
-status: backlog
+status: in-progress
 priority: normal
 labels:
   - refactor
   - component/frontend
 created: 2026-08-26T08:14:45+02:00
-updated: 2026-08-26T11:20:21+02:00
+updated: 2026-08-26T11:54:31+02:00
 ---
 
 ## Where the frontend is today

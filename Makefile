@@ -62,6 +62,11 @@ test:
 test-integration:
 	go test -tags integration ./internal/integration/
 
+## typecheck: Typecheck the TypeScript sources (Bun strips types without checking)
+.PHONY: typecheck
+typecheck:
+	bunx tsc --noEmit
+
 ## test-frontend: Run the frontend unit tests with Bun
 .PHONY: test-frontend
 test-frontend:

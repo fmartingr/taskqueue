@@ -1,14 +1,14 @@
 ---
 id: TQ-0024
 title: Nothing typechecks the frontend
-status: todo
+status: done
 priority: normal
 labels:
   - component/ci
   - component/frontend
   - tests
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-26T11:14:03+02:00
+updated: 2026-08-26T11:57:28+02:00
 ---
 
 ## Finding
@@ -50,3 +50,24 @@ Filed from a `/code-review` pass at max effort.
     only thing in the pipeline that can see a typo inside a template. Bun.build
     compiles and ships those without complaint, which is this ticket's finding
     extended into markup.
+- 2026-08-26T11:57:28+02:00 — Done. tsconfig.json at the repository root covering frontend/ and browser/, a make typecheck target running tsc --noEmit, and a CI step ahead of the existing frontend job.
+
+  The sources passed clean at strict:true with no code changes, so this is purely
+  a gate rather than a round of fixes. Verified it earns its place the way the
+  finding was written: seeding 'const probe: number = "not a number"' into
+  board.ts makes typecheck fail with TS2322, while bun build exits 0 and emits the
+  broken code — which is exactly what CI used to accept.
+
+  Two dependencies, both toolchain-only and neither reachable from public/:
+  typescript pinned at exactly 6.0.3, and @types/bun for the bun:test module, the
+  Bun globals and the node: builtins that build.ts and the browser harness use.
+  AGENTS.md's dependency rule now says the toolchain sits in the same carve-out as
+  the browser driver, and says why the pin is exact.
+
+  Deliberately not taken: noUncheckedIndexedAccess. It is a good flag and it finds
+  real things — 12 sites, mostly indexed access in notes.ts — but fixing them is a
+  hardening pass with its own risk, not this ticket, and bundling it would have
+  turned a zero-churn gate into a code change. Worth filing separately.
+
+  Next for this: once TQ-0076 lands, swap tsc for vue-tsc in the same make target
+  rather than adding a second one.

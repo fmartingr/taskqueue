@@ -101,6 +101,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # Bun's bundler strips types without checking them, so nothing else in
+      # this job would notice a type error (TQ-0024).
+      - run: make typecheck
       - run: make test-frontend
       - run: make frontend
       - name: The built frontend must match the committed output

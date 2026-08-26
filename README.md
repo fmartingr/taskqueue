@@ -371,7 +371,7 @@ before binding to `0.0.0.0`.
 make help        # list targets
 make dev         # Bun watch + Go server with DEV=1 (frontend served from ./public)
 make test        # go test ./...
-make typecheck   # vue-tsc over the frontend, .ts and .vue templates alike
+make typecheck   # vue-tsc over frontend/ and browser/, .ts and .vue alike
 make test-frontend    # Bun unit tests for the pure frontend helpers
 make test-integration # drives the compiled binary
 make test-browser     # drives the board in a real Chromium (make browser-install first)
@@ -413,6 +413,12 @@ so one pass covers the `.ts` files and the templates inside the `.vue` ones
 alike. Both it and `typescript` are pinned exactly and neither reaches the
 shipped output: TypeScript 7's Go-native port ships no programmatic API, so
 `vue-tsc` cannot run on it at all.
+
+`public/app.js` is 217 KB, most of it Vue itself, and it is committed
+unminified on purpose: it is an artifact that gets reviewed, and 59 KB on one
+unreadable line would be a worse thing to have in the repository than 217 KB
+that still diffs. A clean checkout needs `bun install` before `make frontend`,
+`make typecheck` or `make dev` will run.
 
 ## Known limitations (deliberate, for now)
 

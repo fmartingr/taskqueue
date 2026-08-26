@@ -59,10 +59,16 @@ export const priorities = ref<PrioritySet>(FALLBACK_PRIORITIES);
 export const taskDir = ref("");
 export const version = ref("");
 
+/** False until the first listing lands, so the footer can say so. */
+export const loaded = ref(false);
+
 export const index = computed(() => indexTasks(tasks.value));
 export const visible = computed(() => visibleTasks(tasks.value, filters));
 
+/** The footer. It says "Loading…" until the first listing lands, so the board
+ *  does not open by announcing "0 tasks" for a queue it has not read yet. */
 export const statusLine = computed(() => {
+  if (!loaded.value) return "Loading…";
   const total = tasks.value.length;
   const shown = visible.value.length;
   const counts = shown === total ? `${total} tasks` : `${shown} of ${total} tasks`;
@@ -117,6 +123,7 @@ let lastPayload = "";
 export async function refresh(): Promise<void> {
   const fetched = await fetchTasks();
   const payload = JSON.stringify(fetched);
+  loaded.value = true;
   if (payload === lastPayload) return;
   lastPayload = payload;
   tasks.value = fetched;

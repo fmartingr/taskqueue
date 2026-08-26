@@ -94,6 +94,36 @@ test("the composer files into the column it was opened in", async () => {
   expect((await project.tasks(server))[0].status).toBe("in-progress");
 });
 
+// `composing` is one shared value: only one composer is open at a time. Filing
+// a card awaits the server, so by the time it closes itself the user may have
+// opened a composer somewhere else — and closing theirs would file whatever
+// they had typed so far, as a card titled with the first character or two.
+test("filing a card leaves a composer opened in another column alone", async () => {
+  const { project, server, page } = await openBoard();
+
+  await page.click(".column[data-status='backlog'] .composer-open");
+  const backlog = ".column[data-status='backlog'] .composer-input";
+  await page.waitForSelector(backlog);
+  await page.fill(backlog, "Filed from backlog");
+
+  // Straight into another column. The click blurs the first composer, which
+  // files it — and the close that follows lands after this one is already open.
+  await page.click(".column[data-status='todo'] .composer-open");
+  const todo = ".column[data-status='todo'] .composer-input";
+  await page.waitForSelector(todo);
+  await page.fill(todo, "Still typing this one");
+
+  // Long enough for the first create and the refresh behind it to return.
+  await page.waitForSelector(`.column[data-status='backlog'] .card:has-text("Filed from backlog")`);
+  await page.waitForFunction(() => document.querySelectorAll(".composer-input").length > 0);
+
+  expect(await page.isVisible(todo)).toBe(true);
+  expect(await page.inputValue(todo)).toBe("Still typing this one");
+
+  const titles = (await project.tasks(server)).map((task) => task.title);
+  expect(titles).toEqual(["Filed from backlog"]);
+});
+
 test("the composer discards an empty draft rather than filing a blank card", async () => {
   const { project, server, page } = await openBoard();
 

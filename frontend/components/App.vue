@@ -10,11 +10,11 @@
 import { computed } from "vue";
 
 import { creating, openTaskID, statusLine, tasks } from "../state";
-import BoardView from "./Board.vue";
+import Board from "./Board.vue";
 import CreateDialog from "./CreateDialog.vue";
 import FilterBar from "./FilterBar.vue";
 import TaskDialog from "./TaskDialog.vue";
-import ToastStack from "./Toasts.vue";
+import Toasts from "./Toasts.vue";
 
 const open = computed(() => tasks.value.find((task) => task.id === openTaskID.value));
 </script>
@@ -26,13 +26,13 @@ const open = computed(() => tasks.value.find((task) => task.id === openTaskID.va
     <button id="new-task" type="button" class="primary" @click="creating = true">New task</button>
   </header>
 
-  <BoardView />
+  <Board />
 
   <footer class="statusbar">
     <span id="status-line">{{ statusLine }}</span>
   </footer>
 
-  <ToastStack />
+  <Toasts />
 
   <TaskDialog v-if="open" :task="open" @close="openTaskID = null" />
   <CreateDialog v-if="creating" @close="creating = false" />

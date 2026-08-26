@@ -29,10 +29,18 @@ onMounted(() => {
   input.value?.focus();
 });
 
+/**
+ * Closes this composer, and only this one.
+ *
+ * The guard is not defensive: `file` awaits the create before closing, and by
+ * the time it returns the user may have opened a composer in another column —
+ * `composing` is shared, so an unguarded write here would close theirs instead,
+ * and the blur that follows would file whatever they had typed so far.
+ */
 function close(): void {
   settled = true;
   draft.value = "";
-  composing.value = null;
+  if (composing.value === props.status) composing.value = null;
 }
 
 async function file(keepOpen: boolean): Promise<void> {
@@ -55,11 +63,27 @@ async function file(keepOpen: boolean): Promise<void> {
     close();
   } catch (error) {
     toast(`Could not create the task: ${describe(error)}`);
-    // Hand the text back rather than losing what was typed.
+    // Hand the text back rather than losing what was typed — reopening this
+    // column's composer first if the user has since closed it, since otherwise
+    // the draft is restored into a component nothing is rendering.
     settled = false;
-    draft.value = title;
-    input.value?.focus();
+    if (composing.value === null) composing.value = props.status;
+    if (composing.value === props.status) {
+      draft.value = title;
+      input.value?.focus();
+    }
   }
+}
+
+/**
+ * Enter commits; Shift+Enter is a newline. Written out rather than as
+ * `.enter.exact` because that also swallows Ctrl/Alt/Meta+Enter, which the
+ * board this replaced treated as an ordinary Enter.
+ */
+function onEnter(event: KeyboardEvent, commit: () => void): void {
+  if (event.shiftKey) return;
+  event.preventDefault();
+  commit();
 }
 </script>
 
@@ -71,7 +95,7 @@ async function file(keepOpen: boolean): Promise<void> {
       class="composer-input"
       rows="2"
       placeholder="Title"
-      @keydown.enter.exact.prevent="file(true)"
+      @keydown.enter="onEnter($event, () => file(true))"
       @keydown.esc.prevent="close"
       @blur="file(false)"
     ></textarea>

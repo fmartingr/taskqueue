@@ -282,4 +282,55 @@ describe("mergeNotes", () => {
     const edited = note(first.timestamp, "only the first one changed");
     expect(mergeNotes([first, twin], [edited, twin], [first, twin])).toEqual([edited, twin]);
   });
+
+  // The tests above all leave the file's notes where the dialog found them, so
+  // a merge that simply zipped the two lists by position would pass them. These
+  // are the cases that tell the rule apart from that.
+
+  test("the file's order wins, and an edit still travels with its own note", () => {
+    const edited = note(first.timestamp, "reworded in the dialog");
+    expect(mergeNotes([first, second], [edited, second], [second, first])).toEqual([second, edited]);
+  });
+
+  test("a note inserted above the edited one does not take the edit", () => {
+    expect(mergeNotes([first], [note(first.timestamp, "reworded")], [later, first])).toEqual([
+      later,
+      note(first.timestamp, "reworded"),
+    ]);
+  });
+
+  test("two notes worded the same are told apart by their timestamps", () => {
+    // Matching on text alone would land the edit on the wrong note — and write
+    // the wrong timestamp with it — as soon as the file drops one of them.
+    const early = note("2026-08-25T09:00:00+02:00", "ran the suite");
+    const late = note("2026-08-25T10:00:00+02:00", "ran the suite");
+    const edited = note(late.timestamp, "ran the suite, twice");
+    expect(mergeNotes([early, late], [early, edited], [late])).toEqual([edited]);
+  });
+
+  test("a hand-written bullet carries no timestamp and still takes its edit", () => {
+    // splitBody gives a bullet somebody wrote by hand an empty timestamp.
+    const bullet = note("", "a hand-written bullet");
+    const edited = note("", "a hand-written bullet, reworded");
+    expect(mergeNotes([bullet], [edited], [bullet, later])).toEqual([edited, later]);
+  });
+
+  test("a file whose notes are all gone merges to nothing", () => {
+    expect(mergeNotes([first, second], [first, second], [])).toEqual([]);
+  });
+
+  test("nothing on either side is nothing", () => {
+    expect(mergeNotes([], [], [])).toEqual([]);
+  });
+
+  test("two notes identical in both fields cannot be told apart: the edit is lost", () => {
+    // The documented limit of matching on content. Two notes with the same
+    // timestamp *and* the same text are indistinguishable, so when the file
+    // drops one the merge cannot know which survived, takes the first unclaimed
+    // match, and the edit made on the other one goes. Written down here so that
+    // changing the rule means changing this test.
+    const twin = note(first.timestamp, "the first note");
+    const edited = note(first.timestamp, "the second twin, reworded");
+    expect(mergeNotes([first, twin], [first, edited], [twin])).toEqual([first]);
+  });
 });

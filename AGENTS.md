@@ -44,7 +44,6 @@ Dependencies run one way: `task` <- `config` <- `store` <- `guide`, `web`, `cli`
 make test           # run after backend changes
 make typecheck      # vue-tsc: .ts and the templates inside .vue, in one run
 make test-integration # drives the compiled binary; slower, tagged
-make typecheck      # tsc --noEmit; Bun strips types without checking them
 make test-frontend  # Bun unit tests for the pure frontend helpers
 make test-browser   # drives the board in a real browser; needs Chromium
 make frontend       # run after frontend changes (updates public/, which is committed)
@@ -54,13 +53,17 @@ make format         # go fmt + go mod tidy
 make dev            # Bun watch + DEV=1 server
 ```
 
+The frontend targets need `node_modules`: Vue and the SFC loader are build-time
+dependencies, so a clean checkout needs `bun install` once before `make
+frontend`, `make typecheck` or `make dev` will run.
+
 ## Rules
 
 - Run `make test` after backend changes.
 - Run `make typecheck` and `make frontend` after frontend changes, and commit
   the `public/` output; add `make test-frontend` when the change touches logic
-  that is unit-tested (the pure helpers in `frontend/`, currently `notes.ts` and
-  `board.ts`). `bun build` strips types without checking them, so nothing else
+  that is unit-tested (the pure helpers in `frontend/`, currently `notes.ts`,
+  `board.ts` and `format.ts`). `bun build` strips types without checking them, so nothing else
   in the pipeline sees a type error.
 - Run `make test-browser` after changes to the components, the board's markup or
   its styles. It needs a Chromium: `make browser-install` puts one in the cache.
@@ -75,8 +78,9 @@ make dev            # Bun watch + DEV=1 server
   runtime — a CDN, an import map, anything under `node_modules/` served as-is.
   A package used only by tests or by the toolchain is a different question — a
   browser driver is a reasonable answer to one, and `typescript` to the other.
-- No `<style>` block in an SFC. Bun emits it as a separate CSS asset, which
-  collides with the build's `[dir]/[name].js` naming and fails the build.
+- No `<style>` block in an SFC. Bun emits it as a second entry output, which
+  wants the same fixed `app.js` name `build.ts` pins for the bundle, and the
+  build aborts with "Multiple files share the same output path".
   `frontend/style.css` is the stylesheet, and it is copied, not bundled.
 - `typescript` and `vue-tsc` are pinned exactly, not floated. TypeScript 7 is
   the Go-native port and ships no programmatic API, so the Volar-based checkers
@@ -110,11 +114,6 @@ make dev            # Bun watch + DEV=1 server
 
 ## Testing
 
-`make typecheck` runs `tsc --noEmit` over `frontend/` and `browser/`. It is the
-only thing that reads the types at all: `bun build` erases them, so without it a
-`const n: number = "x"` compiles, ships into `public/app.js` and is embedded in
-the release binary. It is a gate, not a formatter — the sources pass clean.
-
 `go test ./...` covers frontmatter parsing/rendering, the store (with
 `t.TempDir()`), dependency/ready logic, the CLI (through `runCLI`, without
 spawning a binary) and the HTTP API (through `httptest`). Frontend logic that is
@@ -127,8 +126,8 @@ separate implementations of one rule.
 
 `make typecheck` is the gate `bun build` is not: the bundler strips types
 without checking them, so nothing else would catch a frontend regression before
-it shipped. `vue-tsc` covers the `.ts` files and the templates inside the `.vue`
-ones in one run.
+it shipped. `vue-tsc` covers `frontend/` and `browser/` — the `.ts` files and
+the templates inside the `.vue` ones — in one run.
 
 `make test-integration` is a separate layer behind a build tag, so `go test ./...`
 stays fast. It builds `tq` once and runs it as a process: real exit codes through

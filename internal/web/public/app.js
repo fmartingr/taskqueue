@@ -5577,9 +5577,12 @@ var labels = ref({});
 var priorities = ref(FALLBACK_PRIORITIES);
 var taskDir = ref("");
 var version2 = ref("");
+var loaded = ref(false);
 var index = computed2(() => indexTasks(tasks.value));
 var visible = computed2(() => visibleTasks(tasks.value, filters));
 var statusLine = computed2(() => {
+  if (!loaded.value)
+    return "Loading…";
   const total = tasks.value.length;
   const shown = visible.value.length;
   const counts = shown === total ? `${total} tasks` : `${shown} of ${total} tasks`;
@@ -5604,6 +5607,7 @@ var lastPayload = "";
 async function refresh() {
   const fetched = await fetchTasks();
   const payload = JSON.stringify(fetched);
+  loaded.value = true;
   if (payload === lastPayload)
     return;
   lastPayload = payload;
@@ -5961,7 +5965,8 @@ var Composer_default = /* @__PURE__ */ defineComponent({
     function close() {
       settled = true;
       draft.value = "";
-      composing.value = null;
+      if (composing.value === props.status)
+        composing.value = null;
     }
     async function file(keepOpen) {
       if (settled)
@@ -5983,9 +5988,19 @@ var Composer_default = /* @__PURE__ */ defineComponent({
       } catch (error) {
         toast(`Could not create the task: ${describe(error)}`);
         settled = false;
-        draft.value = title;
-        input.value?.focus();
+        if (composing.value === null)
+          composing.value = props.status;
+        if (composing.value === props.status) {
+          draft.value = title;
+          input.value?.focus();
+        }
       }
+    }
+    function onEnter(event, commit) {
+      if (event.shiftKey)
+        return;
+      event.preventDefault();
+      commit();
     }
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("div", _hoisted_15, [
@@ -5997,7 +6012,7 @@ var Composer_default = /* @__PURE__ */ defineComponent({
           rows: "2",
           placeholder: "Title",
           onKeydown: [
-            _cache[1] || (_cache[1] = withKeys(withModifiers(($event) => file(true), ["exact", "prevent"]), ["enter"])),
+            _cache[1] || (_cache[1] = withKeys(($event) => onEnter($event, () => file(true)), ["enter"])),
             withKeys(withModifiers(close, ["prevent"]), ["esc"])
           ],
           onBlur: _cache[2] || (_cache[2] = ($event) => file(false))
@@ -6477,13 +6492,13 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
     const list = ref(null);
     const editing = ref(-1);
     const editor = ref("");
-    function beginEdit(index2) {
-      if (editing.value === index2)
+    function beginEdit(position) {
+      if (editing.value === position)
         return;
       if (editing.value !== -1)
         commit(editing.value);
-      editing.value = index2;
-      editor.value = props.notes[index2]?.text ?? "";
+      editing.value = position;
+      editor.value = props.notes[position]?.text ?? "";
       nextTick(() => {
         const area = list.value?.querySelector("textarea.note-editor");
         if (area instanceof HTMLTextAreaElement) {
@@ -6504,6 +6519,12 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
       const text = editor.value.trim();
       if (text !== "" && text !== props.notes[position]?.text)
         emit2("edit", position, text);
+    }
+    function onEnter(event, commit2) {
+      if (event.shiftKey)
+        return;
+      event.preventDefault();
+      commit2();
     }
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("section", _hoisted_110, [
@@ -6537,7 +6558,7 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
                 class: "note-editor",
                 rows: "2",
                 onKeydown: [
-                  withKeys(withModifiers(($event) => finish(true, position), ["exact", "prevent"]), ["enter"]),
+                  withKeys(($event) => onEnter($event, () => finish(true, position)), ["enter"]),
                   withKeys(withModifiers(($event) => finish(false, position), ["prevent"]), ["esc"])
                 ],
                 onBlur: ($event) => finish(true, position)

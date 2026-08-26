@@ -25,7 +25,7 @@ import type { Note } from "../notes";
 const props = defineProps<{ notes: Note[]; draft: string }>();
 const emit = defineEmits<{
   /** The user finished editing the note at this position. */
-  edit: [index: number, text: string];
+  edit: [position: number, text: string];
   "update:draft": [value: string];
   append: [];
 }>();
@@ -35,12 +35,12 @@ const list = ref<HTMLUListElement | null>(null);
 const editing = ref(-1);
 const editor = ref("");
 
-function beginEdit(index: number): void {
-  if (editing.value === index) return;
+function beginEdit(position: number): void {
+  if (editing.value === position) return;
   // An edit already in progress is kept, the way losing focus keeps it.
   if (editing.value !== -1) commit(editing.value);
-  editing.value = index;
-  editor.value = props.notes[index]?.text ?? "";
+  editing.value = position;
+  editor.value = props.notes[position]?.text ?? "";
 
   void nextTick(() => {
     const area = list.value?.querySelector("textarea.note-editor");
@@ -74,6 +74,17 @@ function commit(position: number): void {
   const text = editor.value.trim();
   if (text !== "" && text !== props.notes[position]?.text) emit("edit", position, text);
 }
+
+/**
+ * Enter commits; Shift+Enter is a newline. Written out rather than as
+ * `.enter.exact` because that also swallows Ctrl/Alt/Meta+Enter, which the
+ * board this replaced treated as an ordinary Enter.
+ */
+function onEnter(event: KeyboardEvent, commit: () => void): void {
+  if (event.shiftKey) return;
+  event.preventDefault();
+  commit();
+}
 </script>
 
 <template>
@@ -103,7 +114,7 @@ function commit(position: number): void {
           v-model="editor"
           class="note-editor"
           rows="2"
-          @keydown.enter.exact.prevent="finish(true, position)"
+          @keydown.enter="onEnter($event, () => finish(true, position))"
           @keydown.esc.prevent="finish(false, position)"
           @blur="finish(true, position)"
         ></textarea>

@@ -62,7 +62,7 @@ test:
 test-integration:
 	go test -tags integration ./internal/integration/
 
-## typecheck: Typecheck the frontend, TypeScript and Vue templates alike
+## typecheck: Typecheck frontend/ and browser/, .ts and .vue templates alike
 .PHONY: typecheck
 typecheck:
 	bun run typecheck

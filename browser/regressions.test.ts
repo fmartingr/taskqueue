@@ -126,3 +126,62 @@ test("clicking a second note's pencil while one is being edited opens it", async
   await page.waitForSelector(editor(3));
   expect(await page.inputValue(editor(3))).toBe("third note");
 });
+
+// ── The same three bugs, one door further along ─────────────────
+//
+// Each of the tests above drives one path to its bug. Each of these drives the
+// sibling path that the fix also has to cover, and that a plausible edit could
+// take away without the tests above noticing.
+
+// TQ-0010 again: "Add note" builds its patch the same way Save does, so it
+// carries the same risk of writing back a body captured when the dialog opened.
+test("appending a note keeps the notes written while the dialog was open", async () => {
+  const board = await dialogWithNotes("the note the dialog opened with");
+  const { project, server, page, id } = board;
+
+  project.mustRun("note", id, "--", "written by an agent");
+
+  await page.fill("#task-note", "appended from the panel");
+  await page.click("#task-note-add");
+  // Bounded on purpose: a note that never arrives is a failure, not a hang.
+  await page.waitForSelector("#task-notes .note:nth-of-type(3)", { timeout: 10_000 });
+
+  expect(await noteTexts(board)).toEqual([
+    "the note the dialog opened with",
+    "written by an agent",
+    "appended from the panel",
+  ]);
+
+  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  expect(task?.body).toContain("written by an agent");
+});
+
+// TQ-0027 again: the pencil answers to mousedown so the click that follows
+// cannot be swallowed, but a focused button reached by keyboard fires no
+// mousedown at all — so the click handler beside it is load-bearing, not
+// redundant, and removing it would make the pencil mouse-only.
+test("the pencil opens its editor from the keyboard as well as the mouse", async () => {
+  const board = await dialogWithNotes("the note to edit");
+  const { page } = board;
+
+  await page.focus("#task-notes .note button.icon");
+  await page.keyboard.press("Enter");
+
+  await page.waitForSelector("#task-notes .note-editor", { timeout: 10_000 });
+  expect(await page.inputValue("#task-notes .note-editor")).toBe("the note to edit");
+});
+
+// TQ-0019 in the other direction: the fix belongs to the note field alone. A
+// form-level handler would pass the test above and quietly kill the implicit
+// submit that Enter in any other field is supposed to do.
+test("Enter in the title field still saves the dialog", async () => {
+  const board = await dialogWithNotes("a note");
+  const { project, server, page, id } = board;
+
+  await page.fill("#task-title", "Retitled with Enter");
+  await page.press("#task-title", "Enter");
+
+  await page.waitForSelector("#task-dialog[open]", { state: "detached", timeout: 10_000 });
+  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  expect(task?.title).toBe("Retitled with Enter");
+});

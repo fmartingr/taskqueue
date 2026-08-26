@@ -5,7 +5,7 @@
  * source of truth: every call reads from or writes to the Markdown files, and
  * the response is what the store actually has on disk.
  *
- * Framework-agnostic on purpose — no Vue in this file. The components own the
+ * Framework-agnostic on purpose — no Vue in this file. `state.ts` owns the
  * state; this owns the wire.
  */
 

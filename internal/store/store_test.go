@@ -454,6 +454,24 @@ func TestDiscoverTaskDirNotFound(t *testing.T) {
 	}
 }
 
+// A project without Git is the shape where the search has no bound at all: it
+// runs to the filesystem root and finds nothing. What it says then is its own
+// message, and it has to stay that way — the bounded one names a repository
+// root that does not exist here, and offers to lift a bound that was never
+// applied (TQ-0064).
+func TestDiscoverTaskDirWithoutARepositoryOrAMarker(t *testing.T) {
+	root := tqtest.RootWithoutAnchor(t)
+
+	_, err := store.DiscoverTaskDir(root)
+	if !errors.Is(err, store.ErrProjectNotFound) {
+		t.Fatalf("err = %v, want ErrProjectNotFound", err)
+	}
+	want := fmt.Sprintf("%s (no %s in %s or any parent directory)", store.ErrProjectNotFound, config.ConfigFileName, root)
+	if err.Error() != want {
+		t.Errorf("err = %q, want %q", err, want)
+	}
+}
+
 func TestDiscoverTaskDirEnvOverride(t *testing.T) {
 	root := tqtest.Root(t)
 	st, err := store.InitStore(root)
@@ -1370,6 +1388,28 @@ func TestShadowedProjectMarker(t *testing.T) {
 
 		if marker, ok := store.ShadowedProjectMarker(repo); ok && marker == stray {
 			t.Errorf("ShadowedProjectMarker() = %q, want a directory named %s to count for nothing", marker, config.TaskDirName)
+		}
+	})
+
+	t.Run("a project without a repository excludes nothing", func(t *testing.T) {
+		// No repository means no bound, so the search already went as far as
+		// TQ_WALK_FOREVER would have taken it and there is nothing it failed to
+		// reach. The project's own marker is not something it walked past.
+		project := tqtest.RootWithoutGit(t)
+
+		// The working directory is the project, which is how the CLI always
+		// calls this: it passes the directory tq was run in. Answering from
+		// the process's working directory rather than from the repository is
+		// the mistake that would make a project without Git warn about its own
+		// marker.
+		//
+		// t.Chdir moves the whole process, so this and anything running beside
+		// it must stay sequential — which is why nothing in this package calls
+		// t.Parallel.
+		t.Chdir(project)
+
+		if marker, ok := store.ShadowedProjectMarker(project); ok {
+			t.Errorf("ShadowedProjectMarker() = %q, want nothing shadowed: without a repository nothing bounded the search", marker)
 		}
 	})
 

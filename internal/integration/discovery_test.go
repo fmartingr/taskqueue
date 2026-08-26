@@ -307,6 +307,28 @@ func TestInitNamesTheProjectTheBoundExcluded(t *testing.T) {
 		}
 	})
 
+	// A project without Git had no bound, so the search already went as far as
+	// TQ_WALK_FOREVER would have taken it and excluded nothing. The store pins
+	// the guard itself; what a real process adds is the note reaching stderr,
+	// answered from the working directory tq was run in — and here that
+	// directory holds the project's own marker, the one file a mistake in the
+	// guard would name back at the caller (TQ-0064).
+	t.Run("a project without a repository excludes nothing", func(t *testing.T) {
+		t.Parallel()
+		p := newProject(t)
+		requireNoRepositoryAbove(t, p.dir)
+
+		r := p.mustRun(t, "init")
+		if !strings.Contains(r.Stdout, "Initialized task queue in "+realPath(t, p.dir, ".tasks")) {
+			t.Fatalf("stdout = %q, want init to have made this project its queue", r.Stdout)
+		}
+		for _, unwanted := range []string{"TQ_WALK_FOREVER", "was not used"} {
+			if strings.Contains(r.Stderr, unwanted) {
+				t.Errorf("stderr = %q, want no mention of %q: without a repository nothing bounded the search", r.Stderr, unwanted)
+			}
+		}
+	})
+
 	t.Run("--json keeps stdout machine-readable", func(t *testing.T) {
 		t.Parallel()
 		p, marker := shadowed(t)

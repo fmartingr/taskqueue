@@ -80,6 +80,28 @@ func newProject(t *testing.T) *project {
 	return &project{dir: dir}
 }
 
+// requireNoRepositoryAbove fails a test whose premise is a project without Git
+// when the machine says otherwise: TMPDIR inside a developer's own checkout puts
+// the repository bound back, and a test written for the unbounded case then
+// passes for the wrong reason (TQ-0064).
+//
+// It walks for .git itself rather than calling config.RepositoryRoot: this
+// package links none of tq's own code, because what it is here to check is the
+// compiled binary's behaviour and not a function it could have called directly.
+func requireNoRepositoryAbove(t *testing.T, dir string) {
+	t.Helper()
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			t.Fatalf("%s is a repository above the fixture, so this test's premise — a project with no Git anywhere above it — does not hold here", dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
 // path joins a path inside the project.
 func (p *project) path(elem ...string) string {
 	return filepath.Join(append([]string{p.dir}, elem...)...)

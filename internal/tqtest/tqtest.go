@@ -112,9 +112,77 @@ func RootWithGit(t *testing.T) string {
 	return root
 }
 
+// RootWithoutAnchor returns a temporary directory with neither anchor: no
+// marker and no repository, at it or above it. It is for the configuration
+// TQ-0064 found missing from the suite — a project on a machine without Git,
+// where discovery has no bound and nothing to find, and simply runs out of
+// tree.
+//
+// The contract is about what the code under test may do with it, not about
+// what the test puts in it: furnish the directory freely, but never hand it to
+// something that creates a queue. With no anchor there is nothing to stop that
+// walk climbing into a developer's own project, which is what TQ-0021 and
+// TQ-0053 are about, so a test that exercises creation takes one of the
+// anchored roots above instead.
+//
+// The guard is the isolation the anchors would otherwise be. Rather than trust
+// that nothing sits above the temporary directory, it asks the same two
+// questions discovery asks and fails when either answers — a marker above
+// would put discovery on a different branch entirely, and a repository above
+// would put the bound back.
+func RootWithoutAnchor(t *testing.T) string {
+	t.Helper()
+	root := bareRoot(t)
+	// A near-miss name or an unreadable directory anywhere up to the filesystem
+	// root comes back as an error rather than "no marker", and either one means
+	// the answer below cannot be trusted.
+	path, err := config.ConfigPath(root)
+	if err != nil {
+		t.Fatalf("looking for a marker above %s: %v", root, err)
+	}
+	if path != "" {
+		t.Fatalf("%s sits above the fixture, so this test's premise — a project with no marker anywhere above it — does not hold here", path)
+	}
+	RequireNoRepositoryAbove(t, root)
+	return root
+}
+
+// RootWithoutGit returns a marker-anchored temporary directory with no
+// repository anywhere above it. It is for the tests whose premise is a project
+// on a machine without Git: the marker is the barrier, and the absence of a
+// repository is the thing under test rather than an accident of where TMPDIR
+// happens to point.
+//
+// Root would do for the barrier alone. What this adds is the guard, and the
+// guard is the point: a repository above hands the fallbacks below the bound
+// somewhere to land, and a test written to catch them lands there too and
+// passes for the wrong reason (TQ-0064).
+func RootWithoutGit(t *testing.T) string {
+	t.Helper()
+	root := Root(t)
+	RequireNoRepositoryAbove(t, root)
+	return root
+}
+
+// RequireNoRepositoryAbove fails a test whose premise is a project without Git
+// when the machine says otherwise — TMPDIR inside a developer's own checkout is
+// all it takes. Exported so the premise and its wording live in one place: the
+// fixtures here assert it for the roots they hand out, and a test that builds a
+// directory of its own asserts it for that.
+//
+// It fails rather than skipping, because a skip that only shows under -v is how
+// this stops being noticed.
+func RequireNoRepositoryAbove(t *testing.T, dir string) {
+	t.Helper()
+	if repo, ok := config.RepositoryRoot(dir); ok {
+		t.Fatalf("%s is a repository above the fixture, so this test's premise — a project with no Git anywhere above it — does not hold here", repo)
+	}
+}
+
 // bareRoot is a temporary directory with the environment cleared and no anchor
 // of its own. Unexported: an unanchored root is what TQ-0021 and TQ-0053 are
-// about, so a test reaches for one of the anchored roots above.
+// about, so a test reaches for one of the anchored roots above, or for the
+// guarded RootWithoutAnchor when both absences are the premise.
 func bareRoot(t *testing.T) string {
 	t.Helper()
 	// Belt and braces: Isolate cleared the ambient values, this clears anything

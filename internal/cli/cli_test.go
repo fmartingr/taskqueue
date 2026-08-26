@@ -805,22 +805,28 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 // tq init from a subdirectory must adopt the project's queue, not fork one.
 // The project here is deliberately not a Git repository, which is the shape
 // that still breaks: when there is a repository root, taskDirTarget already
-// stops at it and init lands in the right place by accident. The enclosing
-// temp directory carries the .git anchor so the walk cannot escape it.
+// stops at it and init lands in the right place by accident.
+//
+// So no .git may sit anywhere above this fixture — an anchor there is what made
+// the fork assertion below unable to fail, because an init that lost sight of
+// the project's marker would land at that anchor rather than in the
+// subdirectory (TQ-0064). The enclosing marker is the barrier instead: it is
+// what discovery looks for, so it stops the marker walk climbing out of the
+// temp directory just as well, and the nearer marker the project owns is the
+// one that wins. The repository walk has no such barrier, which is why the
+// fixture asserts the absence rather than arranging it.
 func TestCLIInitFindsTheQueueAbove(t *testing.T) {
-	// The enclosing repository is the bound the walk has to stop at, and it
-	// must carry no marker of its own: the project below is what owns one.
-	outer := tqtest.RootWithGit(t)
+	outer := tqtest.RootWithoutGit(t)
 
 	project := filepath.Join(outer, "project")
 	nested := filepath.Join(project, "backend")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Directly, not through store.InitStore: the enclosing anchor would send it to
-	// the repository root, and the point here is a queue the project owns.
-	// The marker is what makes it the project's queue rather than a directory
-	// that happens to be named .tasks.
+	// Directly, not through store.InitStore: the enclosing marker would send it
+	// one level up, and the point here is a queue the project owns. The marker
+	// is what makes it the project's queue rather than a directory that happens
+	// to be named .tasks.
 	if err := os.MkdirAll(filepath.Join(project, config.TaskDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -844,11 +850,16 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 	if out.Created {
 		t.Error("created = true, want false: the queue already existed")
 	}
+	// The fork this test exists for: with no .git anywhere, an init that lost
+	// the project's marker has nowhere to fall back to but the directory it was
+	// run in.
 	if _, err := os.Stat(filepath.Join(nested, config.TaskDirName)); !os.IsNotExist(err) {
 		t.Error("init forked a second queue in the subdirectory")
 	}
+	// And the nearer marker is the one that decides: the enclosing project has
+	// one too, and adopting it would skip past the project the caller is in.
 	if _, err := os.Stat(filepath.Join(outer, config.TaskDirName)); !os.IsNotExist(err) {
-		t.Error("init created a queue at the enclosing repository root")
+		t.Error("init created a queue at the marker above the project")
 	}
 	sub.reset()
 	if listing := sub.mustRun("list"); !strings.Contains(listing, "existing work") {
@@ -860,8 +871,22 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 // reach a queue outside the repository, or init adopts it and creates nothing.
 func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 	outer := tqtest.Root(t)
-	if _, err := store.InitStore(outer); err != nil {
+	outsideStore, err := store.InitStore(outer)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The premise, asserted rather than assumed: there has to be a queue
+	// outside for "not adopted" to mean anything, and a fixture that quietly
+	// stopped making one would leave this test asserting nothing.
+	info, err := os.Stat(outsideStore.Dir)
+	if err != nil {
+		t.Fatalf("the queue outside the repository was not created at %s: %v", outsideStore.Dir, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%s is not a directory, so there is no queue outside for this test to refuse", outsideStore.Dir)
+	}
+	if want := filepath.Join(outer, config.TaskDirName); outsideStore.Dir != want {
+		t.Fatalf("the queue outside the repository is at %q, want %q: it has to sit where the walk would reach it", outsideStore.Dir, want)
 	}
 	repo := filepath.Join(outer, "project")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -880,6 +905,50 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 	}
 	if !out.Created {
 		t.Error("created = false, want true: the repository had no queue")
+	}
+}
+
+// The other half of the pair: with nothing to adopt, init from a deep
+// subdirectory creates one queue and puts it at the repository root, so an
+// agent working below does not scatter task directories around the tree
+// (TQ-0047). The marker and the guide go with the queue, since together they
+// are what makes the root the project.
+func TestCLIInitCreatesAtTheRepositoryRoot(t *testing.T) {
+	// No marker in the fixture, and the repository bound hides any above it:
+	// the repository is the anchor and the bound at once.
+	root := tqtest.RootWithGit(t)
+	nested := filepath.Join(root, "src", "deep")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tc := newCLIIn(t, nested)
+	var out struct {
+		TaskDir string `json:"task_dir"`
+		Created bool   `json:"created"`
+	}
+	tc.mustRunJSON(&out, "init", "--json")
+
+	want := filepath.Join(root, config.TaskDirName)
+	if out.TaskDir != want {
+		t.Errorf("task_dir = %q, want the repository root's queue %q", out.TaskDir, want)
+	}
+	if !out.Created {
+		t.Error("created = false, want true: the repository had no queue")
+	}
+	for _, dir := range []string{nested, filepath.Join(root, "src")} {
+		if _, err := os.Stat(filepath.Join(dir, config.TaskDirName)); !os.IsNotExist(err) {
+			t.Errorf("init made a queue in %s, want only the one at the repository root", dir)
+		}
+		if _, err := os.Stat(filepath.Join(dir, config.ConfigFileName)); !os.IsNotExist(err) {
+			t.Errorf("init wrote a marker in %s, binding it to a queue of its own", dir)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, config.ConfigFileName)); err != nil {
+		t.Errorf("the marker belongs at the repository root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(want, guide.AgentsFileName)); err != nil {
+		t.Errorf("the guide belongs in the queue at the repository root: %v", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 ---
 id: TQ-0064
 title: Anchoring every fixture removed all coverage of projects without Git
-status: todo
+status: done
 priority: high
 labels:
   - tests
@@ -9,7 +9,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T17:45:14+02:00
-updated: 2026-08-26T18:01:21+02:00
+updated: 2026-08-26T21:22:00+02:00
 ---
 
 ## Finding
@@ -65,3 +65,31 @@ Found by `/code-review` over 20b06d2; mutation-verified here.
   Two branches still survive mutation in BOTH suites: GuidePointer's non-repository branch (internal/guide/agents.go:63) and ShadowedTaskDir's !ok guard (internal/store/store.go:138), plus the wording of the no-repository not-found message. The GuidePointer mutant is user-visible and undetected — on a no-Git project the printed pointer goes from @.tasks/AGENTS.md to @../AGENTS.md and both suites stay green, because agents_test.go:110 is still the loose strings.HasSuffix flagged by TQ-0061.
 
   Remaining work: a no-Git fixture in the unit suite, plus exact-string assertions on those two functions.
+- 2026-08-26T20:55:29+02:00 — Three of the four branches this ticket names were closed elsewhere, not here.
+
+  GuidePointer's no-repository branch: gone. TQ-0061 replaced GuidePointer with GuidePath and deleted the base selection outright, so the mutant has no line left to live on and the assertions are exact strings now.
+
+  taskDirTarget's fallback to startDir and DiscoverTaskDir's no-repository return: covered by make test-integration since the harness stopped anchoring with .git. Reconfirmed on this branch.
+
+  ShadowedProjectMarker (the renamed ShadowedTaskDir, TQ-0062) kept its surviving mutant: dropping the !ok guard left both suites green. It is user-visible — a project without Git warns about its own marker, because the walk then starts at the process working directory. Killed in two places now: a store unit test that chdirs into the project the way the CLI passes its working directory, and an integration subtest that drives the real binary, where the bogus note actually reaches stderr.
+- 2026-08-26T20:55:40+02:00 — Every assertion added or tightened here is mutation-proven on a scratch copy:
+
+  - ShadowedProjectMarker's no-repository guard removed -> store TestShadowedProjectMarker/a project without a repository excludes nothing, and integration TestInitNamesTheProjectTheBoundExcluded/a project without a repository excludes nothing. Both green on HEAD before.
+  - The no-repository not-found message reworded -> TestDiscoverTaskDirWithoutARepositoryOrAMarker, which pins the whole string. Green on HEAD before.
+  - ConfigPath stops walking up -> TestCLIInitFindsTheQueueAbove now fails on 'init forked a second queue in the subdirectory'. Against the old fixture the same mutant landed the queue at the .git anchor instead, so that assertion never fired. Dropping the anchor for a marker is what makes it reachable.
+  - taskDirTarget stops preferring the repository root -> TestCLIInitCreatesAtTheRepositoryRoot, the TQ-0047 case the redo dropped. No CLI test caught this mutant before.
+  - Config.TaskDir drops the marker's path -> TestCLIInitDoesNotAdoptAQueueOutsideTheRepository fails on its new precondition. Without it the test passed while there was no queue outside to refuse.
+
+  tqtest gained RootWithoutAnchor: a temp directory with neither anchor, for the one configuration where both absences are the premise. Read-only by contract, and it fails rather than trusting the machine — it asks discovery's own two questions about what sits above.
+- 2026-08-26T21:10:59+02:00 — Code review (high) raised one medium on this diff: TestCLIInitFindsTheQueueAbove asserted its no-Git premise in a comment only. tqtest.Root plants a marker but has no repository guard, so TMPDIR inside a developer's checkout would give a lost init somewhere to fall back to and the fork assertion would be unable to fail again — the same false green, moved from the fixture out to the machine. The premise is asserted now, and verified: running the package with TMPDIR pointed at a directory holding .git fails on the guard.
+
+  Two low notes addressed as well. RootWithoutAnchor's contract is reworded to say what it is about — what the code under test may do with the directory, not what the test puts in it, since the first caller writes a marker into it. And the t.Chdir subtest says why the package stays sequential.
+
+  One finding was outside this diff and is left alone: tq move accepts an empty status through Columns.Check, which returns nil for it by design, so the failure surfaces four layers down.
+- 2026-08-26T21:22:00+02:00 — Second review round, high effort, found one HIGH this diff had missed and it was the ticket's own failure mode: the integration subtest had no premise guard. newProject is a bare t.TempDir plus a marker, so with TMPDIR inside a checkout the repository bound comes back and the subtest passes with the ShadowedProjectMarker mutant alive — reproduced, ok in 0.8s. The store-side twin failed loudly under the same TMPDIR. Guarded now by a local walk for .git in harness_test.go; internal/integration links none of tq's own code, so it cannot borrow config.RepositoryRoot.
+
+  The premise is one fixture now rather than three spellings: tqtest.RootWithoutGit is Root plus the guard, and tqtest.RequireNoRepositoryAbove is exported so the wording lives in one place. All four guards were verified to trip together under a TMPDIR holding .git.
+
+  Three comments were corrected: 'only a real process can show this' was false once the store test existed, RootWithGit guarantees no marker at the fixture rather than none above it, and the enclosing marker bounds the config walk only — RepositoryRoot is not bounded by a marker at all, which is why the guard is load-bearing and not belt-and-braces.
+
+  Kept against the review's suggestion: the second precondition in TestCLIInitDoesNotAdoptAQueueOutsideTheRepository. Under the mutant that drops the marker's path, InitStore returns the project directory itself, which exists and is a directory — so the os.Stat check passes and only the path check fails. The stat's error message is split in two, since a path that exists but is not a directory left err nil and printed <nil>.

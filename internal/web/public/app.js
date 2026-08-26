@@ -5668,6 +5668,7 @@ var columns = ref(FALLBACK_COLUMNS);
 var taskDir = ref("");
 var version2 = ref("");
 var unreadable = ref([]);
+var incomplete = ref(false);
 var loaded = ref(false);
 var streaming = ref(null);
 var stale = ref(false);
@@ -5682,7 +5683,8 @@ var statusLine = computed2(() => {
   const link = streaming.value === false ? "polling" : "";
   const broken = unreadable.value.length;
   const skipped = broken ? `${broken} file${broken === 1 ? "" : "s"} could not be read` : "";
-  return [counts, skipped, taskDir.value, version2.value && `tq ${version2.value}`, link].filter(Boolean).join(" · ");
+  const unsquared = incomplete.value ? "the queue was changing as it was read" : "";
+  return [counts, skipped, unsquared, taskDir.value, version2.value && `tq ${version2.value}`, link].filter(Boolean).join(" · ");
 });
 var dragging = ref(null);
 var composing = ref(null);
@@ -5748,6 +5750,7 @@ async function loadServerStatus() {
     taskDir.value = status.task_dir;
     version2.value = status.version;
     reportUnreadable(status.unreadable ?? []);
+    reportIncomplete(status.incomplete ?? false);
   } catch (error) {
     console.error("status failed", error);
   }
@@ -5765,6 +5768,14 @@ function reportUnreadable(files) {
   const rest = fresh.length - NAMED_IN_TOASTS;
   if (rest > 0)
     toast(`…and ${rest} more file${rest === 1 ? "" : "s"} could not be read`);
+}
+var complainedAboutIncomplete = false;
+function reportIncomplete(unsquared) {
+  incomplete.value = unsquared;
+  if (unsquared && !complainedAboutIncomplete) {
+    toast("The queue was changing as it was read — this board may be a task short");
+  }
+  complainedAboutIncomplete = unsquared;
 }
 var lastConfig = "";
 var lastConfigError = "";

@@ -4,6 +4,7 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -99,6 +100,52 @@ func TestAPIReadOnlyEndpoints(t *testing.T) {
 			t.Errorf("file = %q, want the marker this project carries", cfg.File)
 		}
 	})
+}
+
+// The CLI writing while the server reads is the workflow this project is for,
+// and a retitle moves the file underneath the request. GET /api/tasks used to
+// answer 404 for the whole collection (TQ-0011) and then to answer 200 with a
+// task missing (TQ-0012); now every response is the whole queue.
+func TestAPIListStaysWholeWhileTheCLIRenamesTasks(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+
+	const tasks = 12
+	ids := make([]string, 0, tasks)
+	for i := 1; i <= tasks; i++ {
+		p.mustRun(t, "add", fmt.Sprintf("task number %d", i), "--status", "todo")
+		ids = append(ids, fmt.Sprintf("TQ-%04d", i))
+	}
+	srv := p.serve(t)
+
+	writer := p.renameTasks(t, ids)
+	const requests = 60
+	for i := 0; i < requests; i++ {
+		code, body := srv.request(t, http.MethodGet, "/api/tasks", "")
+		if code != http.StatusOK {
+			t.Fatalf("GET /api/tasks = %d during a rename: body %s", code, body)
+		}
+		var listed []taskJSON
+		if err := json.Unmarshal([]byte(body), &listed); err != nil {
+			t.Fatalf("GET /api/tasks is not an array of tasks: %v\n%s", err, body)
+		}
+		// Every task, once each: a retitle in flight must cost the board
+		// neither a card nor a duplicate of one.
+		seen := map[string]int{}
+		for _, task := range listed {
+			seen[task.ID]++
+		}
+		for _, id := range ids {
+			switch seen[id] {
+			case 1:
+			case 0:
+				t.Fatalf("GET /api/tasks is missing %s (%d of %d tasks)", id, len(listed), tasks)
+			default:
+				t.Fatalf("GET /api/tasks holds %s %d times (%d of %d tasks)", id, seen[id], len(listed), tasks)
+			}
+		}
+	}
+	writer.stopWhenDone(t)
 }
 
 // A running server keeps serving the queue around a file it cannot read: the

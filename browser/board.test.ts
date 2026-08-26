@@ -5,7 +5,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { card, cardIn, idsIn, useBoard } from "./harness";
 
@@ -202,6 +202,31 @@ test("a blocked card says what it is waiting for, in the board and the dialog", 
   await page.waitForSelector("#task-dialog[open]");
   expect(await page.textContent("#task-blocked")).toContain(blocker);
   expect(await page.inputValue("#task-depends-on")).toBe(blocker);
+});
+
+// A queue being written to while it is read can come back a task short, or
+// holding one twice, and the store says so rather than passing the result off
+// as the whole queue. The board says it the same way it says a file was
+// skipped: a toast, and a word in the footer for as long as it lasts
+// (TQ-0012). Two files claiming one ID is that state held still — the retries
+// cannot resolve it, so the server keeps reporting it.
+test("a queue the server could not read consistently is said on the board", async () => {
+  let healthy = "";
+  const { page, project } = await openBoard((p) => {
+    healthy = p.add("Still here");
+  });
+  await page.waitForSelector(cardIn("todo", healthy));
+
+  const original = readFileSync(join(project.dir, ".tasks", `${healthy}-still-here.md`));
+  writeFileSync(join(project.dir, ".tasks", `${healthy}-a-second-file.md`), original);
+
+  const toast = await page.waitForSelector("#toasts .toast.error");
+  expect(await toast.textContent()).toContain("changing as it was read");
+
+  // And the footer keeps saying it after the toast has gone.
+  await page.waitForFunction(() =>
+    document.querySelector("#status-line")?.textContent?.includes("changing as it was read"),
+  );
 });
 
 // One file nobody can parse used to empty the board: the listing failed, and

@@ -227,6 +227,9 @@ func listTasks(t *testing.T, st *store.Store) []task.Task {
 	if len(listing.Unreadable) != 0 {
 		t.Fatalf("List skipped %+v, want every file readable", listing.Unreadable)
 	}
+	if listing.Incomplete {
+		t.Fatalf("List could not square its scan with a directory nothing is writing to")
+	}
 	return listing.Tasks
 }
 
@@ -313,8 +316,8 @@ func TestListSkipsEveryShapeOfBrokenFile(t *testing.T) {
 // A name whose file is not there is not a broken file: `tq update --title`
 // writes the new name before retiring the old one, and `tq delete` unlinks, so
 // a scan that caught the old name has nothing to report. A dangling symlink is
-// that state, held still. (Whether the task itself was missed by the scan is
-// TQ-0012, and not this.)
+// that state, held still — the directory is not moving, so there is nothing for
+// the consistency check to retry either.
 func TestListDoesNotReportAFileThatIsNoLongerThere(t *testing.T) {
 	st := tqtest.NewStore(t)
 	healthy := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "healthy"})
@@ -333,6 +336,262 @@ func TestListDoesNotReportAFileThatIsNoLongerThere(t *testing.T) {
 	}
 	if len(listing.Unreadable) != 0 {
 		t.Errorf("Unreadable = %+v, want nothing: a file that is gone is not a file that is broken", listing.Unreadable)
+	}
+}
+
+// ── A listing against a directory that is being written to (TQ-0012) ──────
+//
+// These drive the race rather than wait for it: DuringScan runs inside the
+// window a listing is blind in — the directory has been read, the files have
+// not — so the interleaving is exact and the test cannot be flaky.
+
+// A retitle moves a task to a new file. Caught mid-scan, the name the listing
+// read is gone and the name the task now lives under was never read, so the
+// pass is a task short and cannot tell. The check against the directory is
+// what catches it, and the retry is what fixes it.
+func TestAListingIsNotShortWhenATaskIsRenamedMidScan(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+	retitled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "second"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "third"})
+
+	scans := 0
+	st.DuringScan(func() {
+		scans++
+		if scans > 1 {
+			return // the writer is done; the directory holds still now
+		}
+		rename(t, st, store.TaskFileName(retitled), retitled.ID+"-second-retitled.md")
+	})
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if listing.Incomplete {
+		t.Error("Incomplete = true, want the retry to have settled on a directory that stopped moving")
+	}
+	if len(listing.Tasks) != 3 {
+		t.Fatalf("List() = %d tasks, want all 3: a rename must not drop the task it renamed\n%+v", len(listing.Tasks), listing.Tasks)
+	}
+	if scans != 2 {
+		t.Errorf("scanned %d times, want 2: one pass the rename spoiled and one that stood", scans)
+	}
+	if len(listing.Unreadable) != 0 {
+		t.Errorf("Unreadable = %+v, want nothing: a retitle is not a broken file", listing.Unreadable)
+	}
+}
+
+// The other half of the same blindness: a task filed after the directory was
+// read is in no name the pass looked at, so it is missing with nothing to
+// report at all. Only the second reading of the directory can see it.
+func TestAListingIsNotShortWhenATaskIsCreatedMidScan(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+
+	scans := 0
+	st.DuringScan(func() {
+		scans++
+		if scans > 1 {
+			return
+		}
+		tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "filed mid-scan"})
+	})
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if listing.Incomplete {
+		t.Error("Incomplete = true, want the retry to have settled")
+	}
+	if len(listing.Tasks) != 2 {
+		t.Fatalf("List() = %d tasks, want both: the second was created mid-scan\n%+v", len(listing.Tasks), listing.Tasks)
+	}
+}
+
+// A retitle writes the new file before retiring the old one, so for an instant
+// the task has two. Both readings of the directory can fall inside that
+// instant and agree, which makes the entry set useless here — the pass simply
+// holds the task twice, and only the repeated ID says so.
+func TestAListingDoesNotHoldATaskTwiceWhileItIsBeingRetitled(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+	retitled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "second"})
+
+	old := store.TaskFileName(retitled)
+	fresh := retitled.ID + "-second-retitled.md"
+	scans := 0
+	st.DuringScan(func() {
+		scans++
+		switch scans {
+		case 1:
+			// Mid-retitle: the new file is written and the old one is still
+			// there, and it stays that way across both readings.
+			content, err := os.ReadFile(filepath.Join(st.Dir, old))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(st.Dir, fresh), content, 0o644); err != nil {
+				t.Error(err)
+			}
+		case 2:
+			// The retitle finishes, the way `tq update` finishes it.
+			if err := os.Remove(filepath.Join(st.Dir, old)); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if listing.Incomplete {
+		t.Error("Incomplete = true, want the retry to have settled once the retitle finished")
+	}
+	if len(listing.Tasks) != 2 {
+		t.Fatalf("List() = %d tasks, want 2: a task caught under two names must not be listed twice\n%+v", len(listing.Tasks), listing.Tasks)
+	}
+	if listing.Tasks[0].ID == listing.Tasks[1].ID {
+		t.Errorf("List() holds %s twice", listing.Tasks[0].ID)
+	}
+}
+
+// Two files that keep claiming one ID are not a directory in motion — they are
+// a queue to fix, which is TQ-0040 and not this. The retry must not spin on
+// them, and the listing must say it could not be squared with the disk rather
+// than pass the pair off as the queue.
+func TestTwoFilesClaimingOneIDAreReportedRatherThanRetriedForever(t *testing.T) {
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+
+	content, err := os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(created)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(st.Dir, created.ID+"-a-second-file.md"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scans := 0
+	st.DuringScan(func() { scans++ })
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if scans != store.ListAttempts {
+		t.Errorf("scanned %d times, want %d: the retry is bounded even when the pair never resolves", scans, store.ListAttempts)
+	}
+	if !listing.Incomplete {
+		t.Error("Incomplete = false: a listing holding one task twice must not pass as the queue")
+	}
+}
+
+// A directory nobody stops writing to cannot be read consistently, and the
+// listing says so rather than passing off a short list as the whole queue. It
+// is still a listing: the tasks it did read come back, and it is not an error.
+func TestAListingThatCannotBeSquaredWithTheDirectorySaysSo(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+	churned := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "second"})
+
+	scans := 0
+	current := store.TaskFileName(churned)
+	st.DuringScan(func() {
+		scans++
+		next := fmt.Sprintf("%s-retitled-%d.md", churned.ID, scans)
+		rename(t, st, current, next)
+		current = next
+	})
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !listing.Incomplete {
+		t.Error("Incomplete = false: a listing that could never be squared with the directory must not pass as the whole queue")
+	}
+	if scans != store.ListAttempts {
+		t.Errorf("scanned %d times, want %d: the retry is bounded", scans, store.ListAttempts)
+	}
+	if len(listing.Tasks) == 0 {
+		t.Error("List() = no tasks, want the ones it could read: this is a warning, not a failure")
+	}
+	if len(listing.Unreadable) != 0 {
+		t.Errorf("Unreadable = %+v, want nothing: a file being renamed is not a file that is broken", listing.Unreadable)
+	}
+}
+
+// A file that cannot be parsed does not move the directory, so it is reported
+// once and the scan is not run again: the retry is for a directory that
+// changed, and a broken file would otherwise cost every listing three passes
+// over the whole queue (TQ-0011, kept by TQ-0012).
+func TestABrokenFileIsReportedWithoutRetryingTheScan(t *testing.T) {
+	st := tqtest.NewStore(t)
+	healthy := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "healthy"})
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0002-broken.md"), []byte("no frontmatter here"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scans := 0
+	st.DuringScan(func() { scans++ })
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if scans != 1 {
+		t.Errorf("scanned %d times, want 1: a broken file must not send the listing round again", scans)
+	}
+	if listing.Incomplete {
+		t.Error("Incomplete = true, want false: the directory never moved")
+	}
+	if len(listing.Tasks) != 1 || listing.Tasks[0].ID != healthy.ID {
+		t.Errorf("List() = %+v, want the healthy task", listing.Tasks)
+	}
+	if len(listing.Unreadable) != 1 || listing.Unreadable[0].File != "TQ-0002-broken.md" {
+		t.Errorf("Unreadable = %+v, want it to name TQ-0002-broken.md", listing.Unreadable)
+	}
+}
+
+// A write leaves a temporary file beside the tasks for an instant. It is not a
+// task appearing, and a listing that treated it as one would go round again on
+// every write in the project.
+func TestATemporaryFileDoesNotSendTheListingRoundAgain(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+
+	scans := 0
+	st.DuringScan(func() {
+		scans++
+		if scans > 1 {
+			return
+		}
+		if err := os.WriteFile(filepath.Join(st.Dir, ".tq-1234.tmp"), []byte("half a task"), 0o644); err != nil {
+			t.Error(err)
+		}
+	})
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if scans != 1 {
+		t.Errorf("scanned %d times, want 1: a temporary file is not a task appearing", scans)
+	}
+	if listing.Incomplete || len(listing.Tasks) != 1 {
+		t.Errorf("List() = %+v (incomplete=%v), want the one task", listing.Tasks, listing.Incomplete)
+	}
+}
+
+// rename moves one task file to another name, the way a retitle does.
+func rename(t *testing.T, st *store.Store, from, to string) {
+	t.Helper()
+	if err := os.Rename(filepath.Join(st.Dir, from), filepath.Join(st.Dir, to)); err != nil {
+		t.Fatalf("renaming %s to %s: %v", from, to, err)
 	}
 }
 

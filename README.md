@@ -358,6 +358,14 @@ stderr, so `--json` stdout stays parseable and a script sees a queue that is
 short rather than one that is empty. Reading a single task by ID still fails
 loudly, because there the broken file is the answer.
 
+Another process writing to `.tasks/` while a listing is being taken does not
+cost it a task either: retitling moves a task's file, so a scan that read the
+directory and then opened the files could miss one — or, caught a moment
+earlier, read the same task under both names. The scan is checked against the
+directory and retaken until the two agree. A listing that still cannot be
+squared with the directory prints on stderr that it may be missing a task or
+holding one twice, and still exits `0` with what it read.
+
 ## CLI reference
 
 ```text
@@ -455,7 +463,7 @@ difference between an agent moving a task and a human dragging a card.
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
 | `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities", "columns"}` |
 | `GET` | `/api/events` | server-sent events; a `tasks` frame when the queue changes, `config` when `.taskqueue.yaml` does, `scan-failed` when the queue cannot be read |
-| `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version", "unreadable"}`; `unreadable` is `[{"file", "reason"}]` for the task files the scan had to skip |
+| `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version", "unreadable", "incomplete"}`; `unreadable` is `[{"file", "reason"}]` for the task files the scan had to skip, and `incomplete` says the directory would not hold still long enough to be read consistently, so the listing may be missing a task or holding one twice |
 | `GET` | `/api/version` | `{"version"}` |
 
 Errors have a stable shape:
@@ -478,6 +486,13 @@ A task file the server cannot read is skipped rather than failing the listing:
 /api/status` carries an `unreadable` array naming each file it could not and
 why. One conflicted file is how a shared `.tasks/` breaks, and it must not hide
 every other task — the board draws what it has and says what is missing.
+
+A CLI write landing while a request is being served does not cost the listing a
+task: the scan is checked against the directory before it is returned, and
+retaken when the two disagree. `GET /api/status` reports `incomplete` for the
+listing that could not be squared with the directory at all, and the board says
+so in a toast and in its footer; `GET /api/tasks` stays an array of what was
+read, because that is what every client parses.
 
 `tq serve` binds to `127.0.0.1:7331` by default, and a project can pin its own
 address — see [Where the server binds](#where-the-server-binds) for the keys and

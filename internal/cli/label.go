@@ -52,7 +52,7 @@ func (c *cli) runLabelList(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	c.warnUnreadable(listing.Unreadable)
+	c.warnListing(listing)
 	// The vocabulary is resolved from the queue being listed, not from the
 	// working directory: TQ_DIR can point at a queue in another project, and
 	// reading that project's tasks against this one's config would have the CLI

@@ -199,6 +199,10 @@ whole string, so `+"`tq list --label component/backend`"+` takes the whole key.
   `+"`tq list`"+` and `+"`tq ready`"+` still exit 0 and print what they could
   read, and name each skipped file on stderr. The queue is that many tasks
   short until the file is fixed, so fix it rather than reading past the warning.
+- A listing is checked against the directory before it is printed, so a task
+  another process is retitling is not quietly missing from it, or in it twice.
+  When the directory will not hold still, the command says so on stderr and
+  still exits 0: run it again rather than planning against what it printed.
 - Exit codes: 0 success, 1 validation error, 2 task not found, 3 task directory
   missing and uncreatable.
 

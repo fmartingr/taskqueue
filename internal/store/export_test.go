@@ -10,3 +10,12 @@ var RetireOldFile = retireOldFile
 
 // Locate exposes locate to the external test package.
 func (s *Store) Locate(id string) (string, error) { return s.locate(id) }
+
+// ListAttempts exposes the bound on List's rescan, so a test can exhaust it
+// without hard-coding the number.
+const ListAttempts = listAttempts
+
+// DuringScan installs a hook that runs inside every one of List's read windows:
+// after the directory has been read, before the files are. It is the only way
+// to drive the race List retries for without depending on timing.
+func (s *Store) DuringScan(fn func()) { s.duringScan = fn }

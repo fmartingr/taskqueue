@@ -82,6 +82,18 @@ export const version = ref("");
  */
 export const unreadable = ref<UnreadableFile[]>([]);
 
+/**
+ * Whether the server's last scan could be squared with the task directory,
+ * from GET /api/status.
+ *
+ * A queue being written to while it is read can come back a task short, or
+ * holding one twice, and the store says so rather than passing the result off
+ * as the whole queue. The board says it the same way it says a file was
+ * skipped: a toast when it appears, and a word in the footer while it lasts
+ * (TQ-0012).
+ */
+export const incomplete = ref(false);
+
 /** False until the first listing lands, so the footer can say so. */
 export const loaded = ref(false);
 
@@ -116,7 +128,11 @@ export const statusLine = computed(() => {
   // board an hour later still has to be told the count is short.
   const broken = unreadable.value.length;
   const skipped = broken ? `${broken} file${broken === 1 ? "" : "s"} could not be read` : "";
-  return [counts, skipped, taskDir.value, version.value && `tq ${version.value}`, link]
+  // Same reasoning for a listing the server could not square with the
+  // directory: the count above may not be the queue, and the toast that said
+  // so is long gone.
+  const unsquared = incomplete.value ? "the queue was changing as it was read" : "";
+  return [counts, skipped, unsquared, taskDir.value, version.value && `tq ${version.value}`, link]
     .filter(Boolean)
     .join(" · ");
 });
@@ -239,6 +255,7 @@ async function loadServerStatus(): Promise<void> {
     taskDir.value = status.task_dir;
     version.value = status.version;
     reportUnreadable(status.unreadable ?? []);
+    reportIncomplete(status.incomplete ?? false);
   } catch (error) {
     console.error("status failed", error);
   }
@@ -269,6 +286,24 @@ function reportUnreadable(files: UnreadableFile[]): void {
   }
   const rest = fresh.length - NAMED_IN_TOASTS;
   if (rest > 0) toast(`…and ${rest} more file${rest === 1 ? "" : "s"} could not be read`);
+}
+
+/** Whether the last scan was already known to be unsquared, so a queue being
+ *  written to is one toast rather than one per refresh. */
+let complainedAboutIncomplete = false;
+
+/**
+ * Records that the server could not square its scan with the directory, and
+ * toasts when that is news. The footer keeps saying it for as long as it
+ * lasts; a listing that settles clears both, because a retitle finishing is
+ * not something to keep complaining about.
+ */
+function reportIncomplete(unsquared: boolean): void {
+  incomplete.value = unsquared;
+  if (unsquared && !complainedAboutIncomplete) {
+    toast("The queue was changing as it was read — this board may be a task short");
+  }
+  complainedAboutIncomplete = unsquared;
 }
 
 /** Serialized last configuration, so a refetch that changed nothing re-renders

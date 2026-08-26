@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,13 @@ type Store struct {
 	// ConfigWritten is the marker this call wrote, when it wrote one. Empty
 	// when the project already had a config, which is the common case.
 	ConfigWritten string
+
+	// duringScan runs inside a listing's read window — after the directory has
+	// been read, before the files are — and is nil everywhere but a test. It
+	// is how the race List retries for is driven on purpose: a test that
+	// renames a file from another goroutine and hopes to hit that window
+	// instead is a test that passes or fails by timing.
+	duringScan func()
 }
 
 // InitStore makes sure the task directory exists and returns a store for it:
@@ -328,7 +336,27 @@ type UnreadableFile struct {
 type Listing struct {
 	Tasks      []task.Task
 	Unreadable []UnreadableFile
+
+	// Incomplete reports that the directory would not hold still long enough
+	// to be read consistently: every attempt found it changed underneath, so
+	// this listing may not match what is on disk. It may be missing a task
+	// that exists — one renamed out from under the scan, or created after the
+	// scan had already read the directory — or hold one twice, caught in the
+	// instant a retitle has written the new file and not yet retired the old.
+	//
+	// It is a warning, not a failure. The tasks above are still every task the
+	// scan could account for, and the caller shows them; what it must not do
+	// is present them as the whole queue (TQ-0012).
+	Incomplete bool
 }
+
+// listAttempts bounds the rescan when the directory changes mid-scan. Each
+// attempt is one full pass, so a writer has to land inside the read window
+// three times running to exhaust them, and the window is one directory read
+// plus one read per file. This is a guard against a directory under sustained
+// rewriting, not an expected path: a single concurrent `tq update --title`
+// settles on the second attempt.
+const listAttempts = 3
 
 // List returns every task in the directory in the default order: status,
 // priority, creation time, ID.
@@ -339,41 +367,31 @@ type Listing struct {
 // not hide every other task from both surfaces (TQ-0011). The error return is
 // for what makes the whole directory unreadable — the directory itself, or the
 // project config the order depends on.
+//
+// The scan is checked against the directory before it is returned, because
+// reading the names and then reading the files is a TOCTOU: a rename that
+// lands in between leaves the task under a name this pass never looked at, and
+// a task created in between is not in the names at all. Either way the pass is
+// a task short and cannot tell. So the directory is read again afterwards and
+// compared with the reading the pass started from; a difference means the
+// snapshot is not of any one moment, and the pass is redone (TQ-0012).
+//
+// A repeated ID is the same signal from the other side. A retitle writes the
+// new file before retiring the old one, so for an instant one task has two
+// files, and a pass whose two directory readings both fall inside that instant
+// sees no change at all — it just holds the task twice. So that is a reason to
+// redo the pass too. A pair that outlives the retries is not a moving
+// directory but a queue with two files claiming one ID, which is TQ-0040's to
+// resolve; here it is reported like any other scan that could not be squared
+// with the disk, and it is bounded so it cannot spin.
+//
+// A broken file does not move the directory, so it is reported once and never
+// retried — the retry is for a directory that changed, not for a file that
+// cannot be parsed.
 func (s *Store) List() (Listing, error) {
-	entries, err := os.ReadDir(s.Dir)
-	if err != nil {
-		return Listing{}, err
-	}
-
-	listing := Listing{Tasks: make([]task.Task, 0, len(entries))}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if _, ok := taskFileID(name); !ok {
-			continue
-		}
-		t, err := s.readFile(name)
-		switch {
-		case errors.Is(err, ErrTaskNotFound):
-			// The file was there when the directory was read and is gone now,
-			// which is what a concurrent write looks like: update writes the
-			// new name and only then retires the old one, and delete unlinks.
-			// Nothing is broken, so there is nothing to report — reporting it
-			// would put a red toast on the board for an ordinary retitle.
-			// Whether the task itself was missed by this scan is TQ-0012.
-			continue
-		case err != nil:
-			listing.Unreadable = append(listing.Unreadable, UnreadableFile{File: name, Reason: skipReason(name, err)})
-			continue
-		}
-		listing.Tasks = append(listing.Tasks, t)
-	}
-
-	// The ranking and the board are the project's, so sorting needs both. A
-	// task filed under a value the project has since dropped keeps it and sorts
-	// last, rather than being refused by the listing that would show it.
+	// The ranking and the board are the project's, so sorting needs both. Read
+	// once, ahead of the scans: they do not change with an attempt, and a
+	// failure here is a failure of the whole listing rather than of one pass.
 	priorities, err := s.Priorities()
 	if err != nil {
 		return Listing{}, err
@@ -382,11 +400,103 @@ func (s *Store) List() (Listing, error) {
 	if err != nil {
 		return Listing{}, err
 	}
+
+	var listing Listing
+	for attempt := 1; ; attempt++ {
+		before, err := s.taskFileNames()
+		if err != nil {
+			return Listing{}, err
+		}
+		listing = s.scan(before)
+		after, err := s.taskFileNames()
+		if err != nil {
+			return Listing{}, err
+		}
+		if slices.Equal(before, after) && !repeatsAnID(listing.Tasks) {
+			break
+		}
+		if attempt == listAttempts {
+			listing.Incomplete = true
+			break
+		}
+	}
+
+	// A task filed under a value the project has since dropped keeps it and
+	// sorts last, rather than being refused by the listing that would show it.
 	for i := range listing.Tasks {
 		listing.Tasks[i].Status = columns.Normalize(listing.Tasks[i].Status)
 	}
 	task.SortTasks(listing.Tasks, priorities, columns)
 	return listing, nil
+}
+
+// taskFileNames is the directory reading a scan starts from and is checked
+// against: the names of the files that hold tasks, in the sorted order
+// os.ReadDir returns them, with everything else left out — subdirectories, the
+// generated guide, and the temporary file an atomic write leaves beside the
+// tasks for an instant, which is not a task appearing and must not send a scan
+// round again.
+func (s *Store) taskFileNames() ([]string, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := taskFileID(entry.Name()); !ok {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	return names, nil
+}
+
+// repeatsAnID reports a task read twice under two names, which is what a
+// retitle looks like from inside the instant between writing the new file and
+// retiring the old one. The entry set is the same at both ends of that
+// instant, so this is the only thing that can tell List the pass caught the
+// directory mid-move.
+func repeatsAnID(tasks []task.Task) bool {
+	seen := make(map[string]struct{}, len(tasks))
+	for _, t := range tasks {
+		if _, dup := seen[t.ID]; dup {
+			return true
+		}
+		seen[t.ID] = struct{}{}
+	}
+	return false
+}
+
+// scan reads the named files. It is one attempt at a listing: List is what
+// decides whether the result describes a directory that stood still.
+func (s *Store) scan(names []string) Listing {
+	if s.duringScan != nil {
+		s.duringScan()
+	}
+
+	listing := Listing{Tasks: make([]task.Task, 0, len(names))}
+	for _, name := range names {
+		t, err := s.readFile(name)
+		switch {
+		case errors.Is(err, ErrTaskNotFound):
+			// The file was there when the directory was read and is gone now,
+			// which is what a concurrent write looks like: update writes the
+			// new name and only then retires the old one, and delete unlinks.
+			// Nothing is broken, so there is nothing to report — reporting it
+			// would put a red toast on the board for an ordinary retitle. The
+			// directory moved, though, and the check in List is what catches
+			// the task this pass may have missed because of it.
+			continue
+		case err != nil:
+			listing.Unreadable = append(listing.Unreadable, UnreadableFile{File: name, Reason: skipReason(name, err)})
+			continue
+		}
+		listing.Tasks = append(listing.Tasks, t)
+	}
+	return listing
 }
 
 // skipReason is why a file was skipped, with the file name taken off the front.

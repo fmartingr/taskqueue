@@ -39,6 +39,13 @@ export interface ServerStatus {
   task_dir: string;
   version: string;
   unreadable: UnreadableFile[];
+  /**
+   * The scan could not be squared with the task directory: it kept changing
+   * while it was being read, so the listing may be missing a task or hold one
+   * twice. The listing itself cannot carry this either — /api/tasks is an
+   * array of tasks — so it is said here (TQ-0012).
+   */
+  incomplete: boolean;
 }
 
 /** GET /api/config: the project marker as the server resolved it. */

@@ -692,16 +692,24 @@ func (c *cli) tasks() ([]task.Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.warnUnreadable(listing.Unreadable)
+	c.warnListing(listing)
 	return listing.Tasks, nil
 }
 
-// warnUnreadable reports the files a scan skipped. On stderr, always: the
-// listing itself is the answer a caller parses, and a warning on stdout would
-// break --json for the agents that read it.
-func (c *cli) warnUnreadable(files []store.UnreadableFile) {
-	for _, f := range files {
+// warnListing reports what a scan could not do: the files it had to skip, and
+// a directory that changed under every attempt to read it, which leaves the
+// listing possibly a task short (TQ-0012).
+//
+// On stderr, always: the listing itself is the answer a caller parses, and a
+// warning on stdout would break --json for the agents that read it. A warning
+// and not a failure, too — the tasks it did read are still the answer, and the
+// exit code stays 0.
+func (c *cli) warnListing(l store.Listing) {
+	for _, f := range l.Unreadable {
 		fmt.Fprintf(c.stderr, "warning: skipped %s: %s\n", f.File, f.Reason)
+	}
+	if l.Incomplete {
+		fmt.Fprintln(c.stderr, "warning: the task directory kept changing while it was read; this listing may be missing a task or hold one twice")
 	}
 }
 

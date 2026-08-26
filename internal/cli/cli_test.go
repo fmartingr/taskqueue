@@ -365,6 +365,29 @@ func TestCLIListAndReadySkipAnUnreadableFile(t *testing.T) {
 	}
 }
 
+// A listing the store could not square with the directory says so, and says it
+// on stderr: the listing itself is what an agent parses, and a warning on
+// stdout would break --json. It is a warning and not a failure — the tasks it
+// did read are still the answer (TQ-0012).
+func TestCLIWarnsAboutAListingItCouldNotComplete(t *testing.T) {
+	tc := newTestCLI(t)
+
+	tc.warnListing(store.Listing{Incomplete: true})
+	if got := tc.stderr.String(); !strings.Contains(got, "may be missing a task") {
+		t.Errorf("stderr = %q, want it to say the listing may be short", got)
+	}
+	if got := tc.stdout.String(); got != "" {
+		t.Errorf("stdout = %q, want nothing: --json parses this stream", got)
+	}
+
+	// Nothing to say about a listing that squared with the directory.
+	tc.reset()
+	tc.warnListing(store.Listing{})
+	if got := tc.stderr.String(); got != "" {
+		t.Errorf("stderr = %q, want nothing for an ordinary listing", got)
+	}
+}
+
 func TestCLIShowSurvivesUnreadableSiblingTask(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "Readable", "--depends-on", "TQ-0002")

@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -205,6 +206,63 @@ func TestListAndReadySurviveAnUnreadableFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A second terminal retitling tasks must not cost this one its queue. `tq
+// list` used to exit 2 for a task that exists (TQ-0011) and then to print a
+// short list and exit 0 (TQ-0012); now it prints the whole queue, or says on
+// stderr that it may not have. Only a real process shows the exit code and
+// which stream the warning went to.
+func TestListStaysWholeWhileAnotherProcessRenamesTasks(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+
+	const tasks = 12
+	ids := make([]string, 0, tasks)
+	for i := 1; i <= tasks; i++ {
+		p.mustRun(t, "add", fmt.Sprintf("task number %d", i), "--status", "todo")
+		ids = append(ids, fmt.Sprintf("TQ-%04d", i))
+	}
+
+	writer := p.renameTasks(t, ids)
+	short := 0
+	const runs = 20
+	for i := 0; i < runs; i++ {
+		r := p.run(t, "list", "--json")
+		if r.Code != 0 {
+			t.Fatalf("tq list --json = %d while another process was renaming tasks\nstderr: %s", r.Code, r.Stderr)
+		}
+		// Decodes stdout on its own, which is the contract an agent reads: a
+		// warning has to be on stderr for this to pass.
+		var listed []taskJSON
+		r.JSON(t, &listed)
+
+		// Every task, once each. A count alone would pass a listing that
+		// dropped one task and held another twice.
+		seen := map[string]int{}
+		for _, task := range listed {
+			seen[task.ID]++
+		}
+		wrong := ""
+		for _, id := range ids {
+			if seen[id] != 1 {
+				wrong = fmt.Sprintf("%s appears %d times", id, seen[id])
+				break
+			}
+		}
+		if wrong == "" {
+			continue
+		}
+		short++
+		// A listing may still not match the directory when it never held
+		// still, but it may not fail to say so: that is what an agent would
+		// plan against without knowing.
+		if !strings.Contains(r.Stderr, "may be missing a task") {
+			t.Errorf("tq list --json: %s (%d of %d tasks) and said nothing on stderr: %q", wrong, len(listed), tasks, r.Stderr)
+		}
+	}
+	rounds := writer.stopWhenDone(t)
+	t.Logf("%d listings against %d retitles: %d did not match the queue", runs, rounds, short)
 }
 
 // A blocked task is not ready, and becomes ready when its dependency is done.

@@ -144,7 +144,8 @@ func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	// A file the scan could not read is skipped rather than failing the
 	// listing, and named by GET /api/status: the response here is an array of
 	// tasks and stays one, because that is what the board and every other
-	// client parse (TQ-0011).
+	// client parse (TQ-0011). A scan the store could not reconcile with the
+	// directory is reported there too, for the same reason (TQ-0012).
 	listing, err := s.st.List()
 	if err != nil {
 		writeStoreError(w, err)
@@ -268,8 +269,9 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleStatus reports what the server can see of the queue, including the
-// files it cannot read. This is where a broken file surfaces: GET /api/tasks is
-// an array of tasks with nowhere to put a warning, and the board already asks
+// files it cannot read and whether the scan could be squared with the
+// directory at all. This is where a broken file surfaces: GET /api/tasks is an
+// array of tasks with nowhere to put a warning, and the board already asks
 // here (TQ-0011).
 func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	listing, err := s.st.List()
@@ -289,6 +291,11 @@ func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"task_dir":   s.st.Dir,
 		"version":    s.version,
 		"unreadable": unreadable,
+		// A directory that changed under every attempt to read it leaves the
+		// count above possibly a task short. It goes here for the same reason
+		// the skipped files do: GET /api/tasks is an array with nowhere to put
+		// a warning (TQ-0012).
+		"incomplete": listing.Incomplete,
 	})
 }
 

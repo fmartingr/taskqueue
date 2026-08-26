@@ -75,6 +75,7 @@ type serverStatus struct {
 	TaskDir    string                 `json:"task_dir"`
 	Version    string                 `json:"version"`
 	Unreadable []store.UnreadableFile `json:"unreadable"`
+	Incomplete bool                   `json:"incomplete"`
 }
 
 func expectError(t *testing.T, resp *http.Response, payload string, status int, code string) {
@@ -304,6 +305,15 @@ func TestAPIStatusAndVersion(t *testing.T) {
 	if status.Unreadable == nil || len(status.Unreadable) != 0 {
 		t.Errorf("unreadable = %#v, want an empty array with nothing broken", status.Unreadable)
 	}
+	// Present in the body, and false: a client reads it to know whether the
+	// count above is the whole queue, and cannot tell an absent field from a
+	// false one once it is decoded (TQ-0012).
+	if !strings.Contains(payload, `"incomplete"`) {
+		t.Errorf("status carries no incomplete field: %s", payload)
+	}
+	if status.Incomplete {
+		t.Error("incomplete = true, want false: nothing is writing to this queue")
+	}
 
 	_, payload = do(t, srv, "GET", "/api/version", "")
 	if got := decode[map[string]string](t, payload)["version"]; got != testVersion {
@@ -350,6 +360,11 @@ func TestAPIMalformedTaskFile(t *testing.T) {
 	}
 	if status.Unreadable[0].Reason == "" {
 		t.Error("unreadable carries no reason, so nothing can say what to fix")
+	}
+	// A broken file is not a directory that moved: the listing is whole, and
+	// only the one file is missing from it (TQ-0012).
+	if status.Incomplete {
+		t.Error("incomplete = true, want false: a file that cannot be parsed is not an inconsistent scan")
 	}
 }
 

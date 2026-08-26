@@ -307,6 +307,83 @@ func (s *server) status(t *testing.T, path string) int {
 	return resp.StatusCode
 }
 
+// renamer retitles tasks in a loop, in the background, as a separate process.
+// Retitling is what moves a task's file: `tq update --title` writes the task
+// under its new name and only then retires the old one, so a reader that lists
+// the directory and then opens the files can catch a task under neither name,
+// or under both (TQ-0012). Nothing but a real second process produces that.
+type renamer struct {
+	stop chan struct{}
+	done chan struct{}
+	once sync.Once
+
+	mu       sync.Mutex
+	rounds   int
+	failures []string
+}
+
+// renameTasks starts the loop and stops it when the test ends, whichever way it
+// ends: a t.Fatalf inside a test returns without running anything the test
+// wrote after it, and a writer left running would go on forking processes at a
+// temporary directory that cleanup is about to remove — in a parallel suite.
+func (p *project) renameTasks(t *testing.T, ids []string) *renamer {
+	t.Helper()
+	r := &renamer{stop: make(chan struct{}), done: make(chan struct{})}
+	t.Cleanup(r.halt)
+	go func() {
+		defer close(r.done)
+		for round := 0; ; round++ {
+			select {
+			case <-r.stop:
+				return
+			default:
+			}
+			id := ids[round%len(ids)]
+			cmd := exec.Command(binary, "update", id, "--title", fmt.Sprintf("%s round %d", id, round))
+			cmd.Dir = p.dir
+			cmd.Env = os.Environ()
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+
+			// Reported rather than fataled: this is not the test's goroutine,
+			// so it may not fail the test itself.
+			r.mu.Lock()
+			r.rounds++
+			if err != nil {
+				r.failures = append(r.failures, fmt.Sprintf("tq update %s: %v: %s", id, err, stderr.String()))
+			}
+			r.mu.Unlock()
+		}
+	}()
+	return r
+}
+
+// halt ends the loop and waits for the process it may have in flight. Idempotent,
+// because both the test and the cleanup call it.
+func (r *renamer) halt() {
+	r.once.Do(func() { close(r.stop) })
+	<-r.done
+}
+
+// stopWhenDone ends the loop and fails the test if the writer itself failed or
+// never got going — a test that measured a listing against a directory nothing
+// was writing to would pass for the wrong reason.
+func (r *renamer) stopWhenDone(t *testing.T) int {
+	t.Helper()
+	r.halt()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, f := range r.failures {
+		t.Errorf("the rename loop failed: %s", f)
+	}
+	if r.rounds == 0 {
+		t.Error("the rename loop never ran, so nothing was competing with the listing")
+	}
+	return r.rounds
+}
+
 // syncBuffer is a bytes.Buffer safe to read while a process writes to it.
 type syncBuffer struct {
 	mu  sync.Mutex

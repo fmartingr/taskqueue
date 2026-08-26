@@ -71,6 +71,17 @@ frontend`, `make typecheck` or `make dev` will run.
 - Do not add a database, an index file, a cache or a filesystem watcher. Markdown
   files are the source of truth and every read hits the disk — that is what makes
   CLI edits visible to a running server.
+- A listing reads the task directory twice: once to learn which files to open,
+  and once afterwards to check that the set of them did not change while they
+  were being opened. Reading the names and then the files is a TOCTOU, and a
+  retitle landing in between leaves a task under a name the pass never looked
+  at, so a difference between the two readings means the pass is redone — three
+  attempts, after which the listing says it may not match the directory rather
+  than passing for the whole queue (TQ-0012). A task read twice under two names
+  is the same signal from the other side, because a retitle writes the new file
+  before retiring the old one; a pair that outlives the retries is TQ-0040's to
+  resolve and is only reported here. Keep both readings: this is a consistency
+  check, not a cache, and nothing survives the call.
 - The one thing the server keeps between requests are the two change
   fingerprints behind `/api/events` (TQ-0033): the names, sizes and modification
   times of the task directory, hashed, and the same reading of `.taskqueue.yaml`
@@ -117,6 +128,9 @@ frontend`, `make typecheck` or `make dev` will run.
   while `GET /api/tasks` stays a plain array of the tasks that read. Reading a
   single task by ID is unchanged and still fails loudly, because there the
   broken file is the answer.
+  `Listing.Incomplete` travels the same way (TQ-0012): the CLI warns on stderr
+  and still exits 0, `GET /api/status` carries `incomplete`, and the board says
+  it in a toast and in its footer, exactly as it says a file was skipped.
 - Preserve JSON CLI output compatibility; it is the stable agent API.
 - Keep stdout clean when `--json` is active: data on stdout, everything else on
   stderr.

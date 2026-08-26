@@ -8,7 +8,7 @@ labels:
   - component/frontend
   - tests
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-26T11:14:03+02:00
 ---
 
 ## Finding
@@ -26,3 +26,27 @@ VERIFIED: appending `const probe: number = "not a number"; console.log(probe.toF
 Add a tsconfig and a `tsc --noEmit` step. This needs a TypeScript dev dependency, which is an explicit exception to the Bun-only rule and worth deciding on.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-26T11:14:03+02:00 — Researched while settling TQ-0076's build decisions.
+
+  This is doable now, independently of the Vue migration, and is worth doing
+  before it rather than after: tsc --noEmit --strict already passes clean on
+  app.ts, board.ts and notes.ts, so the work is a tsconfig plus a CI step, not a
+  round of fixing.
+
+  Two things for whoever picks it up:
+
+  - Pin typescript to 6.0.3, the newest JavaScript-implemented release. npm's
+    'latest' is now 7.0.2, the Go-native port, which ships no programmatic API.
+    Plain tsc on 7.x is fine today, but vue-tsc cannot run on it, and TQ-0076 has
+    settled on SFCs — so pinning now avoids installing a version that has to be
+    rolled back the moment templates arrive.
+  - Once TQ-0076 lands, swap tsc for vue-tsc rather than adding a second step. It
+    is a drop-in superset: one invocation checks .ts and .vue alike, and it is the
+    only thing in the pipeline that can see a typo inside a template. Bun.build
+    compiles and ships those without complaint, which is this ticket's finding
+    extended into markup.

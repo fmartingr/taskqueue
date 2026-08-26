@@ -199,8 +199,8 @@ func TestCLIAdd(t *testing.T) {
 	if tk.Body != "Kanban board." {
 		t.Errorf("Body = %q", tk.Body)
 	}
-	if tk.Status != task.StatusTodo {
-		t.Errorf("Status = %q, want %q", tk.Status, task.StatusTodo)
+	if tk.Status != task.StatusInbox {
+		t.Errorf("Status = %q, want %q", tk.Status, task.StatusInbox)
 	}
 }
 
@@ -272,7 +272,7 @@ func TestCLIShow(t *testing.T) {
 	tc.mustRun("add", "Implement REST API", "--priority", "high", "--label", "backend", "--body", "Some description.")
 
 	out := tc.mustRun("show", "TQ-0001")
-	for _, want := range []string{"TQ-0001", "Implement REST API", "todo", "high", "backend", "Some description."} {
+	for _, want := range []string{"TQ-0001", "Implement REST API", "inbox", "high", "backend", "Some description."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show output missing %q:\n%s", want, out)
 		}
@@ -311,7 +311,7 @@ func TestCLIShowDescribesDependencies(t *testing.T) {
 		"--depends-on", "TQ-0001", "--depends-on", "TQ-0002", "--depends-on", "TQ-0404")
 
 	out := tc.mustRun("show", "TQ-0003")
-	for _, want := range []string{"TQ-0001 (done)", "TQ-0002 (todo, blocking)", "TQ-0404 (missing)"} {
+	for _, want := range []string{"TQ-0001 (done)", "TQ-0002 (inbox, blocking)", "TQ-0404 (missing)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show output missing %q:\n%s", want, out)
 		}
@@ -340,7 +340,7 @@ func TestCLIMoveAndDone(t *testing.T) {
 	tc.mustRun("add", "Implement REST API")
 
 	out := tc.mustRun("move", "TQ-0001", "in-progress")
-	if want := "TQ-0001: todo -> in-progress"; !strings.Contains(out, want) {
+	if want := "TQ-0001: inbox -> in-progress"; !strings.Contains(out, want) {
 		t.Errorf("move output = %q, want it to contain %q", out, want)
 	}
 
@@ -499,8 +499,8 @@ func TestCLINoteLeavesAContentNotesSectionAlone(t *testing.T) {
 
 func TestCLIReady(t *testing.T) {
 	tc := newTestCLI(t)
-	tc.mustRun("add", "Implement REST API", "--priority", "high", "--label", "backend")
-	tc.mustRun("add", "Build Kanban board", "--label", "frontend", "--depends-on", "TQ-0001")
+	tc.mustRun("add", "Implement REST API", "--status", "todo", "--priority", "high", "--label", "backend")
+	tc.mustRun("add", "Build Kanban board", "--status", "todo", "--label", "frontend", "--depends-on", "TQ-0001")
 
 	out := tc.mustRun("ready")
 	if !strings.Contains(out, "TQ-0001") || strings.Contains(out, "TQ-0002") {
@@ -1183,5 +1183,133 @@ func TestCLIHelpNamesTheConfiguredVocabulary(t *testing.T) {
 	tc.run("add", "-h")
 	if flags := tc.stderr.String(); !strings.Contains(flags, "p0, p1, p2") {
 		t.Errorf("add flag help does not name the project's priorities:\n%s", flags)
+	}
+}
+
+// ── The project's board ──────────────────────────────────────────
+
+const customBoard = `version: 1
+path: .tasks
+columns:
+  - name: spotted
+    display_name: Spotted
+    consider_ready: true
+  - name: doing
+    display_name: Doing
+    default: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+func cliWithBoard(t *testing.T) *testCLI {
+	t.Helper()
+	tc := newBareCLI(t)
+	tqtest.WriteConfig(t, tc.root, customBoard)
+	if code := tc.run("init"); code != exitOK {
+		t.Fatalf("init failed: %d %s", code, tc.stderr)
+	}
+	return tc
+}
+
+// Custom board: create, move, ready, sort, and done follow column flags.
+func TestCLIRoundTripsACustomBoard(t *testing.T) {
+	tc := cliWithBoard(t)
+
+	var defaulted task.Task
+	tc.mustRunJSON(&defaulted, "add", "Filed with no column", "--json")
+	if defaulted.Status != "doing" {
+		t.Errorf("Status = %q, want the column marked default", defaulted.Status)
+	}
+
+	var spotted task.Task
+	tc.mustRunJSON(&spotted, "add", "Something to pick up", "--status", "spotted", "--json")
+
+	var ready []task.Task
+	tc.mustRunJSON(&ready, "ready", "--json")
+	if len(ready) != 1 || ready[0].ID != spotted.ID {
+		t.Errorf("ready = %+v, want only the task in the column that offers work", ready)
+	}
+
+	var finished task.Task
+	tc.mustRunJSON(&finished, "done", spotted.ID, "--json")
+	if finished.Status != "shipped" {
+		t.Errorf("done moved to %q, want shipped", finished.Status)
+	}
+
+	var blocked task.Task
+	tc.mustRunJSON(&blocked, "add", "Waits on it", "--status", "spotted", "--depends-on", spotted.ID, "--json")
+	tc.mustRunJSON(&ready, "ready", "--json")
+	found := false
+	for _, tk := range ready {
+		if tk.ID == blocked.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ready = %+v, want the task whose dependency reached the satisfying column", ready)
+	}
+
+	var listed []task.Task
+	tc.mustRunJSON(&listed, "list", "--json")
+	got := make([]string, 0, len(listed))
+	for _, tk := range listed {
+		got = append(got, tk.Status)
+	}
+	if want := "spotted,doing,shipped"; strings.Join(got, ",") != want {
+		t.Errorf("list order = %q, want %q", strings.Join(got, ","), want)
+	}
+}
+
+func TestCLIRejectsAStatusTheBoardHasNoColumnFor(t *testing.T) {
+	tc := cliWithBoard(t)
+	tc.mustRun("add", "Something", "--status", "spotted")
+
+	for _, args := range [][]string{
+		{"add", "Nope", "--status", "todo"},
+		{"move", "TQ-0001", "todo"},
+		{"update", "TQ-0001", "--status", "todo"},
+		{"list", "--status", "todo"},
+	} {
+		if code := tc.run(args...); code != exitError {
+			t.Errorf("tq %s = exit %d, want %d", strings.Join(args, " "), code, exitError)
+		}
+		if !strings.Contains(tc.stderr.String(), "spotted, doing, shipped") {
+			t.Errorf("tq %s stderr = %q, want it to list the columns", strings.Join(args, " "), tc.stderr)
+		}
+	}
+}
+
+// A board with no column claiming finished work cannot answer `tq done`, and
+// has to say which way round it is rather than guessing.
+func TestCLIDoneSaysWhenNoColumnClaimsIt(t *testing.T) {
+	tc := newBareCLI(t)
+	tqtest.WriteConfig(t, tc.root, "version: 1\npath: .tasks\ncolumns:\n  - {name: a}\n  - {name: b}\n")
+	tc.mustRun("add", "Something")
+
+	if code := tc.run("done", "TQ-0001"); code != exitError {
+		t.Errorf("tq done = exit %d, want %d", code, exitError)
+	}
+	if !strings.Contains(tc.stderr.String(), "no column is marked") {
+		t.Errorf("stderr = %q, want it to say no column claims finished work", tc.stderr)
+	}
+}
+
+func TestCLIHelpNamesTheConfiguredBoard(t *testing.T) {
+	tc := cliWithBoard(t)
+	if usage := tc.mustRun("help"); !strings.Contains(usage, "Statuses:   spotted, doing, shipped") {
+		t.Errorf("usage does not name the project's board:\n%s", usage)
+	}
+}
+
+// backlog resolves to inbox via the built-in alias.
+func TestCLIAcceptsBacklogAsInbox(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Something")
+
+	var moved task.Task
+	tc.mustRunJSON(&moved, "move", "TQ-0001", "backlog", "--json")
+	if moved.Status != task.StatusInbox {
+		t.Errorf("move to backlog put the task in %q, want inbox", moved.Status)
 	}
 }

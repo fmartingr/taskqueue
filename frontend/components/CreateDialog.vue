@@ -7,9 +7,9 @@
 import { computed, onMounted, ref } from "vue";
 
 import { createTask, describe } from "../api";
-import { defaultPriority, priorityOptions, STATUSES } from "../board";
+import { defaultColumn, defaultPriority, priorityOptions } from "../board";
 import { splitList } from "../format";
-import { priorities, refresh, toast } from "../state";
+import { columns, priorities, refresh, toast } from "../state";
 
 const emit = defineEmits<{ close: [] }>();
 
@@ -17,7 +17,7 @@ const dialog = ref<HTMLDialogElement | null>(null);
 const titleField = ref<HTMLInputElement | null>(null);
 
 const title = ref("");
-const status = ref<string>("todo");
+const status = ref<string>(defaultColumn(columns.value));
 const priority = ref(defaultPriority(priorities.value));
 const assignee = ref("");
 const labelList = ref("");
@@ -83,7 +83,7 @@ async function submit(): Promise<void> {
         <label>
           Status
           <select id="create-status" v-model="status" name="status">
-            <option v-for="option in STATUSES" :key="option" :value="option">{{ option }}</option>
+            <option v-for="column in columns" :key="column.name" :value="column.name">{{ column.display_name }}</option>
           </select>
         </label>
         <label>

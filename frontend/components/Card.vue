@@ -7,14 +7,14 @@ import { computed } from "vue";
 
 import { pendingDependencies, type Task } from "../board";
 import { splitBody } from "../notes";
-import { dragging, index, openTaskID } from "../state";
+import { columns, dragging, index, openTaskID } from "../state";
 import LabelChip from "./LabelChip.vue";
 import NoteBadge from "./NoteBadge.vue";
 import PriorityBadge from "./PriorityBadge.vue";
 
 const props = defineProps<{ task: Task }>();
 
-const pending = computed(() => pendingDependencies(props.task, index.value));
+const pending = computed(() => pendingDependencies(props.task, index.value, columns.value));
 const noteCount = computed(() => splitBody(props.task.body ?? "").notes.length);
 const hasMeta = computed(
   () => !!props.task.assignee || (props.task.labels ?? []).length > 0 || noteCount.value > 0,

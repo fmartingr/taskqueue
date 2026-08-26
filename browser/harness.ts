@@ -167,10 +167,9 @@ export class Project {
     return result;
   }
 
-  /** Seeds a task through the CLI — never by writing a file by hand — and
-   * returns its ID. */
+  /** Seeds a task via CLI; defaults to --status todo (inbox is intake, not ready). */
   add(title: string, ...flags: string[]): string {
-    const created = this.mustRun("add", title, "--json", ...flags);
+    const created = this.mustRun("add", title, "--status", "todo", "--json", ...flags);
     return (JSON.parse(created.stdout) as { id: string }).id;
   }
 
@@ -381,7 +380,9 @@ export function useBoard(): (seed?: Seed, before?: BeforeLoad) => Promise<Board>
 
     await before?.(page);
     await page.goto(server.url, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector(".column[data-status='todo']", { timeout: READY_TIMEOUT_MS });
+    // Any column, not a named one: the board's columns come from the project's
+    // config, so a test with its own board has no `todo` to wait for.
+    await page.waitForSelector(".column", { timeout: READY_TIMEOUT_MS });
     return board;
   };
 }

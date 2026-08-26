@@ -152,7 +152,9 @@ button.ghost {
 .board {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  /* The board sets --column-count from the project's config; four is only the
+     fallback for a page rendered before it has been read. */
+  grid-template-columns: repeat(var(--column-count, 4), minmax(220px, 1fr));
   gap: 12px;
   padding: 16px;
   align-items: start;
@@ -535,8 +537,10 @@ button.icon:hover {
   border-left: 3px solid var(--accent);
 }
 
+/* Narrow enough that the declared column count would not fit whatever it is:
+   fit what does, and let the rest scroll as they already do. */
 @media (max-width: 900px) {
   .board {
-    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   }
 }

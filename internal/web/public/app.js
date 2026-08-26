@@ -5509,17 +5509,41 @@ function connectEvents(handlers, url = "/api/events") {
 }
 
 // frontend/board.ts
-var STATUSES = ["backlog", "todo", "in-progress", "done"];
+var FALLBACK_COLUMNS = [
+  { name: "inbox", display_name: "Inbox", default: true },
+  { name: "todo", display_name: "To do", consider_ready: true },
+  { name: "in-progress", display_name: "In Progress" },
+  { name: "done", display_name: "Done", consider_done: true },
+  { name: "rejected", display_name: "Rejected" }
+];
+function findColumn(status, columns) {
+  return columns.find((column) => column.name === status);
+}
+function columnDisplay(status, columns) {
+  return findColumn(status, columns)?.display_name || status;
+}
+function columnOffersWork(status, columns) {
+  return findColumn(status, columns)?.consider_ready === true;
+}
+function columnSatisfies(status, columns) {
+  return findColumn(status, columns)?.consider_done === true;
+}
+function defaultColumn(columns) {
+  return (columns.find((column) => column.default) ?? columns[0])?.name ?? "";
+}
 function indexTasks(tasks) {
   return new Map(tasks.map((task) => [task.id, task]));
 }
-function pendingDependencies(task, index) {
-  return (task.depends_on ?? []).filter((id) => index.get(id)?.status !== "done");
+function pendingDependencies(task, index, columns) {
+  return (task.depends_on ?? []).filter((id) => {
+    const other = index.get(id);
+    return other === undefined || !columnSatisfies(other.status, columns);
+  });
 }
-function isReady(task, index) {
-  if (task.status === "done" || task.status === "in-progress")
+function isReady(task, index, columns) {
+  if (!columnOffersWork(task.status, columns))
     return false;
-  return pendingDependencies(task, index).length === 0;
+  return pendingDependencies(task, index, columns).length === 0;
 }
 var LABEL_SEPARATOR = "/";
 function isConfigured(name, labels) {
@@ -5599,7 +5623,7 @@ function priorityOptions(priorities, extras) {
   const unknown = [...new Set(extras)].filter((name) => name !== "" && !findPriority(name, priorities)).sort();
   return [...options, ...unknown.map((name) => ({ name, display: name, configured: false }))];
 }
-function visibleTasks(tasks, filters) {
+function visibleTasks(tasks, filters, columns) {
   const { status, priority, assignee, label, ready } = filters;
   const index = indexTasks(tasks);
   const matches = (haystack, needle) => haystack.toLowerCase().includes(needle.trim().toLowerCase());
@@ -5612,7 +5636,7 @@ function visibleTasks(tasks, filters) {
       return false;
     if (label && !(task.labels ?? []).includes(label))
       return false;
-    if (ready && !isReady(task, index))
+    if (ready && !isReady(task, index, columns))
       return false;
     return true;
   });
@@ -5636,13 +5660,14 @@ var filters = reactive({
 });
 var labels = ref({});
 var priorities = ref(FALLBACK_PRIORITIES);
+var columns = ref(FALLBACK_COLUMNS);
 var taskDir = ref("");
 var version2 = ref("");
 var loaded = ref(false);
 var streaming = ref(null);
 var stale = ref(false);
 var index = computed2(() => indexTasks(tasks.value));
-var visible = computed2(() => visibleTasks(tasks.value, filters));
+var visible = computed2(() => visibleTasks(tasks.value, filters, columns.value));
 var statusLine = computed2(() => {
   if (!loaded.value)
     return "Loading…";
@@ -5721,6 +5746,8 @@ async function loadProjectConfig() {
     labels.value = config.labels ?? {};
     if (config.priorities?.length)
       priorities.value = config.priorities;
+    if (config.columns?.length)
+      columns.value = config.columns;
   } catch (error) {
     console.error("config failed", error);
   }
@@ -5988,7 +6015,7 @@ var Card_default = /* @__PURE__ */ defineComponent({
   },
   setup(__props) {
     const props = __props;
-    const pending = computed2(() => pendingDependencies(props.task, index.value));
+    const pending = computed2(() => pendingDependencies(props.task, index.value, columns.value));
     const noteCount = computed2(() => splitBody(props.task.body ?? "").notes.length);
     const hasMeta = computed2(() => !!props.task.assignee || (props.task.labels ?? []).length > 0 || noteCount.value > 0);
     function onDragStart(event) {
@@ -6049,7 +6076,7 @@ var _hoisted_22 = ["onKeydown"];
 var Composer_default = /* @__PURE__ */ defineComponent({
   __name: "Composer",
   props: {
-    status: { type: null, required: true }
+    status: { type: String, required: true }
   },
   setup(__props) {
     const props = __props;
@@ -6132,11 +6159,12 @@ var _hoisted_42 = { class: "column-tasks" };
 var Column_default = /* @__PURE__ */ defineComponent({
   __name: "Column",
   props: {
-    status: { type: null, required: true }
+    status: { type: String, required: true }
   },
   setup(__props) {
     const props = __props;
     const cards = computed2(() => visible.value.filter((task) => task.status === props.status));
+    const heading = computed2(() => columnDisplay(props.status, columns.value));
     const over = ref(false);
     function onDragLeave(event) {
       const to = event.relatedTarget;
@@ -6160,7 +6188,7 @@ var Column_default = /* @__PURE__ */ defineComponent({
         onDrop: withModifiers(onDrop, ["prevent"])
       }, [
         createBaseVNode("header", _hoisted_23, [
-          createBaseVNode("h2", null, toDisplayString(__props.status), 1),
+          createBaseVNode("h2", null, toDisplayString(heading.value), 1),
           createBaseVNode("span", _hoisted_32, toDisplayString(cards.value.length), 1)
         ]),
         createBaseVNode("div", _hoisted_42, [
@@ -6189,22 +6217,22 @@ var Column_default = /* @__PURE__ */ defineComponent({
 var Column_default2 = Column_default;
 
 // frontend/components/Board.vue?type=script
-var _hoisted_17 = {
-  id: "board",
-  class: "board"
-};
 var Board_default = /* @__PURE__ */ defineComponent({
   __name: "Board",
   setup(__props) {
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("main", _hoisted_17, [
-        (openBlock(true), createElementBlock(Fragment, null, renderList(unref(STATUSES), (status) => {
+      return openBlock(), createElementBlock("main", {
+        id: "board",
+        class: "board",
+        style: normalizeStyle({ "--column-count": unref(columns).length })
+      }, [
+        (openBlock(true), createElementBlock(Fragment, null, renderList(unref(columns), (column) => {
           return openBlock(), createBlock(Column_default2, {
-            key: status,
-            status
+            key: column.name,
+            status: column.name
           }, null, 8, ["status"]);
         }), 128))
-      ]);
+      ], 4);
     };
   }
 });
@@ -6222,7 +6250,7 @@ function formatTime(value) {
 }
 
 // frontend/components/CreateDialog.vue?type=script
-var _hoisted_18 = { class: "grid" };
+var _hoisted_17 = { class: "grid" };
 var _hoisted_24 = ["value"];
 var _hoisted_33 = ["value", "title"];
 var CreateDialog_default = /* @__PURE__ */ defineComponent({
@@ -6233,7 +6261,7 @@ var CreateDialog_default = /* @__PURE__ */ defineComponent({
     const dialog = ref(null);
     const titleField = ref(null);
     const title = ref("");
-    const status = ref("todo");
+    const status = ref(defaultColumn(columns.value));
     const priority = ref(defaultPriority(priorities.value));
     const assignee = ref("");
     const labelList = ref("");
@@ -6305,7 +6333,7 @@ var CreateDialog_default = /* @__PURE__ */ defineComponent({
               [vModelText, title.value]
             ])
           ]),
-          createBaseVNode("div", _hoisted_18, [
+          createBaseVNode("div", _hoisted_17, [
             createBaseVNode("label", null, [
               _cache[10] || (_cache[10] = createTextVNode(" Status ", -1)),
               withDirectives(createBaseVNode("select", {
@@ -6313,11 +6341,11 @@ var CreateDialog_default = /* @__PURE__ */ defineComponent({
                 "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => status.value = $event),
                 name: "status"
               }, [
-                (openBlock(true), createElementBlock(Fragment, null, renderList(unref(STATUSES), (option) => {
+                (openBlock(true), createElementBlock(Fragment, null, renderList(unref(columns), (column) => {
                   return openBlock(), createElementBlock("option", {
-                    key: option,
-                    value: option
-                  }, toDisplayString(option), 9, _hoisted_24);
+                    key: column.name,
+                    value: column.name
+                  }, toDisplayString(column.display_name), 9, _hoisted_24);
                 }), 128))
               ], 512), [
                 [vModelSelect, status.value]
@@ -6415,7 +6443,7 @@ var CreateDialog_default = /* @__PURE__ */ defineComponent({
 var CreateDialog_default2 = CreateDialog_default;
 
 // frontend/components/FilterBar.vue?type=script
-var _hoisted_19 = { class: "filters" };
+var _hoisted_18 = { class: "filters" };
 var _hoisted_25 = ["value"];
 var _hoisted_34 = ["value", "title"];
 var _hoisted_43 = ["value", "title"];
@@ -6454,7 +6482,7 @@ var FilterBar_default = /* @__PURE__ */ defineComponent({
       filters.ready = false;
     }
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("div", _hoisted_19, [
+      return openBlock(), createElementBlock("div", _hoisted_18, [
         createBaseVNode("label", null, [
           _cache[7] || (_cache[7] = createTextVNode(" Status ", -1)),
           withDirectives(createBaseVNode("select", {
@@ -6462,11 +6490,11 @@ var FilterBar_default = /* @__PURE__ */ defineComponent({
             "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => unref(filters).status = $event)
           }, [
             _cache[6] || (_cache[6] = createBaseVNode("option", { value: "" }, "any", -1)),
-            (openBlock(true), createElementBlock(Fragment, null, renderList(unref(STATUSES), (status) => {
+            (openBlock(true), createElementBlock(Fragment, null, renderList(unref(columns), (column) => {
               return openBlock(), createElementBlock("option", {
-                key: status,
-                value: status
-              }, toDisplayString(status), 9, _hoisted_25);
+                key: column.name,
+                value: column.name
+              }, toDisplayString(column.display_name), 9, _hoisted_25);
             }), 128))
           ], 512), [
             [vModelSelect, unref(filters).status]
@@ -6561,7 +6589,7 @@ var FilterBar_default = /* @__PURE__ */ defineComponent({
 var FilterBar_default2 = FilterBar_default;
 
 // frontend/components/NotesPanel.vue?type=script
-var _hoisted_110 = { class: "notes-section" };
+var _hoisted_19 = { class: "notes-section" };
 var _hoisted_26 = {
   key: 0,
   class: "notes-empty"
@@ -6624,7 +6652,7 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
       commit2();
     }
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("section", _hoisted_110, [
+      return openBlock(), createElementBlock("section", _hoisted_19, [
         _cache[4] || (_cache[4] = createBaseVNode("h3", { class: "notes-title" }, "Notes", -1)),
         createBaseVNode("ul", {
           id: "task-notes",
@@ -6691,7 +6719,7 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
 var NotesPanel_default2 = NotesPanel_default;
 
 // frontend/components/TaskDialog.vue?type=script
-var _hoisted_111 = { class: "dialog-header" };
+var _hoisted_110 = { class: "dialog-header" };
 var _hoisted_27 = {
   id: "task-dialog-id",
   class: "task-id"
@@ -6723,7 +6751,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
     const noteDraft = ref("");
     const stale2 = [priority.value];
     const priorityChoices = computed2(() => priorityOptions(priorities.value, stale2));
-    const pending = pendingDependencies(props.task, index.value);
+    const pending = pendingDependencies(props.task, index.value, columns.value);
     const timestamps = `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`;
     onMounted(() => dialog.value?.showModal());
     function dismiss() {
@@ -6789,7 +6817,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
           method: "dialog",
           onSubmit: withModifiers(save, ["prevent"])
         }, [
-          createBaseVNode("header", _hoisted_111, [
+          createBaseVNode("header", _hoisted_110, [
             createBaseVNode("span", _hoisted_27, toDisplayString(__props.task.id), 1),
             createBaseVNode("button", {
               type: "button",
@@ -6819,11 +6847,11 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                 "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => status.value = $event),
                 name: "status"
               }, [
-                (openBlock(true), createElementBlock(Fragment, null, renderList(unref(STATUSES), (option) => {
+                (openBlock(true), createElementBlock(Fragment, null, renderList(unref(columns), (column) => {
                   return openBlock(), createElementBlock("option", {
-                    key: option,
-                    value: option
-                  }, toDisplayString(option), 9, _hoisted_45);
+                    key: column.name,
+                    value: column.name
+                  }, toDisplayString(column.display_name), 9, _hoisted_45);
                 }), 128))
               ], 512), [
                 [vModelSelect, status.value]
@@ -6937,7 +6965,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
 var TaskDialog_default2 = TaskDialog_default;
 
 // frontend/components/Toasts.vue?type=script
-var _hoisted_112 = {
+var _hoisted_111 = {
   id: "toasts",
   class: "toasts",
   "aria-live": "polite"
@@ -6946,7 +6974,7 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
   __name: "Toasts",
   setup(__props) {
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("div", _hoisted_112, [
+      return openBlock(), createElementBlock("div", _hoisted_111, [
         (openBlock(true), createElementBlock(Fragment, null, renderList(unref(toasts), (item) => {
           return openBlock(), createElementBlock("div", {
             key: item.id,
@@ -6962,7 +6990,7 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
 var Toasts_default2 = Toasts_default;
 
 // frontend/components/App.vue?type=script
-var _hoisted_113 = { class: "topbar" };
+var _hoisted_112 = { class: "topbar" };
 var _hoisted_28 = { class: "statusbar" };
 var _hoisted_37 = { id: "status-line" };
 var App_default = /* @__PURE__ */ defineComponent({
@@ -6971,7 +6999,7 @@ var App_default = /* @__PURE__ */ defineComponent({
     const open = computed2(() => tasks.value.find((task) => task.id === openTaskID.value));
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock(Fragment, null, [
-        createBaseVNode("header", _hoisted_113, [
+        createBaseVNode("header", _hoisted_112, [
           _cache[3] || (_cache[3] = createBaseVNode("h1", { class: "brand" }, "tq", -1)),
           createVNode(FilterBar_default2),
           createBaseVNode("button", {

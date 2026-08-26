@@ -289,6 +289,17 @@ func (s *Store) Priorities() (task.Priorities, error) {
 	return cfg.Vocabulary(), nil
 }
 
+// Columns is the board this queue is filed on: the statuses a write may use,
+// their order, which of them offer work, and which count a dependency as met.
+// Read from the config on every call, for the same reason Priorities is.
+func (s *Store) Columns() (task.Columns, error) {
+	cfg, err := config.FindConfig(s.Dir)
+	if err != nil {
+		return task.Columns{}, err
+	}
+	return cfg.Board(), nil
+}
+
 // List returns every task in the directory in the default order: status,
 // priority, creation time, ID.
 func (s *Store) List() ([]task.Task, error) {
@@ -313,18 +324,31 @@ func (s *Store) List() ([]task.Task, error) {
 		tasks = append(tasks, t)
 	}
 
-	// The ranking is the project's, so sorting needs its vocabulary. A task
-	// filed under a value the project has since dropped keeps it and sorts
+	// The ranking and the board are the project's, so sorting needs both. A
+	// task filed under a value the project has since dropped keeps it and sorts
 	// last, rather than being refused by the listing that would show it.
 	priorities, err := s.Priorities()
 	if err != nil {
 		return nil, err
 	}
-	task.SortTasks(tasks, priorities)
+	columns, err := s.Columns()
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		tasks[i].Status = columns.Normalize(tasks[i].Status)
+	}
+	task.SortTasks(tasks, priorities, columns)
 	return tasks, nil
 }
 
-// Get returns a single task by ID.
+// Get returns a single task by ID, with its status resolved against the board:
+// an alias becomes the column it names, and a column the project has removed
+// becomes the first one, which is where the task is shown.
+//
+// Resolved in memory only. Reads never write — a listing must not rewrite the
+// directory it is listing — so the corrected value reaches the file the next
+// time the task is saved for some other reason.
 func (s *Store) Get(id string) (task.Task, error) {
 	if !task.ValidID(id) {
 		return task.Task{}, fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
@@ -333,7 +357,16 @@ func (s *Store) Get(id string) (task.Task, error) {
 	if err != nil {
 		return task.Task{}, err
 	}
-	return s.readFile(name)
+	t, err := s.readFile(name)
+	if err != nil {
+		return task.Task{}, err
+	}
+	columns, err := s.Columns()
+	if err != nil {
+		return task.Task{}, err
+	}
+	t.Status = columns.Normalize(t.Status)
+	return t, nil
 }
 
 func (s *Store) readFile(name string) (task.Task, error) {
@@ -372,11 +405,18 @@ func (s *Store) Create(in CreateTaskInput) (task.Task, error) {
 	if err := priorities.Check(in.Priority); err != nil {
 		return task.Task{}, err
 	}
+	columns, err := s.Columns()
+	if err != nil {
+		return task.Task{}, err
+	}
+	if err := columns.Check(in.Status); err != nil {
+		return task.Task{}, err
+	}
 
 	now := time.Now().Truncate(time.Second)
 	t := task.Task{
 		Title:     strings.TrimSpace(in.Title),
-		Status:    orDefault(in.Status, task.StatusTodo),
+		Status:    columns.Normalize(orDefault(in.Status, columns.Default())),
 		Priority:  orDefault(in.Priority, priorities.Default()),
 		Assignee:  in.Assignee,
 		Labels:    normalizeList(in.Labels),
@@ -452,6 +492,17 @@ func (s *Store) Mutate(id string, apply func(*task.Task) error) (task.Task, erro
 // so an untouched priority still arrives in the patch.
 func (s *Store) Patch(id string, patch task.TaskPatch) (task.Task, error) {
 	return s.Mutate(id, func(t *task.Task) error {
+		if patch.Status != nil && *patch.Status != t.Status {
+			columns, err := s.Columns()
+			if err != nil {
+				return err
+			}
+			if err := columns.Check(*patch.Status); err != nil {
+				return err
+			}
+			resolved := columns.Normalize(*patch.Status)
+			patch.Status = &resolved
+		}
 		if patch.Priority != nil && *patch.Priority != t.Priority {
 			priorities, err := s.Priorities()
 			if err != nil {
@@ -484,6 +535,12 @@ func (s *Store) update(t task.Task) (task.Task, error) {
 	t.DependsOn = normalizeList(t.DependsOn)
 	t.Body = strings.Trim(t.Body, "\n")
 	t.Updated = time.Now().Truncate(time.Second)
+
+	columns, err := s.Columns()
+	if err != nil {
+		return task.Task{}, err
+	}
+	t.Status = columns.Normalize(t.Status)
 
 	if err := t.ValidateForWrite(); err != nil {
 		return task.Task{}, err

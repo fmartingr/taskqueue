@@ -101,10 +101,10 @@ test("the composer files into the column it was opened in", async () => {
 test("filing a card leaves a composer opened in another column alone", async () => {
   const { project, server, page } = await openBoard();
 
-  await page.click(".column[data-status='backlog'] .composer-open");
-  const backlog = ".column[data-status='backlog'] .composer-input";
-  await page.waitForSelector(backlog);
-  await page.fill(backlog, "Filed from backlog");
+  await page.click(".column[data-status='inbox'] .composer-open");
+  const inbox = ".column[data-status='inbox'] .composer-input";
+  await page.waitForSelector(inbox);
+  await page.fill(inbox, "Filed from inbox");
 
   // Straight into another column. The click blurs the first composer, which
   // files it — and the close that follows lands after this one is already open.
@@ -114,25 +114,25 @@ test("filing a card leaves a composer opened in another column alone", async () 
   await page.fill(todo, "Still typing this one");
 
   // Long enough for the first create and the refresh behind it to return.
-  await page.waitForSelector(`.column[data-status='backlog'] .card:has-text("Filed from backlog")`);
+  await page.waitForSelector(`.column[data-status='inbox'] .card:has-text("Filed from inbox")`);
   await page.waitForFunction(() => document.querySelectorAll(".composer-input").length > 0);
 
   expect(await page.isVisible(todo)).toBe(true);
   expect(await page.inputValue(todo)).toBe("Still typing this one");
 
   const titles = (await project.tasks(server)).map((task) => task.title);
-  expect(titles).toEqual(["Filed from backlog"]);
+  expect(titles).toEqual(["Filed from inbox"]);
 });
 
 test("the composer discards an empty draft rather than filing a blank card", async () => {
   const { project, server, page } = await openBoard();
 
-  await page.click(".column[data-status='backlog'] .composer-open");
-  const input = ".column[data-status='backlog'] .composer-input";
+  await page.click(".column[data-status='inbox'] .composer-open");
+  const input = ".column[data-status='inbox'] .composer-input";
   await page.waitForSelector(input);
   await page.press(input, "Enter");
 
-  await page.waitForSelector(".column[data-status='backlog'] .composer-open");
+  await page.waitForSelector(".column[data-status='inbox'] .composer-open");
   expect(await project.tasks(server)).toEqual([]);
 });
 

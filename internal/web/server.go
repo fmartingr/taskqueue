@@ -131,7 +131,12 @@ func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	if err := filter.Validate(priorities); err != nil {
+	columns, err := s.st.Columns()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if err := filter.Validate(priorities, columns); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -141,7 +146,7 @@ func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, task.FilterTasks(tasks, filter))
+	writeJSON(w, http.StatusOK, task.FilterTasks(tasks, filter, columns))
 }
 
 func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +251,9 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		// A list, not a map: priorities are ordered, most severe first, and
 		// that order is the board's sort and the order of its options.
 		"priorities": cfg.PrioritySet(),
+		// The board itself, left to right, with the flags that say which
+		// columns offer work and which count a dependency as met.
+		"columns": cfg.ColumnSet(),
 	}
 	if cfg != nil {
 		out["version"] = cfg.Version

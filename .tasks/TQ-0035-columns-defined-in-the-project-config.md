@@ -1,7 +1,7 @@
 ---
 id: TQ-0035
 title: Columns defined in the project config
-status: todo
+status: done
 priority: normal
 labels:
   - component/config
@@ -9,7 +9,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T12:11:41+02:00
-updated: 2026-08-25T18:37:29+02:00
+updated: 2026-08-26T16:25:49+02:00
 ---
 
 ## Proposal
@@ -118,3 +118,26 @@ genuinely unknown values.
   clearly when there is not exactly one.
 - Round-trip test with a custom set — three columns, unusual names — covering
   create, move, ready, the board and the generated guide.
+
+---
+
+## Notes
+
+- 2026-08-26T16:25:49+02:00 — Done. The board's columns come from .taskqueue.yaml, and the two flags replace every literal comparison against the strings done and in-progress.
+
+  The flags are named consider_ready and consider_done rather than the ticket's ready and satisfies_dependencies. consider_done is the better name for what it does: a task there counts as finished, which is both what stops a dependency blocking and what tq done aims at — the old name only described the first half.
+
+  Two decisions that were not in the ticket:
+
+  1. A default: true flag on a column, because the ticket's YAML had no way to say where a task filed without a status goes. Without it that would have been the first column by position, which is a rule the reader cannot see.
+  2. Inbox is that default, and it is deliberately not offered by tq ready. Intake is where work lands before anyone has decided it is worth doing; moving it to To do is the triage step that turns something filed into something an agent is handed. This is a real behaviour change: tq add followed by tq ready no longer shows the task just added.
+
+  That second one is why the generated guide grew a paragraph. An agent that files a task and cannot find it in tq ready would be stuck, so the guide now says where a filed task lands, that this may not be a column tq ready offers, and that tq move is what queues it. The documented-session integration test needed the same step inserted, which is the clearest evidence the workflow actually changed.
+
+  Tests that are about dependency blocking or filter parsing now file into todo explicitly, since a task left in intake would not be offered whatever its dependencies said. The browser harness's add helper does the same by default.
+
+  backlog was renamed to inbox and is still accepted everywhere as a spelling of it — frontmatter, tq add --status, tq move — resolving to inbox on the next write. The alias only applies when the project has an inbox column and has not declared a backlog column of its own, since a board with a real backlog column owns that name.
+
+  A task whose column the project has removed is shown in the first column everywhere and corrected by its next write. Reads never write: List and Get resolve the status in memory, and update() is what puts the correction in the file, riding along with a write that was happening anyway.
+
+  The review at high effort found eleven things. The two that mattered: tq list --status backlog validated and then matched nothing, because List normalized the tasks while the filter compared verbatim — exactly the empty-queue-that-looks-real failure Filter.Validate exists to prevent; and tq update --status "" silently moved a task to the first column instead of being refused, because Normalize("") fell through to First() and made Validate's 'status is required' branch unreachable on every write. Also fixed: a column name with a line break corrupted frontmatter into a block scalar, Patch wrote through a pointer the caller owned, and c.board() re-walked the filesystem once per dependency.

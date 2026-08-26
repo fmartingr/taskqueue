@@ -196,7 +196,6 @@ func TestParseTaskErrors(t *testing.T) {
 		{"missing title", "---\nid: TQ-0001\nstatus: todo\n---\n", "title is required"},
 		{"missing id", "---\ntitle: x\nstatus: todo\n---\n", "id is required"},
 		{"bad id", "---\nid: nope\ntitle: x\nstatus: todo\n---\n", "must match TQ-<number>"},
-		{"invalid status", "---\nid: TQ-0001\ntitle: x\nstatus: shipped\n---\n", "invalid status"},
 		{"self dependency", "---\nid: TQ-0001\ntitle: x\nstatus: todo\ndepends_on:\n  - TQ-0001\n---\n", "cannot depend on itself"},
 		{"invalid dependency", "---\nid: TQ-0001\ntitle: x\nstatus: todo\ndepends_on:\n  - nope\n---\n", "invalid dependency"},
 		{"bad timestamp", "---\nid: TQ-0001\ntitle: x\nstatus: todo\ncreated: yesterday\n---\n", "invalid YAML"},
@@ -269,5 +268,22 @@ func TestParseTaskKeepsAPriorityOutsideTheVocabulary(t *testing.T) {
 	}
 	if err := (Priorities{}).Check(tk.Priority); err == nil {
 		t.Error("Check() on the parsed priority = nil, want it refused for a write")
+	}
+}
+
+// Parse keeps unknown statuses; Columns.Check refuses them on write.
+func TestParseTaskKeepsAStatusTheBoardNoLongerHas(t *testing.T) {
+	tk, err := ParseTask("TQ-0001-x.md", []byte("---\nid: TQ-0001\ntitle: x\nstatus: shipped\n---\n"))
+	if err != nil {
+		t.Fatalf("ParseTask() = %v, want a task carrying the unknown status", err)
+	}
+	if tk.Status != "shipped" {
+		t.Errorf("Status = %q, want it kept verbatim", tk.Status)
+	}
+	if got := (Columns{}).Normalize(tk.Status); got != StatusInbox {
+		t.Errorf("Normalize(%q) = %q, want the first column", tk.Status, got)
+	}
+	if err := (Columns{}).Check(tk.Status); err == nil {
+		t.Error("Check() on the parsed status = nil, want it refused for a write")
 	}
 }

@@ -151,7 +151,7 @@ func (c *cli) usage(w io.Writer) {
 	priorities := c.priorities()
 	fmt.Fprintf(w, usageText,
 		config.TaskDirName, filepath.Join(config.TaskDirName, guide.AgentsFileName),
-		strings.Join(task.Statuses, ", "),
+		strings.Join(c.board().Names(), ", "),
 		strings.Join(priorities.Names(), ", "), priorities.Default(),
 		config.ConfigFileName, defaultHost+", "+defaultPort,
 		config.EnvTaskDir, config.TaskDirName,
@@ -169,6 +169,12 @@ func (c *cli) usage(w io.Writer) {
 // the config itself.
 func (c *cli) priorities() task.Priorities {
 	return c.config().Vocabulary()
+}
+
+// board is the project's columns, resolved the same way and for the same
+// reasons as priorities: help and filters both need it before a store exists.
+func (c *cli) board() task.Columns {
+	return c.config().Board()
 }
 
 // config is the project's config, resolved from the queue the command will
@@ -318,7 +324,9 @@ func (c *cli) runAdd(args []string) int {
 		"priority: "+strings.Join(priorities.Names(), ", ")+" (default: "+priorities.Default()+")")
 	assignee := fs.String("assignee", "", "assignee")
 	body := fs.String("body", "", "Markdown body")
-	status := fs.String("status", "", "initial status (default: "+task.StatusTodo+")")
+	board := c.board()
+	status := fs.String("status", "",
+		"initial status: "+strings.Join(board.Names(), ", ")+" (default: "+board.Default()+")")
 	var labels, dependsOn stringList
 	fs.Var(&labels, "label", "label (repeatable)")
 	fs.Var(&dependsOn, "depends-on", "dependency task ID (repeatable)")
@@ -359,7 +367,8 @@ func (c *cli) runList(args []string) int {
 	if _, code, ok := c.parse(fs, args, 0); !ok {
 		return code
 	}
-	if err := filter.Validate(c.priorities()); err != nil {
+	board := c.board()
+	if err := filter.Validate(c.priorities(), board); err != nil {
 		return c.fail(err)
 	}
 
@@ -367,7 +376,7 @@ func (c *cli) runList(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	tasks = task.FilterTasks(tasks, *filter)
+	tasks = task.FilterTasks(tasks, *filter, board)
 
 	if *jsonOut {
 		return c.printJSON(tasks)
@@ -387,7 +396,8 @@ func (c *cli) runReady(args []string) int {
 		return code
 	}
 	filter.Ready = true
-	if err := filter.Validate(c.priorities()); err != nil {
+	board := c.board()
+	if err := filter.Validate(c.priorities(), board); err != nil {
 		return c.fail(err)
 	}
 
@@ -395,7 +405,7 @@ func (c *cli) runReady(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	tasks = task.FilterTasks(tasks, *filter)
+	tasks = task.FilterTasks(tasks, *filter, board)
 
 	if *jsonOut {
 		return c.printJSON(tasks)
@@ -463,14 +473,18 @@ func (c *cli) describeDeps(t task.Task) []string {
 		index = task.IndexTasks(tasks)
 	}
 
+	// Resolved once: c.board() walks for the task directory and parses the
+	// config, which is not something to do per dependency.
+	board := c.board()
+
 	out := make([]string, 0, len(t.DependsOn))
 	for _, dep := range t.DependsOn {
 		other, ok := index[dep]
 		switch {
 		case !ok:
 			out = append(out, dep+" (missing)")
-		case other.Status == task.StatusDone:
-			out = append(out, dep+" (done)")
+		case board.Satisfies(other.Status):
+			out = append(out, fmt.Sprintf("%s (%s)", dep, other.Status))
 		default:
 			out = append(out, fmt.Sprintf("%s (%s, blocking)", dep, other.Status))
 		}
@@ -495,14 +509,21 @@ func (c *cli) runDone(args []string) int {
 	if !ok {
 		return code
 	}
-	return c.moveTask(positional[0], task.StatusDone, *jsonOut)
+	// Whichever column claims finished work; none or several is an error.
+	target, err := c.board().SatisfyingColumn()
+	if err != nil {
+		return c.fail(err)
+	}
+	return c.moveTask(positional[0], target, *jsonOut)
 }
 
 // moveTask is the shared status transition behind `tq move` and `tq done`.
 func (c *cli) moveTask(id, status string, jsonOut bool) int {
-	if !task.ValidStatus(status) {
-		return c.fail(fmt.Errorf("invalid status %q (want one of %s)", status, strings.Join(task.Statuses, ", ")))
+	board := c.board()
+	if err := board.Check(status); err != nil {
+		return c.fail(err)
 	}
+	status = board.Normalize(status)
 
 	st, err := c.st()
 	if err != nil {
@@ -538,7 +559,7 @@ func (c *cli) moveTask(id, status string, jsonOut bool) int {
 func (c *cli) runUpdate(args []string) int {
 	fs := c.flagSet("update")
 	title := fs.String("title", "", "new title")
-	status := fs.String("status", "", "new status")
+	status := fs.String("status", "", "new status: "+strings.Join(c.board().Names(), ", "))
 	priority := fs.String("priority", "", "new priority: "+strings.Join(c.priorities().Names(), ", "))
 	assignee := fs.String("assignee", "", "new assignee")
 	var addLabels, removeLabels, addDeps, removeDeps stringList
@@ -670,7 +691,7 @@ func (c *cli) flagSet(name string) *flag.FlagSet {
 func (c *cli) filterFlags(fs *flag.FlagSet, withStatus bool) (*task.Filter, *bool) {
 	var f task.Filter
 	if withStatus {
-		fs.StringVar(&f.Status, "status", "", "filter by status")
+		fs.StringVar(&f.Status, "status", "", "filter by status: "+strings.Join(c.board().Names(), ", "))
 	}
 	fs.StringVar(&f.Priority, "priority", "", "filter by priority: "+strings.Join(c.priorities().Names(), ", "))
 	fs.StringVar(&f.Label, "label", "", "filter by label")

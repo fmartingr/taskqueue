@@ -12,9 +12,57 @@
  * which blocks rather than being ignored.
  */
 
-export const STATUSES = ["backlog", "todo", "in-progress", "done"] as const;
+/**
+ * A status is whatever the board is configured with, so it is a plain string.
+ * The columns come from GET /api/config; nothing here hard-codes them.
+ */
+export type Status = string;
 
-export type Status = (typeof STATUSES)[number];
+/** One column of the project's board, as GET /api/config returns it. */
+export interface ColumnDef {
+  name: string;
+  display_name: string;
+  /** Absent means false: only a column that says so offers work to `tq ready`. */
+  consider_ready?: boolean;
+  /** Absent means false: a task here counts as finished. */
+  consider_done?: boolean;
+  default?: boolean;
+}
+
+export type ColumnSet = ColumnDef[];
+
+/**
+ * Fallback when GET /api/config is unavailable; must stay in sync with
+ * internal/config/columns.go and internal/task/columns.go.
+ */
+export const FALLBACK_COLUMNS: ColumnSet = [
+  { name: "inbox", display_name: "Inbox", default: true },
+  { name: "todo", display_name: "To do", consider_ready: true },
+  { name: "in-progress", display_name: "In Progress" },
+  { name: "done", display_name: "Done", consider_done: true },
+  { name: "rejected", display_name: "Rejected" },
+];
+
+/** Lookup only: the store resolves aliases and removed columns before the API. */
+export function findColumn(status: string, columns: ColumnSet): ColumnDef | undefined {
+  return columns.find((column) => column.name === status);
+}
+
+export function columnDisplay(status: string, columns: ColumnSet): string {
+  return findColumn(status, columns)?.display_name || status;
+}
+
+export function columnOffersWork(status: string, columns: ColumnSet): boolean {
+  return findColumn(status, columns)?.consider_ready === true;
+}
+
+export function columnSatisfies(status: string, columns: ColumnSet): boolean {
+  return findColumn(status, columns)?.consider_done === true;
+}
+
+export function defaultColumn(columns: ColumnSet): string {
+  return (columns.find((column) => column.default) ?? columns[0])?.name ?? "";
+}
 
 export interface Task {
   id: string;
@@ -70,13 +118,18 @@ export function indexTasks(tasks: Task[]): Map<string, Task> {
 }
 
 /** Returns the dependencies that are missing or not done yet. */
-export function pendingDependencies(task: Task, index: Map<string, Task>): string[] {
-  return (task.depends_on ?? []).filter((id) => index.get(id)?.status !== "done");
+export function pendingDependencies(task: Task, index: Map<string, Task>, columns: ColumnSet): string[] {
+  return (task.depends_on ?? []).filter((id) => {
+    const other = index.get(id);
+    // A missing dependency blocks rather than being ignored, which is what
+    // task.IsBlocked does too — the two are one rule, written twice.
+    return other === undefined || !columnSatisfies(other.status, columns);
+  });
 }
 
-export function isReady(task: Task, index: Map<string, Task>): boolean {
-  if (task.status === "done" || task.status === "in-progress") return false;
-  return pendingDependencies(task, index).length === 0;
+export function isReady(task: Task, index: Map<string, Task>, columns: ColumnSet): boolean {
+  if (!columnOffersWork(task.status, columns)) return false;
+  return pendingDependencies(task, index, columns).length === 0;
 }
 
 // ── Labels ──────────────────────────────────────────────────────
@@ -213,11 +266,10 @@ export function groupLabels(labels: LabelSet, inUse: string[]): LabelGroup[] {
  * outside the project's vocabulary, so the selects offer exactly what it
  * declares and nothing else.
  *
- * Reading stays tolerant all the same. A task filed before the vocabulary
- * changed still carries the old value, and the board has to show it rather than
- * quietly present some other one — the task dialog writes back whatever its
- * select holds, so an option the board dropped is a priority the next save
- * would erase. That is what the extras argument to priorityOptions is for.
+ * Reading stays tolerant: a task outside the vocabulary still carries its value,
+ * and the board must show it — the dialog writes back whatever its select holds,
+ * so a dropped option would be erased on save. That is what the extras argument
+ * to priorityOptions is for.
  */
 
 export function findPriority(name: string, priorities: PrioritySet): PriorityDef | undefined {
@@ -283,7 +335,7 @@ export function priorityOptions(priorities: PrioritySet, extras: string[]): Prio
  * Applies the filter bar. It needs the whole task set rather than a slice of
  * it, because readiness depends on the state of the tasks a filter is hiding.
  */
-export function visibleTasks(tasks: Task[], filters: Filters): Task[] {
+export function visibleTasks(tasks: Task[], filters: Filters, columns: ColumnSet): Task[] {
   const { status, priority, assignee, label, ready } = filters;
   const index = indexTasks(tasks);
 
@@ -299,7 +351,7 @@ export function visibleTasks(tasks: Task[], filters: Filters): Task[] {
     if (priority && task.priority !== priority) return false;
     if (assignee && !matches(task.assignee ?? "", assignee)) return false;
     if (label && !(task.labels ?? []).includes(label)) return false;
-    if (ready && !isReady(task, index)) return false;
+    if (ready && !isReady(task, index, columns)) return false;
     return true;
   });
 }

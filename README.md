@@ -194,6 +194,64 @@ an office VLAN. `tq` prints a warning on start-up whenever the bound host is not
 a loopback address. Prefer leaving `host` out and passing `--host` when you
 actually mean it.
 
+### Columns
+
+The board's columns are the `status` vocabulary, and a project declares them:
+
+```yaml
+columns:
+  - name: spotted
+    display_name: Spotted
+    consider_ready: true
+  - name: doing
+    display_name: Doing
+    default: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+```
+
+The list is the board, left to right. `name` is what task frontmatter stores and
+what `tq move` takes; `display_name` is only what the board shows.
+
+Two flags define column semantics:
+
+- **`ready: true`** — `tq ready` offers work from here. Left out, a column holds
+  work that is unsorted, claimed or finished, and is not handed out.
+- **`consider_done: true`** — a dependency parked here counts as
+  complete, and `tq done` moves tasks to it. Exactly one column should claim it;
+  with none or several, `tq done` says which way round it is rather than
+  guessing.
+- **`default: true`** — where a task filed without a status goes. Without it,
+  the first column.
+
+Like priorities and unlike labels, this is a closed set: `tq add --status`,
+`tq move`, `tq update --status`, `POST /api/tasks` and `PATCH /api/tasks/{id}`
+refuse a status the board has no column for, and list what it does have.
+
+A task whose column the project has since removed is **shown in the first
+column** — on the board, in `tq list`, in filters and in sorting — and the file
+is corrected the next time that task is saved for some other reason. Reads never
+write: a listing does not rewrite the directory it is listing.
+
+The built-in board is Inbox, To do, In Progress, Done and Rejected.
+
+**Inbox is intake, and `tq ready` does not offer it.** A task filed without a
+status lands there, before anyone has decided it is worth doing; moving it to To
+do is the triage step that turns something filed into something an agent is
+handed. So `tq add` followed by `tq ready` will not show the task you just
+added — `tq move <id> todo` is what puts it in the queue.
+
+Note the deliberate asymmetry at the other end: **Rejected does not count as
+done.** A task waiting on work somebody decided not to do is still blocked, and
+saying otherwise would quietly treat "we will not do this" as "this is
+finished".
+
+`inbox` was called `backlog` until this landed. `backlog` is still accepted
+everywhere as a spelling of `inbox` — in frontmatter, in `tq add --status`, in
+`tq move` — so an existing queue keeps working; it resolves to `inbox` on the
+next write. That alias is deprecated and goes in a future release.
+
 ### Labels
 
 Labels are freeform: `--label` takes any string, and always has. What
@@ -356,7 +414,9 @@ Implement authentication using the existing OIDC provider.
 - 2026-08-25T09:42:00+02:00 — Initial investigation completed.
 ```
 
-- Statuses: `backlog`, `todo`, `in-progress`, `done`.
+- Statuses: `inbox` (default), `todo`, `in-progress`, `done`, `rejected` — the
+  board, left to right. The set is the project's, declared in `.taskqueue.yaml`;
+  see [Columns](#columns).
 - Priorities: `urgent`, `high`, `normal` (default), `low` — most severe first,
   which is also the order `tq list` sorts by. The set is the project's, declared
   in `.taskqueue.yaml`; see [Priorities](#priorities).
@@ -390,7 +450,7 @@ difference between an agent moving a task and a human dragging a card.
 | `GET` | `/api/tasks/{id}` | one task |
 | `PATCH` | `/api/tasks/{id}` | partial update; the drag-and-drop endpoint |
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
-| `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities"}` |
+| `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities", "columns"}` |
 | `GET` | `/api/events` | server-sent events; a `tasks` frame when the queue changes, `scan-failed` when it cannot be read |
 | `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version"}` |
 | `GET` | `/api/version` | `{"version"}` |
@@ -480,7 +540,7 @@ that still diffs. A clean checkout needs `bun install` before `make frontend`,
 - No authentication; the server binds to localhost.
 - Every request scans the task directory, and so does the event ticker while a
   board is connected. Fine at PoC scale.
-- The four statuses are fixed and the board is one project per server.
+- The board is one project per server.
 - Task bodies are edited as plain Markdown; nothing is rendered.
 - The board is pushed to over server-sent events, and falls back to a three
   second poll when the stream is unavailable. The server notices changes by

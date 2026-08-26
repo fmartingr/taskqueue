@@ -92,7 +92,7 @@ func TestAddEveryField(t *testing.T) {
 	p.mustRun(t, "add", "full task",
 		"--priority", "low",
 		"--assignee", "agent-web",
-		"--status", "backlog",
+		"--status", "inbox",
 		"--body", "the body text",
 		"--label", "one",
 		"--depends-on", "TQ-0001",
@@ -100,7 +100,7 @@ func TestAddEveryField(t *testing.T) {
 
 	var got taskJSON
 	p.mustRun(t, "show", "TQ-0002", "--json").JSON(t, &got)
-	if got.Priority != "low" || got.Assignee != "agent-web" || got.Status != "backlog" {
+	if got.Priority != "low" || got.Assignee != "agent-web" || got.Status != "inbox" {
 		t.Errorf("scalars = %+v", got)
 	}
 	if got.Body != "the body text" {
@@ -115,8 +115,8 @@ func TestAddEveryField(t *testing.T) {
 func TestListAndReadyFilters(t *testing.T) {
 	t.Parallel()
 	p := newProject(t)
-	p.mustRun(t, "add", "backend work", "--label", "backend", "--priority", "high", "--assignee", "agent-api")
-	p.mustRun(t, "add", "frontend work", "--label", "frontend", "--priority", "low")
+	p.mustRun(t, "add", "backend work", "--status", "todo", "--label", "backend", "--priority", "high", "--assignee", "agent-api")
+	p.mustRun(t, "add", "frontend work", "--status", "todo", "--label", "frontend", "--priority", "low")
 	p.mustRun(t, "move", "TQ-0002", "in-progress")
 
 	for _, tc := range []struct {
@@ -155,8 +155,8 @@ func TestListAndReadyFilters(t *testing.T) {
 func TestReadyFollowsDependencies(t *testing.T) {
 	t.Parallel()
 	p := newProject(t)
-	p.mustRun(t, "add", "the blocker")
-	p.mustRun(t, "add", "the blocked", "--depends-on", "TQ-0001")
+	p.mustRun(t, "add", "the blocker", "--status", "todo")
+	p.mustRun(t, "add", "the blocked", "--status", "todo", "--depends-on", "TQ-0001")
 
 	var ready []taskJSON
 	p.mustRun(t, "ready", "--json").JSON(t, &ready)
@@ -192,5 +192,24 @@ func TestHelpAndUsage(t *testing.T) {
 	}
 	if r := p.run(t, "nope"); r.Code != 1 || !strings.Contains(r.Stderr, "nope") {
 		t.Errorf("unknown command = %d, stderr %q", r.Code, r.Stderr)
+	}
+}
+
+// backlog resolves to inbox via the built-in alias.
+func TestBacklogIsStillAcceptedAsInbox(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "filed the old way", "--status", "backlog")
+
+	var got taskJSON
+	p.mustRun(t, "show", "TQ-0001", "--json").JSON(t, &got)
+	if got.Status != "inbox" {
+		t.Errorf("status = %q, want inbox", got.Status)
+	}
+
+	p.mustRun(t, "move", "TQ-0001", "backlog")
+	p.mustRun(t, "show", "TQ-0001", "--json").JSON(t, &got)
+	if got.Status != "inbox" {
+		t.Errorf("after move to backlog, status = %q, want inbox", got.Status)
 	}
 }

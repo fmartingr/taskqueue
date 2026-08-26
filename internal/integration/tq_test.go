@@ -16,6 +16,7 @@ func TestDocumentedSession(t *testing.T) {
 
 	p.mustRun(t, "init")
 	p.mustRun(t, "add", "Implement the API", "--priority", "high", "--label", "backend")
+	p.mustRun(t, "move", "TQ-0001", "todo")
 
 	var ready []struct {
 		ID     string `json:"id"`

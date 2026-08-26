@@ -11,11 +11,10 @@ import {
   groupLabels,
   labelsInUse,
   priorityOptions,
-  STATUSES,
   type LabelGroup,
   type PriorityOption,
 } from "../board";
-import { filters, labels, priorities, tasks } from "../state";
+import { columns, filters, labels, priorities, tasks } from "../state";
 
 // The filter's own value is offered even when the project has dropped it, or
 // when nothing carries it any more: dropping the option would leave the bar
@@ -74,7 +73,7 @@ function reset(): void {
       Status
       <select id="filter-status" v-model="filters.status">
         <option value="">any</option>
-        <option v-for="status in STATUSES" :key="status" :value="status">{{ status }}</option>
+        <option v-for="column in columns" :key="column.name" :value="column.name">{{ column.display_name }}</option>
       </select>
     </label>
 

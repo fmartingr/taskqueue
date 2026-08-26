@@ -9,7 +9,7 @@
  * state; this owns the wire.
  */
 
-import type { LabelSet, PrioritySet, Task } from "./board";
+import type { ColumnSet, LabelSet, PrioritySet, Task } from "./board";
 
 /** The fields POST /api/tasks and PATCH /api/tasks/{id} accept. */
 export interface TaskInput {
@@ -38,6 +38,7 @@ export interface ProjectConfig {
   file: string;
   labels: LabelSet;
   priorities: PrioritySet;
+  columns: ColumnSet;
 }
 
 export async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {

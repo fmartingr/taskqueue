@@ -170,8 +170,8 @@ func TestAPIErrorEnvelope(t *testing.T) {
 func TestAPIListFilters(t *testing.T) {
 	t.Parallel()
 	p := newProject(t)
-	p.mustRun(t, "add", "backend work", "--label", "backend", "--priority", "high", "--assignee", "agent-api")
-	p.mustRun(t, "add", "frontend work", "--label", "frontend")
+	p.mustRun(t, "add", "backend work", "--status", "todo", "--label", "backend", "--priority", "high", "--assignee", "agent-api")
+	p.mustRun(t, "add", "frontend work", "--status", "todo", "--label", "frontend")
 	p.mustRun(t, "move", "TQ-0002", "in-progress")
 	srv := p.serve(t)
 

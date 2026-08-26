@@ -16,6 +16,7 @@ import {
   priorityChip,
   priorityDisplay,
   priorityOptions,
+  FALLBACK_COLUMNS,
   type Filters,
   type LabelSet,
   type PrioritySet,
@@ -69,34 +70,34 @@ describe("pendingDependencies", () => {
     task("TQ-0001", "done"),
     task("TQ-0002", "todo"),
     task("TQ-0003", "in-progress"),
-    task("TQ-0004", "backlog"),
+    task("TQ-0004", "inbox"),
   ];
   const index = indexTasks(tasks);
 
   test("a task without dependencies has none pending", () => {
-    expect(pendingDependencies(task("TQ-0100", "todo"), index)).toEqual([]);
+    expect(pendingDependencies(task("TQ-0100", "todo"), index, FALLBACK_COLUMNS)).toEqual([]);
   });
 
   test("depends_on may be absent altogether", () => {
     const { depends_on, ...without } = task("TQ-0100", "todo");
-    expect(pendingDependencies(without, index)).toEqual([]);
+    expect(pendingDependencies(without, index, FALLBACK_COLUMNS)).toEqual([]);
   });
 
   test("a done dependency is not pending", () => {
-    expect(pendingDependencies(task("TQ-0100", "todo", "TQ-0001"), index)).toEqual([]);
+    expect(pendingDependencies(task("TQ-0100", "todo", "TQ-0001"), index, FALLBACK_COLUMNS)).toEqual([]);
   });
 
   test("every unfinished status is pending", () => {
-    const pending = pendingDependencies(task("TQ-0100", "todo", "TQ-0002", "TQ-0003", "TQ-0004"), index);
+    const pending = pendingDependencies(task("TQ-0100", "todo", "TQ-0002", "TQ-0003", "TQ-0004"), index, FALLBACK_COLUMNS);
     expect(pending).toEqual(["TQ-0002", "TQ-0003", "TQ-0004"]);
   });
 
   test("a missing dependency is pending rather than ignored", () => {
-    expect(pendingDependencies(task("TQ-0100", "todo", "TQ-9999"), index)).toEqual(["TQ-9999"]);
+    expect(pendingDependencies(task("TQ-0100", "todo", "TQ-9999"), index, FALLBACK_COLUMNS)).toEqual(["TQ-9999"]);
   });
 
   test("the declared order is kept and done dependencies drop out", () => {
-    const pending = pendingDependencies(task("TQ-0100", "todo", "TQ-0002", "TQ-0001", "TQ-9999"), index);
+    const pending = pendingDependencies(task("TQ-0100", "todo", "TQ-0002", "TQ-0001", "TQ-9999"), index, FALLBACK_COLUMNS);
     expect(pending).toEqual(["TQ-0002", "TQ-9999"]);
   });
 });
@@ -112,14 +113,14 @@ describe("isReady", () => {
     task("TQ-0005", "todo", "TQ-9999"),
     task("TQ-0006", "in-progress"),
     task("TQ-0007", "done"),
-    task("TQ-0008", "backlog", "TQ-0001", "TQ-0007"),
+    task("TQ-0008", "inbox", "TQ-0001", "TQ-0007"),
   ];
   const index = indexTasks(tasks);
 
   const cases: [string, boolean, string][] = [
     ["TQ-0002", true, "no dependencies"],
     ["TQ-0003", true, "dependency is done"],
-    ["TQ-0008", true, "all dependencies done, backlog still counts"],
+    ["TQ-0008", false, "dependencies all done, but intake is not offered until it is triaged"],
     ["TQ-0004", false, "dependency is not done"],
     ["TQ-0005", false, "dependency is missing"],
     ["TQ-0006", false, "already in progress"],
@@ -128,16 +129,16 @@ describe("isReady", () => {
 
   for (const [id, want, why] of cases) {
     test(`${id} is ${want ? "ready" : "not ready"}: ${why}`, () => {
-      expect(isReady(index.get(id)!, index)).toBe(want);
+      expect(isReady(index.get(id)!, index, FALLBACK_COLUMNS)).toBe(want);
     });
   }
 
   test("an in-progress task is not ready even with every dependency done", () => {
-    expect(isReady(task("TQ-0100", "in-progress", "TQ-0001"), index)).toBe(false);
+    expect(isReady(task("TQ-0100", "in-progress", "TQ-0001"), index, FALLBACK_COLUMNS)).toBe(false);
   });
 
   test("a blocked task that is already done is still not ready", () => {
-    expect(isReady(task("TQ-0100", "done", "TQ-9999"), index)).toBe(false);
+    expect(isReady(task("TQ-0100", "done", "TQ-9999"), index, FALLBACK_COLUMNS)).toBe(false);
   });
 });
 
@@ -150,7 +151,7 @@ describe("visibleTasks", () => {
   ];
 
   test("no filters keeps every task, in order", () => {
-    expect(visibleTasks(tasks, NO_FILTERS).map((t) => t.id)).toEqual([
+    expect(visibleTasks(tasks, NO_FILTERS, FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
       "TQ-0001",
       "TQ-0002",
       "TQ-0003",
@@ -159,50 +160,50 @@ describe("visibleTasks", () => {
   });
 
   test("status matches exactly", () => {
-    expect(visibleTasks(tasks, filters({ status: "todo" })).map((t) => t.id)).toEqual(["TQ-0002", "TQ-0004"]);
+    expect(visibleTasks(tasks, filters({ status: "todo" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual(["TQ-0002", "TQ-0004"]);
   });
 
   test("priority matches exactly, and an unset priority reads as normal", () => {
-    expect(visibleTasks(tasks, filters({ priority: "high" })).map((t) => t.id)).toEqual(["TQ-0002"]);
+    expect(visibleTasks(tasks, filters({ priority: "high" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual(["TQ-0002"]);
     const unset = [{ ...task("TQ-0100", "todo"), priority: undefined }];
-    expect(visibleTasks(unset, filters({ priority: "normal" }))).toEqual([]);
+    expect(visibleTasks(unset, filters({ priority: "normal" }), FALLBACK_COLUMNS)).toEqual([]);
   });
 
   test("assignee matches a substring, case-insensitively", () => {
-    expect(visibleTasks(tasks, filters({ assignee: "agent" })).map((t) => t.id)).toEqual([
+    expect(visibleTasks(tasks, filters({ assignee: "agent" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
       "TQ-0001",
       "TQ-0002",
       "TQ-0004",
     ]);
-    expect(visibleTasks(tasks, filters({ assignee: "UI" })).map((t) => t.id)).toEqual(["TQ-0002", "TQ-0004"]);
+    expect(visibleTasks(tasks, filters({ assignee: "UI" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual(["TQ-0002", "TQ-0004"]);
   });
 
   test("surrounding whitespace in a search box is ignored", () => {
-    expect(visibleTasks(tasks, filters({ assignee: "  agent-api  " })).map((t) => t.id)).toEqual(["TQ-0001"]);
+    expect(visibleTasks(tasks, filters({ assignee: "  agent-api  " }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual(["TQ-0001"]);
   });
 
   // The label filter is a list of the labels that exist, not a search box, so
   // it matches a whole label: "backend" must not also select "component/backend".
   test("label matches a whole label", () => {
-    expect(visibleTasks(tasks, filters({ label: "backend" })).map((t) => t.id)).toEqual([
+    expect(visibleTasks(tasks, filters({ label: "backend" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
       "TQ-0001",
       "TQ-0002",
     ]);
-    expect(visibleTasks(tasks, filters({ label: "end" }))).toEqual([]);
-    expect(visibleTasks(tasks, filters({ label: "auth" })).map((t) => t.id)).toEqual(["TQ-0002"]);
+    expect(visibleTasks(tasks, filters({ label: "end" }), FALLBACK_COLUMNS)).toEqual([]);
+    expect(visibleTasks(tasks, filters({ label: "auth" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual(["TQ-0002"]);
   });
 
   test("a task without an assignee or labels is dropped by those filters", () => {
-    expect(visibleTasks(tasks, filters({ assignee: "a" })).map((t) => t.id)).not.toContain("TQ-0003");
-    expect(visibleTasks(tasks, filters({ label: "backend" })).map((t) => t.id)).not.toContain("TQ-0003");
+    expect(visibleTasks(tasks, filters({ assignee: "a" }), FALLBACK_COLUMNS).map((t) => t.id)).not.toContain("TQ-0003");
+    expect(visibleTasks(tasks, filters({ label: "backend" }), FALLBACK_COLUMNS).map((t) => t.id)).not.toContain("TQ-0003");
   });
 
   test("the ready filter keeps only unblocked, unclaimed tasks", () => {
-    expect(visibleTasks(tasks, filters({ ready: true })).map((t) => t.id)).toEqual(["TQ-0002"]);
+    expect(visibleTasks(tasks, filters({ ready: true }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual(["TQ-0002"]);
   });
 
   test("filters combine", () => {
-    expect(visibleTasks(tasks, filters({ status: "todo", label: "backend" })).map((t) => t.id)).toEqual([
+    expect(visibleTasks(tasks, filters({ status: "todo", label: "backend" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
       "TQ-0002",
     ]);
   });
@@ -211,14 +212,14 @@ describe("visibleTasks", () => {
     // TQ-0004 depends on TQ-0003, which the status filter hides. Hiding a
     // dependency must not turn it into a missing one.
     const done = tasks.map((t) => (t.id === "TQ-0003" ? { ...t, status: "done" as Status } : t));
-    expect(visibleTasks(done, filters({ status: "todo", ready: true })).map((t) => t.id)).toEqual([
+    expect(visibleTasks(done, filters({ status: "todo", ready: true }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
       "TQ-0002",
       "TQ-0004",
     ]);
   });
 
   test("an empty list stays empty", () => {
-    expect(visibleTasks([], filters({ ready: true }))).toEqual([]);
+    expect(visibleTasks([], filters({ ready: true }), FALLBACK_COLUMNS)).toEqual([]);
   });
 });
 

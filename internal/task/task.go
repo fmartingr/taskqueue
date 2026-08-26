@@ -25,15 +25,6 @@ type Task struct {
 	Body      string    `yaml:"-" json:"body"`
 }
 
-// The status workflow is fixed during the PoC, and the slice is also the
-// display order (board columns, sorting).
-const (
-	StatusBacklog    = "backlog"
-	StatusTodo       = "todo"
-	StatusInProgress = "in-progress"
-	StatusDone       = "done"
-)
-
 // The built-in priorities. A project can declare its own vocabulary, which is
 // what Priorities carries; these are what it starts from and what a project
 // without a config keeps.
@@ -44,22 +35,12 @@ const (
 	PriorityUrgent = "urgent"
 )
 
-var (
-	Statuses          = []string{StatusBacklog, StatusTodo, StatusInProgress, StatusDone}
-	builtinPriorities = []string{PriorityUrgent, PriorityHigh, PriorityNormal, PriorityLow}
-)
+var builtinPriorities = []string{PriorityUrgent, PriorityHigh, PriorityNormal, PriorityLow}
 
 // idPattern is the only accepted shape for task IDs (and therefore filenames).
 var idPattern = regexp.MustCompile(`^TQ-[0-9]+$`)
 
-func ValidID(id string) bool    { return idPattern.MatchString(id) }
-func ValidStatus(s string) bool { return slices.Contains(Statuses, s) }
-func statusRank(s string) int {
-	if i := slices.Index(Statuses, s); i >= 0 {
-		return i
-	}
-	return len(Statuses)
-}
+func ValidID(id string) bool { return idPattern.MatchString(id) }
 
 // Validate reports the first problem that would make a task file unusable.
 func (t Task) Validate() error {
@@ -72,12 +53,12 @@ func (t Task) Validate() error {
 		return fmt.Errorf("title is required")
 	case t.Status == "":
 		return fmt.Errorf("status is required")
-	case !ValidStatus(t.Status):
-		return fmt.Errorf("invalid status %q (want one of %s)", t.Status, strings.Join(Statuses, ", "))
 	}
-	// Priority is deliberately absent: the vocabulary is the project's, this
-	// package does not know it, and a task filed under one the project has
-	// since dropped must still load. Priorities.Check guards the writes.
+	// Neither the status nor the priority is checked against a vocabulary here:
+	// both are the project's, this package does not know them, and a task filed
+	// under one that has since been dropped must still load. Columns.Check and
+	// Priorities.Check guard the writes; Columns.Normalize decides where a task
+	// whose column is gone is shown.
 	for _, dep := range t.DependsOn {
 		if dep == t.ID {
 			return fmt.Errorf("task %s cannot depend on itself", t.ID)
@@ -130,10 +111,10 @@ func IndexTasks(tasks []Task) map[string]Task {
 
 // IsBlocked reports whether any dependency is missing or unfinished. A missing
 // dependency blocks rather than being ignored, so typos surface as blocked work.
-func IsBlocked(t Task, index map[string]Task) bool {
+func IsBlocked(t Task, index map[string]Task, columns Columns) bool {
 	for _, dep := range t.DependsOn {
 		other, ok := index[dep]
-		if !ok || other.Status != StatusDone {
+		if !ok || !columns.Satisfies(other.Status) {
 			return true
 		}
 	}
@@ -141,21 +122,21 @@ func IsBlocked(t Task, index map[string]Task) bool {
 }
 
 // IsReady reports whether an agent could pick this task up right now.
-func IsReady(t Task, index map[string]Task) bool {
-	if t.Status == StatusDone || t.Status == StatusInProgress {
+func IsReady(t Task, index map[string]Task, columns Columns) bool {
+	if !columns.Offers(t.Status) {
 		return false
 	}
-	return !IsBlocked(t, index)
+	return !IsBlocked(t, index, columns)
 }
 
 // SortTasks orders tasks by status, then priority, then creation time, then ID.
 // The priority ranking is the project's, since the vocabulary is ordered and
 // the config file is the ranking; the zero value is the built-in order.
-func SortTasks(tasks []Task, priorities Priorities) {
+func SortTasks(tasks []Task, priorities Priorities, columns Columns) {
 	sort.SliceStable(tasks, func(i, j int) bool {
 		a, b := tasks[i], tasks[j]
 		if a.Status != b.Status {
-			return statusRank(a.Status) < statusRank(b.Status)
+			return columns.Rank(a.Status) < columns.Rank(b.Status)
 		}
 		if a.Priority != b.Priority {
 			return priorities.Rank(a.Priority) < priorities.Rank(b.Priority)
@@ -180,9 +161,9 @@ type Filter struct {
 // Filtering on a priority outside the vocabulary is such a filter: the task it
 // would find is one the project can no longer file, and silently returning
 // nothing reads as an empty queue.
-func (f Filter) Validate(priorities Priorities) error {
-	if f.Status != "" && !ValidStatus(f.Status) {
-		return fmt.Errorf("invalid status %q (want one of %s)", f.Status, strings.Join(Statuses, ", "))
+func (f Filter) Validate(priorities Priorities, columns Columns) error {
+	if err := columns.Check(f.Status); err != nil {
+		return err
 	}
 	return priorities.Check(f.Priority)
 }
@@ -205,11 +186,13 @@ func (f Filter) matchFields(t Task) bool {
 
 // FilterTasks keeps the input order and needs the full task set because the
 // "ready" filter depends on the state of other tasks.
-func FilterTasks(tasks []Task, f Filter) []Task {
+func FilterTasks(tasks []Task, f Filter, columns Columns) []Task {
+	// Resolve filter status the same way the store resolves task statuses.
+	f.Status = columns.Normalize(f.Status)
 	index := IndexTasks(tasks)
 	out := make([]Task, 0, len(tasks))
 	for _, t := range tasks {
-		if f.Ready && !IsReady(t, index) {
+		if f.Ready && !IsReady(t, index, columns) {
 			continue
 		}
 		if !f.matchFields(t) {

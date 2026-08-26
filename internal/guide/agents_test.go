@@ -30,7 +30,7 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 	for _, want := range []string{
 		"tq ready --json", "tq show <id> --json", "tq move <id> in-progress",
 		"tq note <id>", "tq done <id>", "tq add \"Title\"", "tq list --json",
-		"backlog, todo, in-progress, done", "urgent, high, normal, low",
+		"inbox, todo, in-progress, done, rejected", "urgent, high, normal, low",
 		st.Dir, config.EnvTaskDir, generatedNotice,
 	} {
 		if !strings.Contains(string(guide), want) {
@@ -113,7 +113,7 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 }
 
 func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
-	guide := string(taskGuide(filepath.Join("project", ".tasks"), task.Priorities{}))
+	guide := string(taskGuide(filepath.Join("project", ".tasks"), task.Priorities{}, task.Columns{}))
 
 	// The framing carries as much as the numbering: without these the steps
 	// read as a menu again.

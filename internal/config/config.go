@@ -43,6 +43,11 @@ type Config struct {
 	// the base set when the key is absent.
 	Labels map[string]Label `yaml:"labels" json:"labels"`
 
+	// Columns is the project's board, left to right: a sequence rather than a
+	// mapping, because the order is the board. Read it through ColumnSet, or
+	// through Board for the values the store validates and sorts by.
+	Columns []BoardColumn `yaml:"columns" json:"columns"`
+
 	// Server is where `tq serve` binds when the project pins it. Read it
 	// through ServerHost and ServerPort, which answer through a nil *Config.
 	Server Server `yaml:"server" json:"server"`
@@ -137,6 +142,9 @@ func loadConfig(path string) (*Config, error) {
 	if err := validatePriorities(cfg.Priorities); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
 	}
+	if err := validateColumns(cfg.Columns); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+	}
 	if err := validateServer(cfg.Server); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
 	}
@@ -177,14 +185,15 @@ func WriteConfigIfMissing(startDir, taskDir string) (string, error) {
 	if err != nil {
 		rel = taskDir
 	}
-	// Both vocabularies are seeded with the marker rather than left to
+	// The board and both vocabularies are seeded with the marker rather than
+	// left to
 	// `tq init` alone: any command can be the one that creates a queue, and a
 	// config the user never sees written would silently never get one. The
-	// priorities come first, since they are the closed set and the one a
-	// project is most likely to want to change.
-	body := fmt.Appendf(nil, "version: %d\npath: %s\n%s%s",
+	// columns come first, since the board is the first thing a project tends
+	// to want its own version of.
+	body := fmt.Appendf(nil, "version: %d\npath: %s\n%s%s%s",
 		ConfigVersion, filepath.ToSlash(rel),
-		prioritiesYAML(DefaultPriorities()), labelsYAML(DefaultLabels()))
+		columnsYAML(DefaultColumns()), prioritiesYAML(DefaultPriorities()), labelsYAML(DefaultLabels()))
 	if err := fsx.WriteAtomic(path, body); err != nil {
 		return "", err
 	}

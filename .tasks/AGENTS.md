@@ -35,6 +35,10 @@ Use `tq move <id> <status>` for any other transition.
 ## Create and change
 
     tq add "Title" --priority urgent --label backend --depends-on TQ-0002 --body "…"
+
+A task filed this way lands in the board's default column, which may not
+be one `tq ready` offers — see Statuses below.
+`tq move <id> <status>` is what puts it in the queue.
     tq update <id> --title "New title" --assignee agent-api
     tq update <id> --add-label auth --remove-label backend
     tq update <id> --add-dependency TQ-0002 --remove-dependency TQ-0003
@@ -58,7 +62,11 @@ whole string, so `tq list --label component/backend` takes the whole key.
 
 ## Rules of the format
 
-- Statuses: backlog, todo, in-progress, done
+- Statuses: inbox, todo, in-progress, done, rejected.
+  The board, left to right, declared by the project in `.taskqueue.yaml`: a
+  status outside it is refused on write. A task filed without one lands in
+  inbox. `tq ready` offers work from todo, and a dependency counts as met
+  once it reaches done.
 - Priorities: urgent, high, normal, low (default: normal).
   Most severe first, and that order is the sort order. Unlike labels this is a
   closed set, declared by the project in `.taskqueue.yaml`: a value outside it

@@ -87,8 +87,8 @@ func expectError(t *testing.T, resp *http.Response, payload string, status int, 
 
 func TestAPIListTasks(t *testing.T) {
 	srv, st := newTestServer(t)
-	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Add task API", Priority: task.PriorityHigh, Labels: []string{"backend"}, Assignee: "agent-api"})
-	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Build board", Labels: []string{"frontend"}, DependsOn: []string{"TQ-0001"}})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Add task API", Status: task.StatusTodo, Priority: task.PriorityHigh, Labels: []string{"backend"}, Assignee: "agent-api"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Build board", Status: task.StatusTodo, Labels: []string{"frontend"}, DependsOn: []string{"TQ-0001"}})
 
 	resp, payload := do(t, srv, "GET", "/api/tasks", "")
 	if resp.StatusCode != http.StatusOK {
@@ -124,8 +124,8 @@ func TestAPIListTasks(t *testing.T) {
 
 func TestAPIReadyFilterValues(t *testing.T) {
 	srv, st := newTestServer(t)
-	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Unblocked"})
-	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Blocked", DependsOn: []string{"TQ-0404"}})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Unblocked", Status: task.StatusTodo})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Blocked", Status: task.StatusTodo, DependsOn: []string{"TQ-0404"}})
 
 	for _, value := range []string{"true", "1"} {
 		_, payload := do(t, srv, "GET", "/api/tasks?ready="+value, "")

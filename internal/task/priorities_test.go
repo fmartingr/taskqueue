@@ -75,7 +75,7 @@ func TestSortTasksUsesTheConfiguredOrder(t *testing.T) {
 	}
 	tasks := []Task{mk("TQ-0001", "p2"), mk("TQ-0002", "dropped"), mk("TQ-0003", "p0"), mk("TQ-0004", "p1")}
 
-	SortTasks(tasks, NewPriorities([]string{"p0", "p1", "p2"}, "p1"))
+	SortTasks(tasks, NewPriorities([]string{"p0", "p1", "p2"}, "p1"), Columns{})
 
 	got := make([]string, 0, len(tasks))
 	for _, tk := range tasks {
@@ -91,13 +91,13 @@ func TestSortTasksUsesTheConfiguredOrder(t *testing.T) {
 func TestFilterValidateChecksAgainstTheVocabulary(t *testing.T) {
 	p := NewPriorities([]string{"p0", "p1"}, "p1")
 
-	if err := (Filter{Priority: "p0"}).Validate(p); err != nil {
+	if err := (Filter{Priority: "p0"}).Validate(p, Columns{}); err != nil {
 		t.Errorf("Validate() on a configured priority = %v, want nil", err)
 	}
-	if err := (Filter{Priority: PriorityHigh}).Validate(p); err == nil {
+	if err := (Filter{Priority: PriorityHigh}).Validate(p, Columns{}); err == nil {
 		t.Error("Validate() on a priority outside the vocabulary = nil, want an error")
 	}
-	if err := (Filter{Status: StatusTodo}).Validate(p); err != nil {
+	if err := (Filter{Status: StatusTodo}).Validate(p, Columns{}); err != nil {
 		t.Errorf("Validate() with no priority = %v, want nil", err)
 	}
 }

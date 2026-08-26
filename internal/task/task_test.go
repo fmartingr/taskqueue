@@ -28,7 +28,7 @@ func TestReady(t *testing.T) {
 		task("TQ-0005", StatusTodo, "TQ-9999"),
 		task("TQ-0006", StatusInProgress),
 		task("TQ-0007", StatusDone),
-		task("TQ-0008", StatusBacklog, "TQ-0001", "TQ-0007"),
+		task("TQ-0008", StatusInbox, "TQ-0001", "TQ-0007"),
 	}
 	index := IndexTasks(tasks)
 
@@ -39,14 +39,14 @@ func TestReady(t *testing.T) {
 	}{
 		{"TQ-0002", true, "no dependencies"},
 		{"TQ-0003", true, "dependency is done"},
-		{"TQ-0008", true, "all dependencies done, backlog still counts"},
+		{"TQ-0008", false, "dependencies all done, but intake is not offered until it is triaged"},
 		{"TQ-0004", false, "dependency is not done"},
 		{"TQ-0005", false, "dependency is missing"},
 		{"TQ-0006", false, "already in progress"},
 		{"TQ-0001", false, "already done"},
 	}
 	for _, tc := range tests {
-		if got := IsReady(index[tc.id], index); got != tc.want {
+		if got := IsReady(index[tc.id], index, Columns{}); got != tc.want {
 			t.Errorf("IsReady(%s) = %v, want %v (%s)", tc.id, got, tc.want, tc.why)
 		}
 	}
@@ -67,7 +67,7 @@ func TestBlocked(t *testing.T) {
 		"TQ-0004": true,
 		"TQ-0005": true,
 	} {
-		if got := IsBlocked(index[id], index); got != want {
+		if got := IsBlocked(index[id], index, Columns{}); got != want {
 			t.Errorf("IsBlocked(%s) = %v, want %v", id, got, want)
 		}
 	}
@@ -96,7 +96,7 @@ func TestSortTasks(t *testing.T) {
 		mk("TQ-0001", StatusInProgress, PriorityLow, 4),
 		mk("TQ-0006", StatusTodo, PriorityNormal, 0),
 	}
-	SortTasks(tasks, Priorities{})
+	SortTasks(tasks, Priorities{}, Columns{})
 
 	var got []string
 	for _, tk := range tasks {
@@ -141,7 +141,7 @@ func TestFilterTasks(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var ids []string
-			for _, tk := range FilterTasks(tasks, tc.filter) {
+			for _, tk := range FilterTasks(tasks, tc.filter, Columns{}) {
 				ids = append(ids, tk.ID)
 			}
 			if got := strings.Join(ids, ","); got != tc.want {
@@ -152,13 +152,13 @@ func TestFilterTasks(t *testing.T) {
 }
 
 func TestFilterValidate(t *testing.T) {
-	if err := (Filter{Status: "nope"}).Validate(Priorities{}); err == nil {
+	if err := (Filter{Status: "nope"}).Validate(Priorities{}, Columns{}); err == nil {
 		t.Error("expected an invalid status error")
 	}
-	if err := (Filter{Priority: "nope"}).Validate(Priorities{}); err == nil {
+	if err := (Filter{Priority: "nope"}).Validate(Priorities{}, Columns{}); err == nil {
 		t.Error("expected an invalid priority error")
 	}
-	if err := (Filter{Status: StatusTodo, Priority: PriorityLow}).Validate(Priorities{}); err != nil {
+	if err := (Filter{Status: StatusTodo, Priority: PriorityLow}).Validate(Priorities{}, Columns{}); err != nil {
 		t.Errorf("Validate() = %v, want nil", err)
 	}
 }

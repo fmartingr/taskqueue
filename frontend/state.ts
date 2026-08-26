@@ -19,6 +19,8 @@ import { connectEvents } from "./events";
 import {
   indexTasks,
   visibleTasks,
+  FALLBACK_COLUMNS,
+  type ColumnSet,
   type Filters,
   type LabelSet,
   type PrioritySet,
@@ -57,6 +59,8 @@ export const filters = reactive<Filters>({
 export const labels = ref<LabelSet>({});
 /** The project's priority vocabulary, in rank order, from GET /api/config. */
 export const priorities = ref<PrioritySet>(FALLBACK_PRIORITIES);
+/** The project's board, left to right, from GET /api/config. */
+export const columns = ref<ColumnSet>(FALLBACK_COLUMNS);
 export const taskDir = ref("");
 export const version = ref("");
 
@@ -77,7 +81,7 @@ export const streaming = ref<boolean | null>(null);
 export const stale = ref(false);
 
 export const index = computed(() => indexTasks(tasks.value));
-export const visible = computed(() => visibleTasks(tasks.value, filters));
+export const visible = computed(() => visibleTasks(tasks.value, filters, columns.value));
 
 /** The footer. It says "Loading…" until the first listing lands, so the board
  *  does not open by announcing "0 tasks" for a queue it has not read yet. */
@@ -219,6 +223,7 @@ async function loadProjectConfig(): Promise<void> {
     const config = await fetchConfig();
     labels.value = config.labels ?? {};
     if (config.priorities?.length) priorities.value = config.priorities;
+    if (config.columns?.length) columns.value = config.columns;
   } catch (error) {
     console.error("config failed", error);
   }

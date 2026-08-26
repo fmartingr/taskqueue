@@ -37,9 +37,13 @@ func SyncAgentsDocs(st *store.Store) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	columns, err := st.Columns()
+	if err != nil {
+		return nil, err
+	}
 
 	guide := filepath.Join(st.Dir, AgentsFileName)
-	changed, err := writeIfChanged(guide, taskGuide(st.Dir, priorities))
+	changed, err := writeIfChanged(guide, taskGuide(st.Dir, priorities, columns))
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +82,34 @@ func writeIfChanged(path string, content []byte) (bool, error) {
 	return true, nil
 }
 
+// offering is the columns `tq ready` hands work out of, for the guide.
+func offering(columns task.Columns) []string {
+	var out []string
+	for _, name := range columns.Names() {
+		if columns.Offers(name) {
+			out = append(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"no column"}
+	}
+	return out
+}
+
+// satisfying is the column a dependency has to reach to count as met, or a
+// phrase saying the project has not settled on one.
+func satisfying(columns task.Columns) string {
+	name, err := columns.SatisfyingColumn()
+	if err != nil {
+		return "no column this project has agreed on"
+	}
+	return name
+}
+
 // taskGuide is the agent-facing cheat sheet stored next to the tasks. It is
 // generated so it cannot drift from the statuses, priorities and exit codes the
 // binary actually implements.
-func taskGuide(taskDir string, priorities task.Priorities) []byte {
+func taskGuide(taskDir string, priorities task.Priorities, columns task.Columns) []byte {
 	// The examples set a priority too, so they have to name one the project
 	// actually has: `tq add --priority high` is as much a lie as the list would
 	// be. The most severe is always there — Names falls back to the built-in
@@ -125,6 +153,10 @@ Use `+"`tq move <id> <status>`"+` for any other transition.
 ## Create and change
 
     tq add "Title" --priority %s --label backend --depends-on TQ-0002 --body "…"
+
+A task filed this way lands in the board's default column, which may not
+be one `+"`tq ready`"+` offers — see Statuses below.
+`+"`tq move <id> <status>`"+` is what puts it in the queue.
     tq update <id> --title "New title" --assignee agent-api
     tq update <id> --add-label auth --remove-label backend
     tq update <id> --add-dependency TQ-0002 --remove-dependency TQ-0003
@@ -148,7 +180,11 @@ whole string, so `+"`tq list --label component/backend`"+` takes the whole key.
 
 ## Rules of the format
 
-- Statuses: %s
+- Statuses: %s.
+  The board, left to right, declared by the project in `+"`%s`"+`: a
+  status outside it is refused on write. A task filed without one lands in
+  %s. `+"`tq ready`"+` offers work from %s, and a dependency counts as met
+  once it reaches %s.
 - Priorities: %s (default: %s).
   Most severe first, and that order is the sort order. Unlike labels this is a
   closed set, declared by the project in `+"`%s`"+`: a value outside it
@@ -188,7 +224,9 @@ repository root.
 		filepath.Base(taskDir), filepath.Base(taskDir),
 		example,
 		config.ConfigFileName,
-		strings.Join(task.Statuses, ", "),
+		strings.Join(columns.Names(), ", "), config.ConfigFileName,
+		columns.Default(),
+		strings.Join(offering(columns), " and "), satisfying(columns),
 		strings.Join(priorities.Names(), ", "), priorities.Default(), config.ConfigFileName,
 		taskDir,
 		config.ConfigFileName, config.EnvTaskDir, config.EnvWalkForever,

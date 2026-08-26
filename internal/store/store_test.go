@@ -196,8 +196,8 @@ func TestCreateWritesMarkdownFile(t *testing.T) {
 	if tk.ID != "TQ-0001" {
 		t.Errorf("ID = %q, want TQ-0001", tk.ID)
 	}
-	if tk.Status != task.StatusTodo {
-		t.Errorf("Status = %q, want the default %q", tk.Status, task.StatusTodo)
+	if tk.Status != task.StatusInbox {
+		t.Errorf("Status = %q, want the default %q", tk.Status, task.StatusInbox)
 	}
 	if tk.Created.IsZero() || tk.Updated.IsZero() {
 		t.Error("timestamps should be set on create")
@@ -208,7 +208,7 @@ func TestCreateWritesMarkdownFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read task file: %v", err)
 	}
-	if !strings.HasPrefix(string(data), "---\nid: TQ-0001\ntitle: Implement REST API\nstatus: todo\n") {
+	if !strings.HasPrefix(string(data), "---\nid: TQ-0001\ntitle: Implement REST API\nstatus: inbox\n") {
 		t.Errorf("unexpected file contents:\n%s", data)
 	}
 	if !strings.HasSuffix(string(data), "\nSome description.\n") {
@@ -455,17 +455,23 @@ func TestDuplicateFilesForOneIDAreRejected(t *testing.T) {
 	}
 }
 
-func TestUpdateRejectsInvalidTask(t *testing.T) {
+// Update normalizes an unknown status to the first column on write.
+func TestUpdateCorrectsAStatusTheBoardDoesNotHave(t *testing.T) {
 	store := newTestStore(t)
 	created := mustCreate(t, store, CreateTaskInput{Title: "Valid"})
 	created.Status = "shipped"
-	if _, err := store.Update(created); err == nil {
-		t.Fatal("Update should reject an invalid status")
+
+	written, err := store.Update(created)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if written.Status != task.StatusInbox {
+		t.Errorf("Status = %q, want it corrected to the first column", written.Status)
 	}
 
 	reloaded, err := store.Get("TQ-0001")
-	if err != nil || reloaded.Status != task.StatusTodo {
-		t.Errorf("the stored task should be untouched, got %+v (%v)", reloaded, err)
+	if err != nil || reloaded.Status != task.StatusInbox {
+		t.Errorf("the correction should have reached the file, got %+v (%v)", reloaded, err)
 	}
 }
 
@@ -1258,3 +1264,128 @@ func TestATaskKeepsAPriorityTheProjectHasDropped(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// ── The project's board ──────────────────────────────────────────
+
+const customBoard = `version: 1
+path: .tasks
+columns:
+  - name: spotted
+    display_name: Spotted
+    consider_ready: true
+  - name: doing
+    display_name: Doing
+    default: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+func storeWithBoard(t *testing.T) *Store {
+	t.Helper()
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
+	root := testRoot(t)
+	writeConfig(t, root, customBoard)
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	return store
+}
+
+func TestCreateUsesTheBoardsDefaultColumn(t *testing.T) {
+	store := storeWithBoard(t)
+	tk := mustCreate(t, store, CreateTaskInput{Title: "Filed with no column"})
+	if tk.Status != "doing" {
+		t.Errorf("Status = %q, want the column marked default", tk.Status)
+	}
+}
+
+func TestCreateRejectsAStatusTheBoardHasNoColumnFor(t *testing.T) {
+	store := storeWithBoard(t)
+	_, err := store.Create(CreateTaskInput{Title: "Nope", Status: task.StatusTodo})
+	if err == nil {
+		t.Fatal("Create() = nil, want todo refused on a board that has no todo")
+	}
+	if !strings.Contains(err.Error(), "spotted, doing, shipped") {
+		t.Errorf("error = %q, want it to list the columns", err)
+	}
+}
+
+func TestListSortsByTheBoardOrder(t *testing.T) {
+	store := storeWithBoard(t)
+	mustCreate(t, store, CreateTaskInput{Title: "last", Status: "shipped"})
+	mustCreate(t, store, CreateTaskInput{Title: "first", Status: "spotted"})
+	mustCreate(t, store, CreateTaskInput{Title: "middle", Status: "doing"})
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := make([]string, 0, len(tasks))
+	for _, tk := range tasks {
+		got = append(got, tk.Status)
+	}
+	if want := "spotted,doing,shipped"; strings.Join(got, ",") != want {
+		t.Errorf("order = %q, want %q (the order the config lists)", strings.Join(got, ","), want)
+	}
+}
+
+// Removed columns normalize on read; the file updates on the next write.
+func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing.T) {
+	t.Setenv(config.EnvTaskDir, "")
+	t.Setenv(config.EnvWalkForever, "")
+	root := testRoot(t)
+	store, err := InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	stranded := mustCreate(t, store, CreateTaskInput{Title: "Filed before the board changed", Status: task.StatusDone})
+
+	writeConfig(t, root, customBoard)
+
+	listed, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Status != "spotted" {
+		t.Fatalf("List() = %+v, want the task shown in the first column", listed)
+	}
+
+	onDisk, err := os.ReadFile(filepath.Join(store.Dir, TaskFileName(stranded)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(onDisk), "status: "+task.StatusDone) {
+		t.Errorf("a listing rewrote the file; it should still say %q", task.StatusDone)
+	}
+
+	if _, err := store.Note(stranded.ID, "something unrelated"); err != nil {
+		t.Fatalf("Note: %v", err)
+	}
+	onDisk, err = os.ReadFile(filepath.Join(store.Dir, TaskFileName(stranded)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(onDisk), "status: spotted") {
+		t.Errorf("the correction did not ride along with the next write:\n%s", onDisk)
+	}
+}
+
+// backlog resolves to inbox via the built-in alias.
+func TestBacklogStillReadsAsInbox(t *testing.T) {
+	store := newTestStore(t)
+	created := mustCreate(t, store, CreateTaskInput{Title: "Filed under the old name", Status: task.StatusBacklog})
+	if created.Status != task.StatusInbox {
+		t.Errorf("Create(backlog) stored %q, want it resolved to inbox", created.Status)
+	}
+
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != task.StatusInbox {
+		t.Errorf("Get() = %q, want inbox", got.Status)
+	}
+}

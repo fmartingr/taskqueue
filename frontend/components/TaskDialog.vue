@@ -16,10 +16,10 @@
 import { computed, onMounted, ref } from "vue";
 
 import { addNote, describe, fetchTask, patchTask, type TaskInput } from "../api";
-import { defaultPriority, pendingDependencies, priorityOptions, STATUSES, type Task } from "../board";
+import { defaultPriority, pendingDependencies, priorityOptions, type Task } from "../board";
 import { formatTime, splitList } from "../format";
 import { joinBody, mergeNotes, splitBody, type Note } from "../notes";
-import { index, priorities, refresh, toast } from "../state";
+import { columns, index, priorities, refresh, toast } from "../state";
 import NotesPanel from "./NotesPanel.vue";
 
 const props = defineProps<{ task: Task }>();
@@ -48,7 +48,7 @@ const noteDraft = ref("");
 const stale = [priority.value];
 const priorityChoices = computed(() => priorityOptions(priorities.value, stale));
 
-const pending = pendingDependencies(props.task, index.value);
+const pending = pendingDependencies(props.task, index.value, columns.value);
 const timestamps = `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`;
 
 onMounted(() => dialog.value?.showModal());
@@ -142,7 +142,7 @@ function editNote(position: number, text: string): void {
         <label>
           Status
           <select id="task-status" v-model="status" name="status">
-            <option v-for="option in STATUSES" :key="option" :value="option">{{ option }}</option>
+            <option v-for="column in columns" :key="column.name" :value="column.name">{{ column.display_name }}</option>
           </select>
         </label>
         <label>

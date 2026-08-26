@@ -6,14 +6,16 @@
  */
 import { computed, ref } from "vue";
 
-import type { Status } from "../board";
-import { composing, dragging, moveTask, visible } from "../state";
+import { columnDisplay, type Status } from "../board";
+import { columns, composing, dragging, moveTask, visible } from "../state";
 import Card from "./Card.vue";
 import Composer from "./Composer.vue";
 
 const props = defineProps<{ status: Status }>();
 
 const cards = computed(() => visible.value.filter((task) => task.status === props.status));
+
+const heading = computed(() => columnDisplay(props.status, columns.value));
 const over = ref(false);
 
 function onDragLeave(event: DragEvent): void {
@@ -42,7 +44,7 @@ function onDrop(event: DragEvent): void {
     @drop.prevent="onDrop"
   >
     <header class="column-header">
-      <h2>{{ status }}</h2>
+      <h2>{{ heading }}</h2>
       <span class="count">{{ cards.length }}</span>
     </header>
 

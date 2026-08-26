@@ -115,7 +115,7 @@ func TestFindConfigRejectsMalformedYAML(t *testing.T) {
 // must read a file written by a newer one, ignoring what it does not know.
 func TestFindConfigToleratesUnknownKeys(t *testing.T) {
 	root := tqtest.Root(t)
-	tqtest.WriteConfig(t, root, "version: 1\npath: queue\ncolumns: [a, b]\nseverities: {high: 1}\n")
+	tqtest.WriteConfig(t, root, "version: 1\npath: queue\nswimlanes: [a, b]\nseverities: {high: 1}\n")
 
 	cfg, err := config.FindConfig(root)
 	if err != nil {

@@ -1333,3 +1333,64 @@ func TestBacklogStillReadsAsInbox(t *testing.T) {
 		t.Errorf("Get() = %q, want inbox", got.Status)
 	}
 }
+
+// A project above the repository is what discovery deliberately walks past, and
+// the marker is what makes it a project. Both directions matter: the marker is
+// reported, and a directory that merely happens to be named .tasks is not,
+// because since TQ-0029 it is not a queue and naming it would be a warning
+// about nothing.
+func TestShadowedProjectMarker(t *testing.T) {
+	t.Run("a marker above the repository is reported", func(t *testing.T) {
+		outer := tqtest.Root(t)
+		repo := filepath.Join(outer, "project")
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		marker, ok := store.ShadowedProjectMarker(repo)
+		if !ok {
+			t.Fatal("ShadowedProjectMarker() = false, want the project above the repository")
+		}
+		if want := filepath.Join(outer, config.ConfigFileName); marker != want {
+			t.Errorf("marker = %q, want %q", marker, want)
+		}
+	})
+
+	t.Run("a bare .tasks above the repository is not", func(t *testing.T) {
+		// No marker of its own: a directory named .tasks is all there is.
+		outer := tqtest.RootWithGit(t)
+		stray := filepath.Join(outer, config.TaskDirName)
+		if err := os.MkdirAll(stray, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		repo := filepath.Join(outer, "project")
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if marker, ok := store.ShadowedProjectMarker(repo); ok && marker == stray {
+			t.Errorf("ShadowedProjectMarker() = %q, want a directory named %s to count for nothing", marker, config.TaskDirName)
+		}
+	})
+
+	t.Run("nothing is excluded when the walk is not bounded", func(t *testing.T) {
+		outer := tqtest.Root(t)
+		repo := filepath.Join(outer, "project")
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// The variables that lift the bound: with either one set the search was
+		// never stopped, so there is nothing it failed to reach.
+		for _, env := range []struct{ name, value string }{
+			{config.EnvWalkForever, "true"},
+			{config.EnvTaskDir, filepath.Join(outer, config.TaskDirName)},
+		} {
+			t.Run(env.name, func(t *testing.T) {
+				t.Setenv(env.name, env.value)
+				if marker, ok := store.ShadowedProjectMarker(repo); ok {
+					t.Errorf("ShadowedProjectMarker() = %q with %s set, want nothing shadowed", marker, env.name)
+				}
+			})
+		}
+	})
+}

@@ -76,8 +76,8 @@ func (b *syncBuffer) Reset() {
 // only shows under -v is how this stops being noticed.
 func requireNoQueueAbove(t *testing.T, dir string) {
 	t.Helper()
-	if shadowed, ok := store.ShadowedTaskDir(dir); ok {
-		t.Fatalf("%s sits above the fixture, so the notice this test says must not appear is correct", shadowed)
+	if marker, ok := store.ShadowedProjectMarker(dir); ok {
+		t.Fatalf("%s sits above the fixture, so the notice this test says must not appear is correct", marker)
 	}
 }
 
@@ -657,12 +657,48 @@ func TestCLIEnvTaskDirOverride(t *testing.T) {
 	}
 }
 
-// Creating a local queue while one sits above the repository is the moment a
-// developer's tasks appear to vanish, so that is where tq should name the
-// variable that would have found them.
-func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
-	outer := tqtest.Root(t)
-	if _, err := store.InitStore(outer); err != nil {
+// Creating a local queue while a project sits above the repository is the
+// moment a developer's tasks appear to vanish, so that is where tq should name
+// the variable that would have found them — and it says so on every command
+// that can create one. `tq init` is the command whose whole job is telling a
+// caller where the queue is, so it is the last one that should explain less
+// than `tq list` does in the same directory (TQ-0062).
+func TestCLINamesAProjectTheBoundExcluded(t *testing.T) {
+	for _, command := range []string{"list", "init"} {
+		t.Run(command, func(t *testing.T) {
+			// The marker is what makes the directory above a project, and what
+			// discovery walked past; the queue beside it is incidental.
+			outer := tqtest.Root(t)
+			if _, err := store.InitStore(outer); err != nil {
+				t.Fatal(err)
+			}
+			repo := filepath.Join(outer, "project")
+			if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			tc := newCLIIn(t, repo)
+			tc.mustRun(command)
+
+			notice := tc.stderr.String()
+			for _, want := range []string{filepath.Join(outer, config.ConfigFileName), config.EnvWalkForever} {
+				if !strings.Contains(notice, want) {
+					t.Errorf("stderr = %q, want it to mention %q", notice, want)
+				}
+			}
+		})
+	}
+}
+
+// A directory that merely happens to be named .tasks is not a queue since the
+// marker arrived (TQ-0029), so one above the repository is nothing to warn
+// about: the note the old check printed here named a directory tq would not
+// have used even with the bound lifted.
+func TestCLIDoesNotNameABareTaskDirectoryAbove(t *testing.T) {
+	// No marker above: a directory named .tasks is all there is.
+	outer := tqtest.RootWithGit(t)
+	stray := filepath.Join(outer, config.TaskDirName)
+	if err := os.MkdirAll(stray, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(outer, "project")
@@ -671,13 +707,54 @@ func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
 	}
 
 	tc := newCLIIn(t, repo)
-	tc.mustRun("list")
+	tc.mustRun("init")
 
-	notice := tc.stderr.String()
-	for _, want := range []string{filepath.Join(outer, config.TaskDirName), config.EnvWalkForever} {
-		if !strings.Contains(notice, want) {
-			t.Errorf("stderr = %q, want it to mention %q", notice, want)
-		}
+	// Named specifically rather than asserting the note is absent altogether: a
+	// developer whose TMPDIR sits inside a real project has one above the
+	// fixture, and that note would be correct.
+	if notice := tc.stderr.String(); strings.Contains(notice, stray) {
+		t.Errorf("stderr = %q, want no note about %s, which is not a queue", notice, stray)
+	}
+}
+
+// The other half of TQ-0062, fixed by TQ-0029's marker and never covered: init
+// in a vendored subdirectory that carries its own .tasks must resolve to the
+// project's queue and leave the stray directory exactly as it found it.
+func TestCLIInitIgnoresAStrayTaskDirectory(t *testing.T) {
+	tc := newBareCLI(t)
+	tc.mustRun("init")
+
+	vendored := filepath.Join(tc.root, "vendor", "dependency")
+	stray := filepath.Join(vendored, config.TaskDirName)
+	if err := os.MkdirAll(stray, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var out struct {
+		TaskDir string   `json:"task_dir"`
+		Created bool     `json:"created"`
+		Written []string `json:"written"`
+	}
+	newCLIIn(t, vendored).mustRunJSON(&out, "init", "--json")
+
+	if want := filepath.Join(tc.root, config.TaskDirName); out.TaskDir != want {
+		t.Errorf("task_dir = %q, want the project's own queue %q", out.TaskDir, want)
+	}
+	if out.Created {
+		t.Error("init created a second queue in the vendored directory")
+	}
+	if len(out.Written) != 0 {
+		t.Errorf("written = %v, want nothing: the project already had its marker and guide", out.Written)
+	}
+	entries, err := os.ReadDir(stray)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the stray directory was adopted and written into: %d entries", len(entries))
+	}
+	if _, err := os.Stat(filepath.Join(vendored, config.ConfigFileName)); !os.IsNotExist(err) {
+		t.Errorf("the vendored directory gained a marker of its own: %v", err)
 	}
 }
 

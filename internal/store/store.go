@@ -123,10 +123,17 @@ func taskDirTarget(startDir string) (string, error) {
 	return filepath.Join(dir, config.TaskDirName), nil
 }
 
-// ShadowedTaskDir reports a task directory that discovery deliberately walked
-// past — one above the enclosing repository. Creating a fresh queue while that
-// exists is when a caller's tasks appear to vanish, so the CLI names it.
-func ShadowedTaskDir(startDir string) (string, bool) {
+// ShadowedProjectMarker reports a project marker that discovery deliberately
+// walked past — a .taskqueue.yaml above the enclosing repository, which the
+// bounded search will not adopt. Creating a fresh queue while that exists is
+// when a caller's tasks appear to vanish, so the CLI names it.
+//
+// The marker is the whole question, because the marker is what discovery looks
+// for (TQ-0029). Looking for a directory named .tasks was wrong in both
+// directions: a bare one above is not a queue at all, so the note was a false
+// positive, and a real project above whose path is named anything else went
+// unreported.
+func ShadowedProjectMarker(startDir string) (string, bool) {
 	if os.Getenv(config.EnvTaskDir) != "" || os.Getenv(config.EnvWalkForever) == "true" {
 		return "", false // nothing was excluded: the search was not bounded
 	}
@@ -139,9 +146,12 @@ func ShadowedTaskDir(startDir string) (string, bool) {
 		return "", false
 	}
 
+	// Discovery already covered startDir up to root and found nothing, so the
+	// shadowed marker is the nearest one above it — and the walk runs to the
+	// filesystem root, since that is how far TQ_WALK_FOREVER would have gone.
 	for dir := filepath.Dir(root); ; {
-		candidate := filepath.Join(dir, config.TaskDirName)
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		candidate := filepath.Join(dir, config.ConfigFileName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate, true
 		}
 		parent := filepath.Dir(dir)

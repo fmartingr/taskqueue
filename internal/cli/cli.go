@@ -236,12 +236,17 @@ func (c *cli) runInit(args []string) int {
 		return code
 	}
 
-	// Discover the queue the way every other command does, so init in a
-	// subdirectory adopts the project's queue instead of forking a second one.
-	// store.OpenStore falls back to creating at the repository root when there is
-	// nothing to find, and discovery stops there too (TQ-0017), so init cannot
-	// adopt a queue from outside the repository.
-	st, err := store.OpenStore(c.dir)
+	// Through c.st(), like every other command: init in a subdirectory adopts
+	// the project's queue instead of forking a second one, and it reports what
+	// the others report. Init's whole job is telling a caller where the queue
+	// is, so it is the last command that should explain less than `tq list`
+	// does in the same directory (TQ-0062).
+	//
+	// c.st() falls back to creating at the repository root when there is nothing
+	// to find, and discovery stops there too (TQ-0017), so within a repository
+	// init cannot adopt a queue from outside it. Without a repository root there
+	// is no bound at all, which is what withinInvokedTree below answers for.
+	st, err := c.st()
 	if err != nil {
 		return c.fail(err)
 	}
@@ -669,8 +674,8 @@ func (c *cli) st() (*store.Store, error) {
 	if st.Created {
 		// stderr, so --json output stays machine-readable.
 		fmt.Fprintf(c.stderr, "note: created %s\n", st.Dir)
-		if shadowed, ok := store.ShadowedTaskDir(c.dir); ok {
-			fmt.Fprintf(c.stderr, "note: %s is above this repository and was not used; set %s=true to search past the repository root\n", shadowed, config.EnvWalkForever)
+		if marker, ok := store.ShadowedProjectMarker(c.dir); ok {
+			fmt.Fprintf(c.stderr, "note: the project marker %s is above this repository and was not used; set %s=true to search past the repository root\n", marker, config.EnvWalkForever)
 		}
 	}
 	return st, nil

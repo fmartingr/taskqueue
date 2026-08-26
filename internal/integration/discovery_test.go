@@ -261,3 +261,70 @@ func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 		assertPointer(t, p.runIn(t, dir, env, "init", "--json"), guide)
 	})
 }
+
+// A project above the repository is one discovery deliberately walked past, and
+// init is the command whose job is saying where the queue is: it names the
+// marker rather than staying silent (TQ-0062). The note is a note, so it goes to
+// stderr — which is the half only a real process can show, and what the --json
+// contract rests on.
+func TestInitNamesTheProjectTheBoundExcluded(t *testing.T) {
+	t.Parallel()
+
+	// above holds the marker discovery will not reach; the repository below is
+	// where init runs and makes its own queue.
+	shadowed := func(t *testing.T) (*project, string) {
+		t.Helper()
+		above := t.TempDir()
+		if err := writeFile(filepath.Join(above, ".taskqueue.yaml"), "version: 1\npath: .tasks\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := mkdirAll(filepath.Join(above, ".tasks")); err != nil {
+			t.Fatal(err)
+		}
+		repo := filepath.Join(above, "project")
+		if err := mkdirAll(filepath.Join(repo, ".git")); err != nil {
+			t.Fatal(err)
+		}
+		return &project{dir: repo}, realPath(t, above, ".taskqueue.yaml")
+	}
+
+	t.Run("the note is on stderr", func(t *testing.T) {
+		t.Parallel()
+		p, marker := shadowed(t)
+
+		r := p.mustRun(t, "init")
+		for _, want := range []string{marker, "TQ_WALK_FOREVER"} {
+			if !strings.Contains(r.Stderr, want) {
+				t.Errorf("stderr = %q, want it to mention %q", r.Stderr, want)
+			}
+		}
+		if strings.Contains(r.Stdout, "TQ_WALK_FOREVER") {
+			t.Errorf("the note reached stdout: %q", r.Stdout)
+		}
+		// init still says what it always said, on the stream it always said it.
+		if !strings.Contains(r.Stdout, "Initialized task queue in "+realPath(t, p.dir, ".tasks")) {
+			t.Errorf("stdout = %q, want init's own line", r.Stdout)
+		}
+	})
+
+	t.Run("--json keeps stdout machine-readable", func(t *testing.T) {
+		t.Parallel()
+		p, marker := shadowed(t)
+
+		r := p.mustRun(t, "init", "--json")
+		var out struct {
+			TaskDir string `json:"task_dir"`
+			Created bool   `json:"created"`
+		}
+		r.JSON(t, &out)
+		if want := realPath(t, p.dir, ".tasks"); out.TaskDir != want {
+			t.Errorf("task_dir = %q, want %q", out.TaskDir, want)
+		}
+		if !out.Created {
+			t.Error("created = false, want init to have made the repository its own queue")
+		}
+		if !strings.Contains(r.Stderr, marker) {
+			t.Errorf("stderr = %q, want the note even with --json", r.Stderr)
+		}
+	})
+}

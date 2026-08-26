@@ -363,8 +363,16 @@ cost it a task either: retitling moves a task's file, so a scan that read the
 directory and then opened the files could miss one — or, caught a moment
 earlier, read the same task under both names. The scan is checked against the
 directory and retaken until the two agree. A listing that still cannot be
-squared with the directory prints on stderr that it may be missing a task or
-holding one twice, and still exits `0` with what it read.
+squared with the directory prints on stderr that it may be missing a task, and
+still exits `0` with what it read.
+
+Two files that go on claiming one ID are not a directory in motion but a queue
+to fix: an interrupted retitle, a file copied by hand, two branches merged.
+Both copies are left out of the listing — an ID identifies a task, and with two
+files answering to one there is nothing to say which of them a reader means —
+and `tq list` and `tq ready` name the ID and both files on stderr, in the same
+words `tq show` refuses that ID with, and still exit `0`. Delete the copy you
+do not want and the task comes back.
 
 ## CLI reference
 
@@ -463,7 +471,7 @@ difference between an agent moving a task and a human dragging a card.
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
 | `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities", "columns"}` |
 | `GET` | `/api/events` | server-sent events; a `tasks` frame when the queue changes, `config` when `.taskqueue.yaml` does, `scan-failed` when the queue cannot be read |
-| `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version", "unreadable", "incomplete"}`; `unreadable` is `[{"file", "reason"}]` for the task files the scan had to skip, and `incomplete` says the directory would not hold still long enough to be read consistently, so the listing may be missing a task or holding one twice |
+| `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version", "unreadable", "duplicated", "incomplete"}`; `unreadable` is `[{"file", "reason"}]` for the task files the scan had to skip, `duplicated` is `[{"id", "files", "reason"}]` for the IDs more than one file claims, which are left out of the listing entirely, and `incomplete` says the directory would not hold still long enough to be read consistently, so the listing may be missing a task |
 | `GET` | `/api/version` | `{"version"}` |
 
 Errors have a stable shape:
@@ -493,6 +501,16 @@ retaken when the two disagree. `GET /api/status` reports `incomplete` for the
 listing that could not be squared with the directory at all, and the board says
 so in a toast and in its footer; `GET /api/tasks` stays an array of what was
 read, because that is what every client parses.
+
+An ID more than one file claims is not a listing that could not be squared with
+the directory but a queue to fix — an interrupted retitle, a file copied by
+hand, two branches merged. Both copies are left out: the ID is what identifies
+a task, so with two files answering to one there is no saying which of them a
+reader means, and showing either would be a guess that hides the other's edits.
+`GET /api/status` names the ID and its files in `duplicated`, with the sentence
+a write to that ID is refused with, and `tq list` and `tq ready` say the same
+on stderr and still exit 0. Delete the copy you do not want and the task comes
+back.
 
 `tq serve` binds to `127.0.0.1:7331` by default, and a project can pin its own
 address — see [Where the server binds](#where-the-server-binds) for the keys and

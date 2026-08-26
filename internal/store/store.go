@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -263,18 +262,15 @@ func taskFileID(name string) (string, bool) {
 
 // locate finds the file holding a task, whatever title suffix it carries.
 func (s *Store) locate(id string) (string, error) {
-	entries, err := os.ReadDir(s.Dir)
+	names, err := s.taskFileNames()
 	if err != nil {
 		return "", err
 	}
 
 	var matches []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if fileID, ok := taskFileID(entry.Name()); ok && fileID == id {
-			matches = append(matches, entry.Name())
+	for _, name := range names {
+		if fileID, _ := taskFileID(name); fileID == id {
+			matches = append(matches, name)
 		}
 	}
 
@@ -286,10 +282,21 @@ func (s *Store) locate(id string) (string, error) {
 	default:
 		// Two files claiming one ID is ambiguous: renaming by hand or a
 		// half-finished rename can cause it, and guessing would lose an edit.
-		sort.Strings(matches)
-		return "", fmt.Errorf("%w: %s is claimed by %d files (%s); keep the one you want",
-			task.ErrInvalidTaskFile, id, len(matches), strings.Join(matches, ", "))
+		return "", fmt.Errorf("%w: %s", task.ErrInvalidTaskFile, duplicateClaim(id, matches))
 	}
+}
+
+// duplicateClaim is the one sentence tq says about an ID more than one file
+// claims. A write refuses with it and a listing reports it, and those are two
+// views of one finding: whoever meets it on the board and then on the command
+// line must not be told two different things about the same pair of files
+// (TQ-0040).
+//
+// The files are named in the sorted order the directory is read in, so the
+// sentence is the same whichever surface composed it.
+func duplicateClaim(id string, files []string) string {
+	return fmt.Sprintf("%s is claimed by %d files (%s); keep the one you want",
+		id, len(files), strings.Join(files, ", "))
 }
 
 // Priorities is the vocabulary this queue is filed under: the values a write
@@ -326,23 +333,43 @@ type UnreadableFile struct {
 	Reason string `json:"reason"`
 }
 
-// Listing is what one scan of the task directory found: the tasks it could
-// read, in the default order, and the files it could not.
+// DuplicatedID is an ID more than one task file claims, and every file
+// claiming it. Both copies are withheld from the listing: the ID is what
+// identifies a task, so with two files answering to one there is no saying
+// which of them a reader means, and showing either would be a guess that hides
+// the other's edits — which is the call locate already makes for a write
+// (TQ-0040).
 //
-// The two travel together because a caller must be able to show both. A broken
-// file is a real problem — a merge conflict, a hand-edited key — and staying
-// quiet about it would trade one loud failure for a queue that is quietly a
-// task short.
+// Reason is the sentence to show, composed once here so a listing and a write
+// say the same thing about the same pair.
+type DuplicatedID struct {
+	ID     string   `json:"id"`
+	Files  []string `json:"files"`
+	Reason string   `json:"reason"`
+}
+
+// Listing is what one scan of the task directory found: the tasks it could
+// read, in the default order, the files it could not, and the IDs it could not
+// tell apart.
+//
+// They travel together because a caller must be able to show all three. A
+// broken file is a real problem — a merge conflict, a hand-edited key — and
+// staying quiet about it would trade one loud failure for a queue that is
+// quietly a task short.
 type Listing struct {
 	Tasks      []task.Task
 	Unreadable []UnreadableFile
+
+	// Duplicated is the IDs the directory holds more than one file for. They
+	// are not in Tasks: an ID appears at most once in a listing, which is what
+	// lets every caller index by it (TQ-0040).
+	Duplicated []DuplicatedID
 
 	// Incomplete reports that the directory would not hold still long enough
 	// to be read consistently: every attempt found it changed underneath, so
 	// this listing may not match what is on disk. It may be missing a task
 	// that exists — one renamed out from under the scan, or created after the
-	// scan had already read the directory — or hold one twice, caught in the
-	// instant a retitle has written the new file and not yet retired the old.
+	// scan had already read the directory.
 	//
 	// It is a warning, not a failure. The tasks above are still every task the
 	// scan could account for, and the caller shows them; what it must not do
@@ -376,14 +403,22 @@ const listAttempts = 3
 // compared with the reading the pass started from; a difference means the
 // snapshot is not of any one moment, and the pass is redone (TQ-0012).
 //
-// A repeated ID is the same signal from the other side. A retitle writes the
-// new file before retiring the old one, so for an instant one task has two
-// files, and a pass whose two directory readings both fall inside that instant
-// sees no change at all — it just holds the task twice. So that is a reason to
-// redo the pass too. A pair that outlives the retries is not a moving
-// directory but a queue with two files claiming one ID, which is TQ-0040's to
-// resolve; here it is reported like any other scan that could not be squared
-// with the disk, and it is bounded so it cannot spin.
+// An ID claimed by two files is the same signal from the other side. A retitle
+// writes the new file before retiring the old one, so for an instant one task
+// has two files, and a pass whose two directory readings both fall inside that
+// instant sees no change at all — it just holds the task twice. So that is a
+// reason to redo the pass too.
+//
+// What tells that instant from a queue that really does have two files for one
+// ID is looking again: the pair is redone, and a pair found by two passes the
+// directory did not move during is not a retitle in flight. It is reported as
+// what it is, both copies withheld, and the retries stop there rather than
+// being spent chasing a race that is not happening (TQ-0040).
+//
+// A pair only ever seen while the directory was moving is not condemned on
+// that evidence: it is withheld all the same, since an ID belongs in a listing
+// once or not at all, but what the listing says about it is Incomplete — that
+// it may be a task short — and not that there are two files to choose between.
 //
 // A broken file does not move the directory, so it is reported once and never
 // retried — the retry is for a directory that changed, not for a file that
@@ -402,6 +437,8 @@ func (s *Store) List() (Listing, error) {
 	}
 
 	var listing Listing
+	var doubled, previous []DuplicatedID
+	confirmed := false
 	for attempt := 1; ; attempt++ {
 		before, err := s.taskFileNames()
 		if err != nil {
@@ -412,14 +449,42 @@ func (s *Store) List() (Listing, error) {
 		if err != nil {
 			return Listing{}, err
 		}
-		if slices.Equal(before, after) && !repeatsAnID(listing.Tasks) {
-			break
-		}
-		if attempt == listAttempts {
+		doubled = duplicatedIDs(before)
+		heldStill := slices.Equal(before, after)
+		switch {
+		case heldStill && len(doubled) == 0:
+			// The directory the scan read is the directory that is there.
+		case heldStill && sameClaims(doubled, previous):
+			// The same pair after two passes the directory did not move
+			// during: not a retitle in flight, so there is nothing to wait for.
+			confirmed = true
+		case attempt == listAttempts:
 			listing.Incomplete = true
-			break
+		default:
+			// Only a pass nothing moved during is evidence. A pair seen while
+			// the directory was moving is exactly what a retitle looks like,
+			// so it cannot be half of the two readings that condemn an ID.
+			previous = nil
+			if heldStill {
+				previous = doubled
+			}
+			continue
 		}
+		break
 	}
+
+	// An ID two files claim does not go out in a listing whatever stopped the
+	// loop: callers index tasks by ID, so one arriving twice is what puts two
+	// cards on a single key and 500s the edit of either (TQ-0040).
+	//
+	// Only a confirmed pair is named, though. One the attempts ran out on may
+	// still be a retitle nobody finished in time, and telling someone to
+	// delete one of two files when nothing is wrong is worse than saying what
+	// Incomplete already says — that the listing may be missing a task.
+	if confirmed {
+		listing.Duplicated = doubled
+	}
+	listing.Tasks = withhold(listing.Tasks, doubled)
 
 	// A task filed under a value the project has since dropped keeps it and
 	// sorts last, rather than being refused by the listing that would show it.
@@ -454,20 +519,61 @@ func (s *Store) taskFileNames() ([]string, error) {
 	return names, nil
 }
 
-// repeatsAnID reports a task read twice under two names, which is what a
-// retitle looks like from inside the instant between writing the new file and
-// retiring the old one. The entry set is the same at both ends of that
-// instant, so this is the only thing that can tell List the pass caught the
-// directory mid-move.
-func repeatsAnID(tasks []task.Task) bool {
-	seen := make(map[string]struct{}, len(tasks))
-	for _, t := range tasks {
-		if _, dup := seen[t.ID]; dup {
-			return true
+// duplicatedIDs reports the IDs the given file names claim more than once,
+// sorted by ID.
+//
+// The names decide it, not the tasks that were read, so that this agrees with
+// locate: a second file for an ID stops that task being addressable whether or
+// not it parses, and a listing that showed the task anyway would put a card on
+// the board that 500s the moment it is edited. It is also what makes a
+// retitle's instant visible from inside a pass that saw no other change.
+func duplicatedIDs(names []string) []DuplicatedID {
+	claims := make(map[string][]string, len(names))
+	for _, name := range names {
+		id, ok := taskFileID(name)
+		if !ok {
+			continue
 		}
-		seen[t.ID] = struct{}{}
+		claims[id] = append(claims[id], name)
 	}
-	return false
+
+	var doubled []DuplicatedID
+	for id, files := range claims {
+		if len(files) < 2 {
+			continue
+		}
+		doubled = append(doubled, DuplicatedID{ID: id, Files: files, Reason: duplicateClaim(id, files)})
+	}
+	slices.SortFunc(doubled, func(a, b DuplicatedID) int { return strings.Compare(a.ID, b.ID) })
+	return doubled
+}
+
+// sameClaims reports two passes finding the same IDs under the same files,
+// which is how List tells a queue that has two files for one ID from a retitle
+// caught between writing the new file and retiring the old.
+func sameClaims(a, b []DuplicatedID) bool {
+	return slices.EqualFunc(a, b, func(x, y DuplicatedID) bool {
+		return x.ID == y.ID && slices.Equal(x.Files, y.Files)
+	})
+}
+
+// withhold drops every copy of an ambiguous ID from the tasks a pass read.
+func withhold(tasks []task.Task, doubled []DuplicatedID) []task.Task {
+	if len(doubled) == 0 {
+		return tasks
+	}
+	ambiguous := make(map[string]struct{}, len(doubled))
+	for _, d := range doubled {
+		ambiguous[d.ID] = struct{}{}
+	}
+	kept := tasks[:0]
+	for _, t := range tasks {
+		if _, dup := ambiguous[t.ID]; dup {
+			continue
+		}
+		kept = append(kept, t)
+	}
+	return kept
 }
 
 // scan reads the named files. It is one attempt at a listing: List is what

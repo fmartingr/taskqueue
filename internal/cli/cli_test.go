@@ -365,6 +365,77 @@ func TestCLIListAndReadySkipAnUnreadableFile(t *testing.T) {
 	}
 }
 
+// A stale copy of a task file is worse than a broken one: it parses, so it was
+// listed, and a copy left at todo went on being offered as work long after the
+// real task was done. Neither copy is listed now, and both surfaces name the
+// two files and say the same thing about them (TQ-0040).
+func TestCLIListAndReadyWithholdAnIDTwoFilesClaim(t *testing.T) {
+	const stale = "TQ-0001-stale.md"
+	newProject := func(t *testing.T) *testCLI {
+		t.Helper()
+		tc := newTestCLI(t)
+		tc.mustRun("add", "Doubled", "--status", "todo")
+		tc.mustRun("add", "Healthy and ready", "--status", "todo")
+		// What an interrupted retitle leaves behind: a second file for TQ-0001,
+		// left at the status it had when the first copy was written.
+		content := "---\nid: TQ-0001\ntitle: doubled\nstatus: done\npriority: normal\n" +
+			"created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n"
+		if err := os.WriteFile(filepath.Join(tc.root, config.TaskDirName, stale), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return tc
+	}
+
+	for _, command := range []string{"list", "ready"} {
+		t.Run(command, func(t *testing.T) {
+			tc := newProject(t)
+
+			out := tc.mustRun(command)
+			if strings.Contains(out, "TQ-0001") {
+				t.Errorf("%s offers TQ-0001, which two files claim:\n%s", command, out)
+			}
+			if !strings.Contains(out, "TQ-0002") {
+				t.Errorf("%s output is missing TQ-0002:\n%s", command, out)
+			}
+			warning := tc.stderr.String()
+			if !strings.Contains(warning, stale) || !strings.Contains(warning, "TQ-0001-doubled.md") {
+				t.Errorf("stderr should name both files, got %q", warning)
+			}
+		})
+
+		t.Run(command+" --json", func(t *testing.T) {
+			tc := newProject(t)
+
+			var tasks []task.Task
+			tc.mustRunJSON(&tasks, command, "--json")
+			if len(tasks) != 1 || tasks[0].ID != "TQ-0002" {
+				t.Errorf("%s --json returned %+v, want only TQ-0002", command, tasks)
+			}
+			// The whole point of the split: stdout parsed above, so the warning
+			// went where it cannot corrupt what an agent reads.
+			if !strings.Contains(tc.stderr.String(), stale) {
+				t.Errorf("stderr should name %s, got %q", stale, tc.stderr)
+			}
+		})
+	}
+
+	// And the sentence is the one a lookup of that ID is refused with, so the
+	// two surfaces cannot tell a different story about the same two files.
+	t.Run("agrees with a lookup", func(t *testing.T) {
+		tc := newProject(t)
+		tc.mustRun("list")
+		listed := tc.stderr.String()
+
+		if code := tc.run("show", "TQ-0001"); code != exitError {
+			t.Fatalf("show TQ-0001 = exit %d, want %d", code, exitError)
+		}
+		claim, _, _ := strings.Cut(strings.TrimPrefix(tc.stderr.String(), "error: invalid task file: "), "\n")
+		if claim == "" || !strings.Contains(listed, claim) {
+			t.Errorf("show says %q, the listing said %q; they are the same finding", claim, listed)
+		}
+	})
+}
+
 // A listing the store could not square with the directory says so, and says it
 // on stderr: the listing itself is what an agent parses, and a warning on
 // stdout would break --json. It is a warning and not a failure — the tasks it

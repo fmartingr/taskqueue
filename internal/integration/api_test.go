@@ -195,6 +195,56 @@ func TestAPISurvivesAnUnreadableFile(t *testing.T) {
 	}
 }
 
+// An ID two files claim reaches a running server as a task missing from the
+// listing, and /api/status is where the board learns why (TQ-0040).
+func TestAPIWithholdsAnIDTwoFilesClaim(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "doubled")
+	p.mustRun(t, "add", "healthy")
+	srv := p.serve(t)
+
+	const stale = "TQ-0001-stale.md"
+	content := "---\nid: TQ-0001\ntitle: doubled\nstatus: todo\npriority: normal\n" +
+		"created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n"
+	if err := os.WriteFile(p.path(".tasks", stale), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := srv.request(t, http.MethodGet, "/api/tasks", "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d, want 200: body %s", code, body)
+	}
+	// Still an array, and parsed as one: the board reads it that way, so a
+	// warning cannot be wrapped around the listing.
+	var listed []taskJSON
+	if err := json.Unmarshal([]byte(body), &listed); err != nil {
+		t.Fatalf("GET /api/tasks is not an array of tasks: %v\n%s", err, body)
+	}
+	if len(listed) != 1 || listed[0].ID != "TQ-0002" {
+		t.Errorf("tasks = %+v, want only the healthy one", listed)
+	}
+
+	var status struct {
+		TaskCount  int `json:"task_count"`
+		Duplicated []struct {
+			ID     string   `json:"id"`
+			Files  []string `json:"files"`
+			Reason string   `json:"reason"`
+		} `json:"duplicated"`
+	}
+	srv.get(t, "/api/status", &status)
+	if status.TaskCount != 1 {
+		t.Errorf("task_count = %d, want only the healthy task counted", status.TaskCount)
+	}
+	if len(status.Duplicated) != 1 || status.Duplicated[0].ID != "TQ-0001" {
+		t.Fatalf("duplicated = %+v, want it to name TQ-0001", status.Duplicated)
+	}
+	if len(status.Duplicated[0].Files) != 2 || !strings.Contains(status.Duplicated[0].Reason, stale) {
+		t.Errorf("duplicated = %+v, want both files named: choosing between them is the fix", status.Duplicated[0])
+	}
+}
+
 // Notes over HTTP, which the board's detail panel uses.
 func TestAPIAddNote(t *testing.T) {
 	t.Parallel()

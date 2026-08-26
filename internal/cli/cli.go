@@ -696,9 +696,10 @@ func (c *cli) tasks() ([]task.Task, error) {
 	return listing.Tasks, nil
 }
 
-// warnListing reports what a scan could not do: the files it had to skip, and
-// a directory that changed under every attempt to read it, which leaves the
-// listing possibly a task short (TQ-0012).
+// warnListing reports what a scan could not do: the files it had to skip, the
+// IDs it could not tell apart, and a directory that changed under every
+// attempt to read it, which leaves the listing possibly a task short
+// (TQ-0012).
 //
 // On stderr, always: the listing itself is the answer a caller parses, and a
 // warning on stdout would break --json for the agents that read it. A warning
@@ -708,8 +709,14 @@ func (c *cli) warnListing(l store.Listing) {
 	for _, f := range l.Unreadable {
 		fmt.Fprintf(c.stderr, "warning: skipped %s: %s\n", f.File, f.Reason)
 	}
+	// Neither copy is in the listing, so say the ID is missing from it before
+	// the reason it is: the reason is the same sentence a lookup of that ID
+	// refuses with, and by itself it would not explain a short list (TQ-0040).
+	for _, d := range l.Duplicated {
+		fmt.Fprintf(c.stderr, "warning: not listed: %s\n", d.Reason)
+	}
 	if l.Incomplete {
-		fmt.Fprintln(c.stderr, "warning: the task directory kept changing while it was read; this listing may be missing a task or hold one twice")
+		fmt.Fprintln(c.stderr, "warning: the task directory kept changing while it was read; this listing may be missing a task")
 	}
 }
 

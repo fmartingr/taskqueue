@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -411,9 +412,10 @@ func TestAListingIsNotShortWhenATaskIsCreatedMidScan(t *testing.T) {
 }
 
 // A retitle writes the new file before retiring the old one, so for an instant
-// the task has two. Both readings of the directory can fall inside that
-// instant and agree, which makes the entry set useless here — the pass simply
-// holds the task twice, and only the repeated ID says so.
+// the task has two, and a pass that reads them both holds the task twice. The
+// instant can also fall between both readings of the directory, where the
+// entry set says nothing and only the doubled ID does — that is the case
+// TestARetitleHoldingAWholePassStillGetsItsRetry drives.
 func TestAListingDoesNotHoldATaskTwiceWhileItIsBeingRetitled(t *testing.T) {
 	st := tqtest.NewStore(t)
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
@@ -459,21 +461,33 @@ func TestAListingDoesNotHoldATaskTwiceWhileItIsBeingRetitled(t *testing.T) {
 	}
 }
 
-// Two files that keep claiming one ID are not a directory in motion — they are
-// a queue to fix, which is TQ-0040 and not this. The retry must not spin on
-// them, and the listing must say it could not be squared with the disk rather
-// than pass the pair off as the queue.
-func TestTwoFilesClaimingOneIDAreReportedRatherThanRetriedForever(t *testing.T) {
-	st := tqtest.NewStore(t)
-	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+// ── An ID two files claim (TQ-0040) ──────────────────────────────────────
+//
+// A pair that never resolves is not a directory in motion but a queue to fix.
+// Both copies are withheld, the ID is reported, and the retries stop as soon as
+// the pair has outlived a pass the directory held completely still for.
 
-	content, err := os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(created)))
+// duplicate copies a task's file under a second name claiming the same ID: an
+// interrupted retitle, a hand-copied file, two branches merged.
+func duplicate(t *testing.T, st *store.Store, of task.Task, as string) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(of)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(st.Dir, created.ID+"-a-second-file.md"), content, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(st.Dir, as), content, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return as
+}
+
+func TestAnIDTwoFilesClaimIsWithheldFromTheListingAndReported(t *testing.T) {
+	st := tqtest.NewStore(t)
+	doubled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+	healthy := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "second"})
+
+	original := store.TaskFileName(doubled)
+	copied := duplicate(t, st, doubled, doubled.ID+"-a-second-file.md")
 
 	scans := 0
 	st.DuringScan(func() { scans++ })
@@ -482,11 +496,141 @@ func TestTwoFilesClaimingOneIDAreReportedRatherThanRetriedForever(t *testing.T) 
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if scans != store.ListAttempts {
-		t.Errorf("scanned %d times, want %d: the retry is bounded even when the pair never resolves", scans, store.ListAttempts)
+	if len(listing.Tasks) != 1 || listing.Tasks[0].ID != healthy.ID {
+		t.Fatalf("List() = %+v, want only %s: neither copy of an ambiguous ID belongs in a listing", listing.Tasks, healthy.ID)
+	}
+	if len(listing.Duplicated) != 1 || listing.Duplicated[0].ID != doubled.ID {
+		t.Fatalf("Duplicated = %+v, want it to name %s", listing.Duplicated, doubled.ID)
+	}
+	if got, want := listing.Duplicated[0].Files, []string{copied, original}; !slices.Equal(got, want) {
+		t.Errorf("Files = %q, want both files in name order %q", got, want)
+	}
+	for _, name := range listing.Duplicated[0].Files {
+		if !strings.Contains(listing.Duplicated[0].Reason, name) {
+			t.Errorf("reason = %q, want it to name %s: fixing this means choosing between the files", listing.Duplicated[0].Reason, name)
+		}
+	}
+	if listing.Incomplete {
+		t.Error("Incomplete = true, want false: nothing is writing to this queue, and the listing knows exactly what it withheld")
+	}
+	if len(listing.Unreadable) != 0 {
+		t.Errorf("Unreadable = %+v, want nothing: both files parse perfectly well", listing.Unreadable)
+	}
+	if scans >= store.ListAttempts {
+		t.Errorf("scanned %d times, want fewer than %d: a pair that is simply there is not a race to retry", scans, store.ListAttempts)
+	}
+}
+
+// The complaint the ticket opens with is that the two surfaces disagree: a
+// listing showed the pair and a lookup refused it. They are one finding and
+// must read as one sentence.
+func TestAListingAndALookupSayTheSameThingAboutADuplicatedID(t *testing.T) {
+	st := tqtest.NewStore(t)
+	doubled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+	duplicate(t, st, doubled, doubled.ID+"-a-second-file.md")
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listing.Duplicated) != 1 {
+		t.Fatalf("Duplicated = %+v, want the one ID", listing.Duplicated)
+	}
+
+	_, err = st.Locate(doubled.ID)
+	if !errors.Is(err, task.ErrInvalidTaskFile) {
+		t.Fatalf("Locate = %v, want ErrInvalidTaskFile", err)
+	}
+	if !strings.Contains(err.Error(), listing.Duplicated[0].Reason) {
+		t.Errorf("locate says %q, the listing says %q; they are the same finding", err, listing.Duplicated[0].Reason)
+	}
+}
+
+// The other side of the same rule, and the TQ-0012 behaviour that must
+// survive: a retitle whose two files are there for a whole pass — both
+// readings of the directory and every file read between them — gets its retry
+// rather than being reported. The pair is planted before the listing starts,
+// so the first pass sees no other change at all and the doubled ID is the only
+// reason to go round again; the retitle then finishes the way `tq update`
+// finishes it.
+func TestARetitleHoldingAWholePassStillGetsItsRetry(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+	retitled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "second"})
+
+	old := store.TaskFileName(retitled)
+	duplicate(t, st, retitled, retitled.ID+"-second-retitled.md")
+
+	scans := 0
+	st.DuringScan(func() {
+		scans++
+		if scans < 2 {
+			return // the first pass sees the retitle mid-flight
+		}
+		if err := os.Remove(filepath.Join(st.Dir, old)); err != nil && !os.IsNotExist(err) {
+			t.Error(err)
+		}
+	})
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if scans < 2 {
+		t.Fatalf("scanned %d times, want the pair looked at again: a retitle in flight is not a queue to fix", scans)
+	}
+	if len(listing.Duplicated) != 0 {
+		t.Errorf("Duplicated = %+v, want nothing: the retitle finished, and a listing must not report a pair that is gone", listing.Duplicated)
+	}
+	if listing.Incomplete {
+		t.Error("Incomplete = true, want the retry to have settled once the retitle finished")
+	}
+	if len(listing.Tasks) != 2 {
+		t.Fatalf("List() = %d tasks, want both: a retitle must not cost the task it renamed\n%+v", len(listing.Tasks), listing.Tasks)
+	}
+}
+
+// A pair the passes only ever saw while the directory was moving is not a pair
+// they can condemn: a retitle nobody finishes in time looks exactly like that,
+// and "keep the one you want" would be telling someone to delete a file when
+// nothing was wrong. The ID is still withheld — a listing holds one once or not
+// at all — and what the listing says is that it may be a task short.
+func TestAPairOnlySeenWhileTheDirectoryMovedIsNotCondemned(t *testing.T) {
+	st := tqtest.NewStore(t)
+	retitled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+
+	scans := 0
+	st.DuringScan(func() {
+		scans++
+		if scans == 1 {
+			// The retitle's new file, written and never followed by the
+			// removal of the old one.
+			duplicate(t, st, retitled, retitled.ID+"-first-retitled.md")
+		}
+		if scans >= store.ListAttempts {
+			return // the last pass sees the pair against a directory at rest
+		}
+		// Until then the directory never settles around the pair, so no two
+		// passes at rest ever agree it is there.
+		tqtest.MustCreate(t, st, store.CreateTaskInput{Title: fmt.Sprintf("churn %d", scans)})
+	})
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listing.Duplicated) != 0 {
+		t.Errorf("Duplicated = %+v, want nothing: no pass ever saw that pair against a directory that held still", listing.Duplicated)
 	}
 	if !listing.Incomplete {
-		t.Error("Incomplete = false: a listing holding one task twice must not pass as the queue")
+		t.Error("Incomplete = false: a listing this short has to say so somehow")
+	}
+	for i, t1 := range listing.Tasks {
+		for _, t2 := range listing.Tasks[i+1:] {
+			if t1.ID == t2.ID {
+				t.Fatalf("List() holds %s twice; an ID is in a listing once or not at all", t1.ID)
+			}
+		}
 	}
 }
 

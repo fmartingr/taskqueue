@@ -75,6 +75,7 @@ type serverStatus struct {
 	TaskDir    string                 `json:"task_dir"`
 	Version    string                 `json:"version"`
 	Unreadable []store.UnreadableFile `json:"unreadable"`
+	Duplicated []store.DuplicatedID   `json:"duplicated"`
 	Incomplete bool                   `json:"incomplete"`
 }
 
@@ -365,6 +366,64 @@ func TestAPIMalformedTaskFile(t *testing.T) {
 	// only the one file is missing from it (TQ-0012).
 	if status.Incomplete {
 		t.Error("incomplete = true, want false: a file that cannot be parsed is not an inconsistent scan")
+	}
+}
+
+// Two files claiming one ID used to reach the board as two cards on one
+// dataset key, either of which 500d the moment it was dragged. Neither is in
+// the listing now, and GET /api/status is where the board learns why a task it
+// may have seen a moment ago is gone (TQ-0040).
+func TestAPIWithholdsAnIDTwoFilesClaim(t *testing.T) {
+	srv, st := newTestServer(t)
+	doubled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Doubled"})
+	healthy := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Healthy"})
+
+	content, err := os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(doubled)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := doubled.ID + "-a-second-file.md"
+	if err := os.WriteFile(filepath.Join(st.Dir, second), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, payload := do(t, srv, "GET", "/api/tasks", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", resp.StatusCode, payload)
+	}
+	tasks := decode[[]task.Task](t, payload)
+	if len(tasks) != 1 || tasks[0].ID != healthy.ID {
+		t.Errorf("tasks = %+v, want only %s: an ID appears in a listing once or not at all", tasks, healthy.ID)
+	}
+
+	resp, payload = do(t, srv, "GET", "/api/status", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", resp.StatusCode, payload)
+	}
+	status := decode[serverStatus](t, payload)
+	if len(status.Duplicated) != 1 || status.Duplicated[0].ID != doubled.ID {
+		t.Fatalf("duplicated = %+v, want it to name %s", status.Duplicated, doubled.ID)
+	}
+	if len(status.Duplicated[0].Files) != 2 {
+		t.Errorf("files = %q, want both files: choosing between them is the fix", status.Duplicated[0].Files)
+	}
+	if !strings.Contains(status.Duplicated[0].Reason, second) {
+		t.Errorf("reason = %q, want it to name %s", status.Duplicated[0].Reason, second)
+	}
+	if status.Incomplete {
+		t.Error("incomplete = true, want false: the directory never moved, and the listing knows exactly what it withheld")
+	}
+}
+
+// Always an array, never null, the way `unreadable` is: a board can then say
+// "none" without having to tell the two apart.
+func TestAPIStatusCarriesDuplicatedAsAnArray(t *testing.T) {
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Healthy"})
+
+	_, payload := do(t, srv, "GET", "/api/status", "")
+	if !strings.Contains(payload, `"duplicated":[]`) {
+		t.Errorf("status = %s, want an empty duplicated array with nothing doubled", payload)
 	}
 }
 

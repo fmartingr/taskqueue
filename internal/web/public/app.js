@@ -5668,6 +5668,7 @@ var columns = ref(FALLBACK_COLUMNS);
 var taskDir = ref("");
 var version2 = ref("");
 var unreadable = ref([]);
+var duplicated = ref([]);
 var incomplete = ref(false);
 var loaded = ref(false);
 var streaming = ref(null);
@@ -5683,8 +5684,10 @@ var statusLine = computed2(() => {
   const link = streaming.value === false ? "polling" : "";
   const broken = unreadable.value.length;
   const skipped = broken ? `${broken} file${broken === 1 ? "" : "s"} could not be read` : "";
+  const doubled = duplicated.value.length;
+  const claimed = doubled ? `${doubled} id${doubled === 1 ? "" : "s"} claimed by more than one file` : "";
   const unsquared = incomplete.value ? "the queue was changing as it was read" : "";
-  return [counts, skipped, unsquared, taskDir.value, version2.value && `tq ${version2.value}`, link].filter(Boolean).join(" · ");
+  return [counts, skipped, claimed, unsquared, taskDir.value, version2.value && `tq ${version2.value}`, link].filter(Boolean).join(" · ");
 });
 var dragging = ref(null);
 var composing = ref(null);
@@ -5749,7 +5752,7 @@ async function loadServerStatus() {
       return;
     taskDir.value = status.task_dir;
     version2.value = status.version;
-    reportUnreadable(status.unreadable ?? []);
+    reportMissing(status.unreadable ?? [], status.duplicated ?? []);
     reportIncomplete(status.incomplete ?? false);
   } catch (error) {
     console.error("status failed", error);
@@ -5757,9 +5760,13 @@ async function loadServerStatus() {
 }
 var complainedAbout = new Set;
 var NAMED_IN_TOASTS = 3;
-function reportUnreadable(files) {
+function reportMissing(files, doubled) {
   unreadable.value = files;
-  const seen = new Set(files.map((file) => `${file.file}: ${file.reason}`));
+  duplicated.value = doubled;
+  const seen = new Set([
+    ...files.map((file) => `${file.file}: ${file.reason}`),
+    ...doubled.map((id) => id.reason)
+  ]);
   const fresh = [...seen].filter((complaint) => !complainedAbout.has(complaint));
   complainedAbout = seen;
   for (const complaint of fresh.slice(0, NAMED_IN_TOASTS)) {
@@ -5767,7 +5774,7 @@ function reportUnreadable(files) {
   }
   const rest = fresh.length - NAMED_IN_TOASTS;
   if (rest > 0)
-    toast(`…and ${rest} more file${rest === 1 ? "" : "s"} could not be read`);
+    toast(`…and ${rest} more problem${rest === 1 ? "" : "s"} the board could not show`);
 }
 var complainedAboutIncomplete = false;
 function reportIncomplete(unsquared) {

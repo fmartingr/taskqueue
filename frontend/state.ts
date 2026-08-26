@@ -21,6 +21,7 @@ import {
   fetchStatus,
   fetchTasks,
   patchTask,
+  type DuplicatedID,
   type UnreadableFile,
 } from "./api";
 import { connectEvents } from "./events";
@@ -83,14 +84,22 @@ export const version = ref("");
 export const unreadable = ref<UnreadableFile[]>([]);
 
 /**
+ * The IDs the server found more than one task file for, from GET /api/status.
+ *
+ * Neither copy is in the listing, so this is a card the board cannot draw, and
+ * it is said the same way a skipped file is: a toast when it appears, and a
+ * count in the footer for as long as it lasts (TQ-0040).
+ */
+export const duplicated = ref<DuplicatedID[]>([]);
+
+/**
  * Whether the server's last scan could be squared with the task directory,
  * from GET /api/status.
  *
- * A queue being written to while it is read can come back a task short, or
- * holding one twice, and the store says so rather than passing the result off
- * as the whole queue. The board says it the same way it says a file was
- * skipped: a toast when it appears, and a word in the footer while it lasts
- * (TQ-0012).
+ * A queue being written to while it is read can come back a task short, and
+ * the store says so rather than passing the result off as the whole queue. The
+ * board says it the same way it says a file was skipped: a toast when it
+ * appears, and a word in the footer while it lasts (TQ-0012).
  */
 export const incomplete = ref(false);
 
@@ -128,11 +137,15 @@ export const statusLine = computed(() => {
   // board an hour later still has to be told the count is short.
   const broken = unreadable.value.length;
   const skipped = broken ? `${broken} file${broken === 1 ? "" : "s"} could not be read` : "";
+  // And for an ID the server could not tell apart: the card is not on the
+  // board, and nothing else on the page would say why.
+  const doubled = duplicated.value.length;
+  const claimed = doubled ? `${doubled} id${doubled === 1 ? "" : "s"} claimed by more than one file` : "";
   // Same reasoning for a listing the server could not square with the
   // directory: the count above may not be the queue, and the toast that said
   // so is long gone.
   const unsquared = incomplete.value ? "the queue was changing as it was read" : "";
-  return [counts, skipped, unsquared, taskDir.value, version.value && `tq ${version.value}`, link]
+  return [counts, skipped, claimed, unsquared, taskDir.value, version.value && `tq ${version.value}`, link]
     .filter(Boolean)
     .join(" · ");
 });
@@ -254,30 +267,39 @@ async function loadServerStatus(): Promise<void> {
     if (ticket !== statusIssued) return; // a newer request is already in flight
     taskDir.value = status.task_dir;
     version.value = status.version;
-    reportUnreadable(status.unreadable ?? []);
+    reportMissing(status.unreadable ?? [], status.duplicated ?? []);
     reportIncomplete(status.incomplete ?? false);
   } catch (error) {
     console.error("status failed", error);
   }
 }
 
-/** The files already complained about, so a broken file is one toast rather
- *  than one per refresh — and a fixed one that breaks again is a new toast. */
+/** What has already been complained about, so one problem is one toast rather
+ *  than one per refresh — and one that is fixed and comes back is a new toast. */
 let complainedAbout = new Set<string>();
 
-/** How many broken files are named one by one before the rest are summarised.
+/** How many problems are named one by one before the rest are summarised.
  *  A conflicted merge breaks several at once, and a toast per file would cover
  *  the board it is complaining about. */
 const NAMED_IN_TOASTS = 3;
 
 /**
- * Records the files the server had to skip and toasts about the ones that are
- * new. A skipped file is a task missing from the board, so the count that
- * follows it in the footer would otherwise just look wrong.
+ * Records what the server could not put in the listing — the files it had to
+ * skip (TQ-0011) and the IDs more than one file claims (TQ-0040) — and toasts
+ * about whatever is new.
+ *
+ * Both are a task missing from the board, so the count that follows them in
+ * the footer would otherwise just look wrong, and both are counted together
+ * here so that a directory in a bad way is one burst of toasts rather than
+ * two.
  */
-function reportUnreadable(files: UnreadableFile[]): void {
+function reportMissing(files: UnreadableFile[], doubled: DuplicatedID[]): void {
   unreadable.value = files;
-  const seen = new Set(files.map((file) => `${file.file}: ${file.reason}`));
+  duplicated.value = doubled;
+  const seen = new Set([
+    ...files.map((file) => `${file.file}: ${file.reason}`),
+    ...doubled.map((id) => id.reason),
+  ]);
   const fresh = [...seen].filter((complaint) => !complainedAbout.has(complaint));
   complainedAbout = seen;
 
@@ -285,7 +307,7 @@ function reportUnreadable(files: UnreadableFile[]): void {
     toast(`Not on the board — ${complaint}`);
   }
   const rest = fresh.length - NAMED_IN_TOASTS;
-  if (rest > 0) toast(`…and ${rest} more file${rest === 1 ? "" : "s"} could not be read`);
+  if (rest > 0) toast(`…and ${rest} more problem${rest === 1 ? "" : "s"} the board could not show`);
 }
 
 /** Whether the last scan was already known to be unsquared, so a queue being

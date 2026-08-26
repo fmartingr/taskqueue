@@ -285,12 +285,20 @@ func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	if unreadable == nil {
 		unreadable = []store.UnreadableFile{}
 	}
+	duplicated := listing.Duplicated
+	if duplicated == nil {
+		duplicated = []store.DuplicatedID{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
 		"task_count": len(listing.Tasks),
 		"task_dir":   s.st.Dir,
 		"version":    s.version,
 		"unreadable": unreadable,
+		// An ID more than one file claims is withheld from the listing, so it
+		// is a task missing from the board with nowhere else to be mentioned —
+		// GET /api/tasks is the array it is missing from (TQ-0040).
+		"duplicated": duplicated,
 		// A directory that changed under every attempt to read it leaves the
 		// count above possibly a task short. It goes here for the same reason
 		// the skipped files do: GET /api/tasks is an array with nowhere to put

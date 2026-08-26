@@ -32,6 +32,19 @@ export interface UnreadableFile {
   reason: string;
 }
 
+/**
+ * An ID more than one task file claims. Neither copy is in the listing: the ID
+ * is how the board addresses a task, so two files answering to one leaves
+ * nothing to draw a card for, and drawing one anyway is what put two cards on
+ * a single key. `reason` is the server's sentence about it, the same one a
+ * write to that ID is refused with (TQ-0040).
+ */
+export interface DuplicatedID {
+  id: string;
+  files: string[];
+  reason: string;
+}
+
 /** GET /api/status. */
 export interface ServerStatus {
   ok: boolean;
@@ -39,11 +52,12 @@ export interface ServerStatus {
   task_dir: string;
   version: string;
   unreadable: UnreadableFile[];
+  duplicated: DuplicatedID[];
   /**
    * The scan could not be squared with the task directory: it kept changing
-   * while it was being read, so the listing may be missing a task or hold one
-   * twice. The listing itself cannot carry this either — /api/tasks is an
-   * array of tasks — so it is said here (TQ-0012).
+   * while it was being read, so the listing may be missing a task. The listing
+   * itself cannot carry this either — /api/tasks is an array of tasks — so it
+   * is said here (TQ-0012).
    */
   incomplete: boolean;
 }

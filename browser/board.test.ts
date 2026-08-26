@@ -204,28 +204,37 @@ test("a blocked card says what it is waiting for, in the board and the dialog", 
   expect(await page.inputValue("#task-depends-on")).toBe(blocker);
 });
 
-// A queue being written to while it is read can come back a task short, or
-// holding one twice, and the store says so rather than passing the result off
-// as the whole queue. The board says it the same way it says a file was
-// skipped: a toast, and a word in the footer for as long as it lasts
-// (TQ-0012). Two files claiming one ID is that state held still — the retries
-// cannot resolve it, so the server keeps reporting it.
-test("a queue the server could not read consistently is said on the board", async () => {
+// Two files claiming one ID used to reach the board as two cards on a single
+// key, and either of them 500d the moment it was dragged. Neither card is
+// drawn now: the server withholds both copies and names the two files, and the
+// board says a task is missing the same way it says a file was skipped — a
+// toast, and a count in the footer for as long as it lasts (TQ-0040).
+//
+// A queue that would not hold still at all (TQ-0012's `incomplete`) travels
+// the same path and is covered where it can be driven exactly, in the store's
+// own tests: from a browser it would take a directory rewritten hard enough to
+// lose three passes running, which is a race to wait on rather than a test.
+test("an id two files claim is taken off the board and said so", async () => {
+  let doubled = "";
   let healthy = "";
   const { page, project } = await openBoard((p) => {
+    doubled = p.add("Claimed twice");
     healthy = p.add("Still here");
   });
-  await page.waitForSelector(cardIn("todo", healthy));
+  await page.waitForSelector(cardIn("todo", doubled));
 
-  const original = readFileSync(join(project.dir, ".tasks", `${healthy}-still-here.md`));
-  writeFileSync(join(project.dir, ".tasks", `${healthy}-a-second-file.md`), original);
+  const original = readFileSync(join(project.dir, ".tasks", `${doubled}-claimed-twice.md`));
+  writeFileSync(join(project.dir, ".tasks", `${doubled}-a-second-file.md`), original);
 
   const toast = await page.waitForSelector("#toasts .toast.error");
-  expect(await toast.textContent()).toContain("changing as it was read");
+  expect(await toast.textContent()).toContain(`${doubled}-a-second-file.md`);
 
-  // And the footer keeps saying it after the toast has gone.
+  // The doubled card is gone, the rest of the board stands, and the footer
+  // keeps saying so after the toast has.
+  await page.waitForFunction((id) => !document.querySelector(`[data-id="${id}"]`), doubled);
+  expect(await idsIn(page, "todo")).toEqual([healthy]);
   await page.waitForFunction(() =>
-    document.querySelector("#status-line")?.textContent?.includes("changing as it was read"),
+    document.querySelector("#status-line")?.textContent?.includes("claimed by more than one file"),
   );
 });
 

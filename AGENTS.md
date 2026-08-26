@@ -77,11 +77,12 @@ frontend`, `make typecheck` or `make dev` will run.
   retitle landing in between leaves a task under a name the pass never looked
   at, so a difference between the two readings means the pass is redone — three
   attempts, after which the listing says it may not match the directory rather
-  than passing for the whole queue (TQ-0012). A task read twice under two names
-  is the same signal from the other side, because a retitle writes the new file
-  before retiring the old one; a pair that outlives the retries is TQ-0040's to
-  resolve and is only reported here. Keep both readings: this is a consistency
-  check, not a cache, and nothing survives the call.
+  than passing for the whole queue (TQ-0012). An ID under two names is the same
+  signal from the other side, because a retitle writes the new file before
+  retiring the old one; a pair two passes at rest both find is a queue to fix
+  rather than a race, and is reported and withheld instead (TQ-0040). Keep both
+  readings: this is a consistency check, not a cache, and nothing survives the
+  call.
 - The one thing the server keeps between requests are the two change
   fingerprints behind `/api/events` (TQ-0033): the names, sizes and modification
   times of the task directory, hashed, and the same reading of `.taskqueue.yaml`
@@ -131,6 +132,17 @@ frontend`, `make typecheck` or `make dev` will run.
   `Listing.Incomplete` travels the same way (TQ-0012): the CLI warns on stderr
   and still exits 0, `GET /api/status` carries `incomplete`, and the board says
   it in a toast and in its footer, exactly as it says a file was skipped.
+- An ID more than one file claims is withheld from a listing, both copies, and
+  reported in `Listing.Duplicated` — the same channel again (TQ-0040). An ID
+  appears in a listing once or not at all, which is what lets every caller
+  index by it. `List` tells that from a retitle caught between writing the new
+  file and retiring the old by looking again: the pair is redone, and one that
+  two passes at rest both find is reported rather than retried. A pair only
+  ever seen while the directory was moving is withheld too — the ID rule is
+  absolute — but the listing says `Incomplete` about it rather than naming
+  files to delete. The sentence it is reported with is `locate`'s, composed in
+  `duplicateClaim` so that a listing and a refused write cannot say different
+  things about the same two files.
 - Preserve JSON CLI output compatibility; it is the stable agent API.
 - Keep stdout clean when `--json` is active: data on stdout, everything else on
   stderr.

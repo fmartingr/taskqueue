@@ -208,6 +208,74 @@ func TestListAndReadySurviveAnUnreadableFile(t *testing.T) {
 	}
 }
 
+// An ID two files claim is left out of the listing and named on stderr, and
+// the command still succeeds. Only a real process shows the exit code and the
+// stream the warning went to — and that the sentence a listing prints is the
+// one `tq show` refuses that ID with (TQ-0040).
+func TestListAndReadyWithholdAnIDTwoFilesClaim(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "doubled", "--status", "todo")
+	p.mustRun(t, "add", "healthy", "--status", "todo")
+
+	// What an interrupted retitle leaves behind, or two branches merging
+	// cleanly because their filenames differ: a second file for TQ-0001,
+	// carrying a status the real task moved on from.
+	const stale = "TQ-0001-stale.md"
+	content := "---\nid: TQ-0001\ntitle: doubled\nstatus: done\npriority: normal\n" +
+		"created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n"
+	if err := os.WriteFile(p.path(".tasks", stale), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, command := range []string{"list", "ready"} {
+		t.Run(command, func(t *testing.T) {
+			r := p.run(t, command)
+			if r.Code != 0 {
+				t.Errorf("tq %s = %d, want 0: a queue to fix must not fail the command\nstderr: %s", command, r.Code, r.Stderr)
+			}
+			if strings.Contains(r.Stdout, "TQ-0001") {
+				t.Errorf("tq %s offers TQ-0001, which two files claim:\n%s", command, r.Stdout)
+			}
+			if !strings.Contains(r.Stdout, "TQ-0002") {
+				t.Errorf("tq %s stdout is missing TQ-0002:\n%s", command, r.Stdout)
+			}
+			if !strings.Contains(r.Stderr, stale) {
+				t.Errorf("tq %s should name %s on stderr, got: %q", command, stale, r.Stderr)
+			}
+		})
+
+		t.Run(command+" --json", func(t *testing.T) {
+			r := p.run(t, command, "--json")
+			if r.Code != 0 {
+				t.Errorf("tq %s --json = %d, want 0\nstderr: %s", command, r.Code, r.Stderr)
+			}
+			// JSON decodes stdout on its own, which is the contract an agent
+			// reads: the warning has to be on stderr for this to pass.
+			var listed []taskJSON
+			r.JSON(t, &listed)
+			if len(listed) != 1 || listed[0].ID != "TQ-0002" {
+				t.Errorf("tq %s --json = %+v, want only TQ-0002", command, listed)
+			}
+			if !strings.Contains(r.Stderr, stale) {
+				t.Errorf("tq %s --json should name %s on stderr, got: %q", command, stale, r.Stderr)
+			}
+		})
+	}
+
+	// The complaint the ticket opens with: a listing and a lookup disagreeing
+	// about the same two files.
+	listing := p.run(t, "list")
+	show := p.run(t, "show", "TQ-0001")
+	if show.Code != 1 {
+		t.Errorf("tq show TQ-0001 = %d, want 1: the file is what is invalid", show.Code)
+	}
+	claim, _, _ := strings.Cut(strings.TrimPrefix(show.Stderr, "error: invalid task file: "), "\n")
+	if claim == "" || !strings.Contains(listing.Stderr, claim) {
+		t.Errorf("tq show says %q, tq list says %q; they are the same finding", claim, listing.Stderr)
+	}
+}
+
 // A second terminal retitling tasks must not cost this one its queue. `tq
 // list` used to exit 2 for a task that exists (TQ-0011) and then to print a
 // short list and exit 0 (TQ-0012); now it prints the whole queue, or says on

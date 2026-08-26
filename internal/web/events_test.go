@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -29,33 +30,34 @@ const eventuallyDifferent = 5 * time.Second
 func TestFingerprintFollowsTheTaskDirectory(t *testing.T) {
 	st := tqtest.NewStore(t)
 
-	first, err := fingerprint(st.Dir)
+	first, err := taskFingerprint(st.Dir)
 	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
+		t.Fatalf("taskFingerprint: %v", err)
 	}
 	// Reading twice with nothing changed must not look like a change, or the
 	// board would refetch on every tick.
-	again, err := fingerprint(st.Dir)
+	again, err := taskFingerprint(st.Dir)
 	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
+		t.Fatalf("taskFingerprint: %v", err)
 	}
 	if first != again {
 		t.Errorf("fingerprint changed with nothing to change it: %q then %q", first, again)
 	}
 
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Something"})
-	after, err := fingerprint(st.Dir)
+	after, err := taskFingerprint(st.Dir)
 	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
+		t.Fatalf("taskFingerprint: %v", err)
 	}
 	if after == first {
 		t.Error("fingerprint did not change when a task was added")
 	}
 }
 
-// TQ-0034 builds on this stream, so an edit to the marker has to reach the
-// board the same way an edit to a task does.
-func TestFingerprintCoversTheConfigFile(t *testing.T) {
+// An edit to the marker has to reach the board the way an edit to a task does,
+// but as its own reading: the board refetches a different endpoint for it, so
+// the two readings must not be able to stand in for each other (TQ-0034).
+func TestConfigFingerprintFollowsTheMarkerAlone(t *testing.T) {
 	root := tqtest.Root(t)
 	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\n")
 	st, err := store.InitStore(root)
@@ -63,21 +65,71 @@ func TestFingerprintCoversTheConfigFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before, err := fingerprint(st.Dir)
+	before := configFingerprint(st.Dir)
+	tasksBefore, err := taskFingerprint(st.Dir)
 	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
+		t.Fatalf("taskFingerprint: %v", err)
 	}
 
-	// Written through the same helper, so the modification time really moves.
-	time.Sleep(2 * time.Millisecond)
 	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\nserver:\n  port: 7412\n")
 
-	after, err := fingerprint(st.Dir)
-	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
+	if after := configFingerprint(st.Dir); after == before {
+		t.Errorf("config fingerprint did not change when %s was edited", config.ConfigFileName)
 	}
-	if after == before {
-		t.Errorf("fingerprint did not change when %s was edited", config.ConfigFileName)
+	tasksAfter, err := taskFingerprint(st.Dir)
+	if err != nil {
+		t.Fatalf("taskFingerprint: %v", err)
+	}
+	if tasksAfter != tasksBefore {
+		t.Error("editing the marker moved the task fingerprint, which would push a listing nobody changed")
+	}
+
+	// And a task must not move the config's reading either.
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Something"})
+	if configFingerprint(st.Dir) == before {
+		t.Error("the config fingerprint is expected to still differ from before the edit")
+	}
+}
+
+// A file being saved is briefly unparsable, and that is the moment the board
+// most needs to hear about: the reading is a stat, so it moves anyway, and it
+// moves again when the file settles.
+func TestConfigFingerprintMovesForAFileItCannotParse(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\n")
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	good := configFingerprint(st.Dir)
+	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\nlabels: [not, a, mapping]\n")
+	broken := configFingerprint(st.Dir)
+	if broken == good {
+		t.Fatal("a half-saved marker looks unchanged, so the board would never be told")
+	}
+	if _, err := config.FindConfig(st.Dir); err == nil {
+		t.Fatal("the fixture is supposed to be unparsable")
+	}
+
+	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\n")
+	if configFingerprint(st.Dir) == broken {
+		t.Error("the marker settling is a change the board has to hear about")
+	}
+}
+
+// The absence of a marker is a state too: writing one is worth pushing.
+func TestConfigFingerprintDistinguishesNoMarkerAtAll(t *testing.T) {
+	root := tqtest.Root(t)
+	taskDir := filepath.Join(root, ".tasks")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	missing := configFingerprint(taskDir)
+	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\n")
+	if configFingerprint(taskDir) == missing {
+		t.Error("writing a marker where there was none did not register")
 	}
 }
 
@@ -147,24 +199,137 @@ func nextEvent(t *testing.T, r *bufio.Reader, within time.Duration) string {
 	}
 }
 
+// openingFrames consumes the pair a stream starts with, and fails if it is not
+// the pair. A board that reconnected after missing a change refetches on these
+// rather than trusting what it already had, and it has to be told about both
+// the queue and the marker.
+func openingFrames(t *testing.T, r *bufio.Reader) {
+	t.Helper()
+	for _, want := range []string{tasksEvent, configEvent} {
+		if got := nextEvent(t, r, eventuallyDifferent); got != want {
+			t.Fatalf("opening frame = %q, want %s", got, want)
+		}
+	}
+}
+
+// waitForEvents reads frames until every name asked for has arrived, in any
+// order, and says what it did see when one never does. Order is deliberately
+// not asserted: two changes in one tick are two frames, and which goes first is
+// the hub's business rather than the board's.
+func waitForEvents(t *testing.T, r *bufio.Reader, within time.Duration, names ...string) {
+	t.Helper()
+	missing := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		missing[name] = struct{}{}
+	}
+
+	var seen []string
+	deadline := time.Now().Add(within)
+	for len(missing) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no %v within %s; saw %v", names, within, seen)
+		}
+		got := nextEvent(t, r, within)
+		seen = append(seen, got)
+		delete(missing, got)
+	}
+}
+
+// configFile is the marker of a store's project, for a test that rewrites it.
+func configFile(st *store.Store) string {
+	return filepath.Join(filepath.Dir(st.Dir), config.ConfigFileName)
+}
+
 // The point of the whole ticket: a task written outside the server reaches an
 // open board without the board asking.
 func TestEventsPushWhenATaskChanges(t *testing.T) {
 	srv, st, _ := newEventServer(t)
 	stream, closeStream := openStream(t, srv)
 	defer closeStream()
-
-	// A stream says where it starts, so a board that reconnected after missing
-	// something refetches rather than trusting what it already had.
-	if got := nextEvent(t, stream, eventuallyDifferent); got != "tasks" {
-		t.Fatalf("first event = %q, want tasks", got)
-	}
+	openingFrames(t, stream)
 
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Written by an agent"})
 
-	if got := nextEvent(t, stream, eventuallyDifferent); got != "tasks" {
+	if got := nextEvent(t, stream, eventuallyDifferent); got != tasksEvent {
 		t.Errorf("event after a write = %q, want tasks", got)
 	}
+}
+
+// TQ-0034: the marker is pushed as its own kind of change, because the board
+// does something different with it — it refetches GET /api/config, not the
+// listing — and a `tasks` frame would send it to the wrong endpoint.
+func TestEventsPushWhenTheConfigChanges(t *testing.T) {
+	srv, st, _ := newEventServer(t)
+	stream, closeStream := openStream(t, srv)
+	defer closeStream()
+	openingFrames(t, stream)
+
+	if err := os.WriteFile(configFile(st), []byte("version: 1\npath: .tasks\n"+
+		"labels:\n  spicy:\n    color: \"#ff0000\"\n    display_name: Spicy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := nextEvent(t, stream, eventuallyDifferent); got != configEvent {
+		t.Errorf("event after editing the marker = %q, want config", got)
+	}
+}
+
+// The half-saved file. An editor leaves the marker unparsable for a moment, and
+// the board has to be told — then told again when it settles — rather than
+// being left showing a vocabulary that no longer exists.
+func TestEventsPushAConfigItCannotParseAndTheAPISaysWhy(t *testing.T) {
+	srv, st, _ := newEventServer(t)
+	stream, closeStream := openStream(t, srv)
+	defer closeStream()
+	openingFrames(t, stream)
+
+	if err := os.WriteFile(configFile(st), []byte("version: 1\npath: .tasks\nlabels: [nope]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitForEvents(t, stream, eventuallyDifferent, configEvent)
+
+	// And the endpoint the board refetches on that frame reports the problem in
+	// the standard shape, so the board can say what is wrong and keep the
+	// configuration it already had.
+	resp, payload := do(t, srv, http.MethodGet, "/api/config", "")
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d\n%s", resp.StatusCode, http.StatusInternalServerError, payload)
+	}
+	failure := decode[struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}](t, payload)
+	if failure.Code != "invalid_config" || !strings.Contains(failure.Error, config.ConfigFileName) {
+		t.Errorf("error = %+v, want invalid_config naming %s", failure, config.ConfigFileName)
+	}
+
+	// Reverting it is a change of its own: the board gets its labels back
+	// without anybody reloading the page.
+	if err := os.WriteFile(configFile(st), []byte("version: 1\npath: .tasks\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitForEvents(t, stream, eventuallyDifferent, configEvent)
+
+	if resp, payload := do(t, srv, http.MethodGet, "/api/config", ""); resp.StatusCode != http.StatusOK {
+		t.Errorf("status after the marker was fixed = %d, want %d\n%s", resp.StatusCode, http.StatusOK, payload)
+	}
+}
+
+// Two changes in the same tick are two frames. They are coalesced by name, not
+// replaced by the latest: one signal sends the board to the listing and the
+// other to its configuration, so losing either leaves it wrong about something.
+func TestEventsKeepBothKindsOfChangeFromOneTick(t *testing.T) {
+	srv, st, _ := newEventServer(t)
+	stream, closeStream := openStream(t, srv)
+	defer closeStream()
+	openingFrames(t, stream)
+
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Written with the marker"})
+	if err := os.WriteFile(configFile(st), []byte("version: 1\npath: .tasks\nserver:\n  port: 7412\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForEvents(t, stream, eventuallyDifferent, tasksEvent, configEvent)
 }
 
 // A board that goes away must not leave anything running behind it.
@@ -252,16 +417,14 @@ func TestEventsReportAnUnreadableDirectory(t *testing.T) {
 	srv, st, _ := newEventServer(t)
 	stream, closeStream := openStream(t, srv)
 	defer closeStream()
-	nextEvent(t, stream, eventuallyDifferent)
+	openingFrames(t, stream)
 
 	if err := os.Chmod(st.Dir, 0o000); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(st.Dir, 0o755) })
 
-	if got := nextEvent(t, stream, eventuallyDifferent); got != "scan-failed" {
-		t.Errorf("event for an unreadable directory = %q, want scan-failed", got)
-	}
+	waitForEvents(t, stream, eventuallyDifferent, scanFailedEvent)
 }
 
 // The logger wraps the ResponseWriter to record the status, and a wrapper that
@@ -278,12 +441,10 @@ func TestEventsStreamThroughTheRequestLogger(t *testing.T) {
 	stream, closeStream := openStream(t, srv)
 	defer closeStream()
 
-	if got := nextEvent(t, stream, eventuallyDifferent); got != "tasks" {
-		t.Fatalf("first event through the logger = %q, want tasks", got)
-	}
+	openingFrames(t, stream)
 
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Through the logger"})
-	if got := nextEvent(t, stream, eventuallyDifferent); got != "tasks" {
+	if got := nextEvent(t, stream, eventuallyDifferent); got != tasksEvent {
 		t.Errorf("event after a write = %q, want tasks", got)
 	}
 }
@@ -298,11 +459,11 @@ func TestSubscribeAfterStopIsAlreadyClosed(t *testing.T) {
 	h.start()
 	h.stop()
 
-	stream, release := h.subscribe()
+	sub, release := h.subscribe()
 	defer release()
 
 	select {
-	case _, ok := <-stream:
+	case _, ok := <-sub.wake:
 		if ok {
 			t.Error("a stream opened after stop delivered an event")
 		}
@@ -321,30 +482,23 @@ func TestAScanFailureIsReportedAgainToAFreshBoard(t *testing.T) {
 	srv, st, _ := newEventServer(t)
 
 	first, closeFirst := openStream(t, srv)
-	nextEvent(t, first, eventuallyDifferent)
+	openingFrames(t, first)
 	if err := os.Chmod(st.Dir, 0o000); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(st.Dir, 0o755) })
-	if got := nextEvent(t, first, eventuallyDifferent); got != "scan-failed" {
-		t.Fatalf("first board saw %q, want scan-failed", got)
-	}
+	waitForEvents(t, first, eventuallyDifferent, scanFailedEvent)
 	closeFirst()
 
 	// A second board, arriving while the directory is still unreadable.
 	second, closeSecond := openStream(t, srv)
 	defer closeSecond()
-	for deadline := time.Now().Add(eventuallyDifferent); time.Now().Before(deadline); {
-		if nextEvent(t, second, eventuallyDifferent) == "scan-failed" {
-			return
-		}
-	}
-	t.Error("a board that connected after the failure was never told about it")
+	waitForEvents(t, second, eventuallyDifferent, scanFailedEvent)
 }
 
 func TestWriteEventKeepsOneFrameOnOneLine(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeEvent(rec, rec, event{name: "scan-failed", data: "open /tmp/a\nb/.tasks: permission denied"})
+	writeEvent(rec, rec, event{name: scanFailedEvent, data: "open /tmp/a\nb/.tasks: permission denied"})
 
 	body := rec.Body.String()
 	if strings.Count(body, "\n\n") != 1 || !strings.Contains(body, "open /tmp/a b/.tasks") {

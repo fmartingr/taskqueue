@@ -95,6 +95,36 @@ func TestFindConfigRejectsANewerVersion(t *testing.T) {
 	}
 }
 
+// ConfigPath is the walk without the parse, for the event stream's fingerprint:
+// a file being saved is briefly unparsable, and that is exactly the moment its
+// caller has to keep working.
+func TestConfigPathAnswersForAFileItCouldNotParse(t *testing.T) {
+	root := tqtest.Root(t)
+	written := tqtest.WriteConfig(t, root, "version: [1,\n")
+
+	path, err := config.ConfigPath(root)
+	if err != nil {
+		t.Fatalf("config.ConfigPath: %v", err)
+	}
+	if path != written {
+		t.Errorf("ConfigPath = %q, want %q", path, written)
+	}
+	// The same file through FindConfig is an error, which is the difference.
+	if _, err := config.FindConfig(root); err == nil {
+		t.Error("config.FindConfig() = nil error for malformed YAML")
+	}
+}
+
+func TestConfigPathIsEmptyWithNoMarker(t *testing.T) {
+	path, err := config.ConfigPath(tqtest.Root(t))
+	if err != nil {
+		t.Fatalf("config.ConfigPath: %v", err)
+	}
+	if path != "" {
+		t.Errorf("ConfigPath = %q, want \"\" where there is no marker", path)
+	}
+}
+
 func TestFindConfigRejectsMalformedYAML(t *testing.T) {
 	root := tqtest.Root(t)
 	path := tqtest.WriteConfig(t, root, "version: [1,\n")

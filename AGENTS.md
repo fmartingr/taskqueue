@@ -71,13 +71,19 @@ frontend`, `make typecheck` or `make dev` will run.
 - Do not add a database, an index file, a cache or a filesystem watcher. Markdown
   files are the source of truth and every read hits the disk — that is what makes
   CLI edits visible to a running server.
-- The one thing the server keeps between requests is the change fingerprint
-  behind `/api/events` (TQ-0033): the names, sizes and modification times of the
-  task directory, hashed, compared twice a second while a board is connected. It
-  holds no task data, so a board still reads its tasks through the same endpoint
+- The one thing the server keeps between requests are the two change
+  fingerprints behind `/api/events` (TQ-0033): the names, sizes and modification
+  times of the task directory, hashed, and the same reading of `.taskqueue.yaml`
+  — compared twice a second while a board is connected. Two rather than one
+  because they push different frames, `tasks` and `config`, and the board
+  refetches a different endpoint for each (TQ-0034). Neither holds any data, so
+  a board still reads its tasks and its configuration through the same endpoints
   and the same store as before — and one scan serves every connected board,
   where polling made a second board cost twice the disk reads. It is not a
-  watcher: nothing subscribes to the filesystem, and there is no dependency.
+  watcher: nothing subscribes to the filesystem, and there is no dependency. The
+  config reading is a stat, never a parse: a file caught half-saved has to
+  register as a change like any other, and the board is what decides what to do
+  about one it cannot use.
 - Do not introduce a second frontend framework, a bundler other than Bun, or a
   Node runtime without an explicit architecture change. Vue arrived through
   TQ-0076 and is the one exception, bundled into `public/app.js` rather than

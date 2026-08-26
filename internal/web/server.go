@@ -31,7 +31,7 @@ type server struct {
 	version string
 
 	// events is what /api/events streams from: one scan of the task directory
-	// serving every connected board.
+	// and the project marker, serving every connected board.
 	events *hub
 }
 
@@ -307,6 +307,13 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "task_not_found", err.Error())
 	case errors.Is(err, task.ErrInvalidTaskFile):
 		writeError(w, http.StatusInternalServerError, "invalid_task_file", err.Error())
+	case errors.Is(err, config.ErrConfig):
+		// A marker the server cannot read is a file on this machine, not
+		// anything the client sent — the same class as a task file that will
+		// not parse, and reported the same way. It happens routinely for half a
+		// second while an editor saves .taskqueue.yaml, which is why the board
+		// keeps the configuration it already had rather than blanking on this.
+		writeError(w, http.StatusInternalServerError, "invalid_config", err.Error())
 	case errors.Is(err, store.ErrProjectNotFound),
 		errors.As(err, &pathErr), errors.As(err, &linkErr),
 		errors.Is(err, os.ErrNotExist), errors.Is(err, os.ErrPermission):

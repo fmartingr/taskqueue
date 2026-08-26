@@ -210,23 +210,74 @@ async function loadServerStatus(): Promise<void> {
   }
 }
 
+/** Serialized last configuration, so a refetch that changed nothing re-renders
+ *  nothing — the stream sends one on every connection, not only on a change. */
+let lastConfig = "";
+
+/** The last complaint about the config, so one broken file is one toast rather
+ *  than one per keystroke of whoever is editing it. */
+let lastConfigError = "";
+
 /**
- * Reads the project's vocabularies once at start-up. They are read from the
- * config rather than hard-coded here so a project's own colours, names and
- * priority levels are what the board draws and offers.
+ * Reads the project's vocabularies. They are read from the config rather than
+ * hard-coded here so a project's own colours, names and priority levels are
+ * what the board draws and offers.
  *
- * Failing is survivable: labels then render the way an unconfigured one does,
- * and the priority selects keep FALLBACK_PRIORITIES.
+ * Called again whenever `.taskqueue.yaml` changes (TQ-0034), which is why
+ * failing has to be survivable in both directions. An editor leaves the file
+ * unparsable for a moment while it saves, and the board must not blank its
+ * labels for it: the last configuration that parsed stays in place, a toast
+ * says what is wrong, and the next event puts it right. At start-up there is no
+ * last good one, and the fallbacks stand in — an unconfigured label renders
+ * neutral, and the selects keep FALLBACK_PRIORITIES.
  */
-async function loadProjectConfig(): Promise<void> {
+async function loadProjectConfig(): Promise<boolean> {
+  let config;
   try {
-    const config = await fetchConfig();
-    labels.value = config.labels ?? {};
-    if (config.priorities?.length) priorities.value = config.priorities;
-    if (config.columns?.length) columns.value = config.columns;
+    config = await fetchConfig();
   } catch (error) {
-    console.error("config failed", error);
+    const message = describe(error);
+    if (message !== lastConfigError) {
+      lastConfigError = message;
+      toast(`Could not read the project configuration: ${message}`);
+    }
+    return false;
   }
+
+  lastConfigError = "";
+  const payload = JSON.stringify(config);
+  if (payload === lastConfig) return false;
+  lastConfig = payload;
+
+  labels.value = config.labels ?? {};
+  // Only when the server has something to offer: an empty set would leave the
+  // board with no columns to draw and no priorities to file a task with.
+  if (config.priorities?.length) priorities.value = config.priorities;
+  if (config.columns?.length) columns.value = config.columns;
+  return true;
+}
+
+/** What a refresh was asked for: either signal, or both at once. */
+interface Signals {
+  tasks: boolean;
+  config: boolean;
+}
+
+/**
+ * Answers whatever asked, in the order that makes sense: the configuration
+ * first, because the listing depends on it. The server resolves a task's status
+ * against the project's columns and sorts by its priorities before serving it,
+ * so a board whose columns changed has its tasks in different places — and a
+ * card whose column was removed is shown in the first one. That is why a config
+ * that really changed refetches the listing even when nothing asked it to.
+ *
+ * "Really changed" is the other half. The stream opens with a config frame
+ * whether or not the file moved, so refetching the listing on every one would
+ * double what a reconnect costs.
+ */
+async function applySignals(signals: Signals): Promise<void> {
+  const changed = signals.config ? await loadProjectConfig() : false;
+  if (signals.tasks || changed) await refreshQuietly();
 }
 
 /**
@@ -252,28 +303,45 @@ export async function start(): Promise<void> {
     // The stream covers the ordinary case, so the poll stands aside for it —
     // except after a refresh that failed, which nothing else would ever retry.
     if (streaming.value === true && !stale.value) return;
-    void refreshQuietly();
+    // The configuration is in the poll because nothing else would notice a
+    // marker that changed while the stream is down, and what the fallback
+    // promises is that the board is never silently stale — about its columns as
+    // much as its cards. It costs a second request only while there is no
+    // stream for it to stand aside for.
+    void applySignals({ tasks: true, config: true });
   }, POLL_INTERVAL_MS);
 }
 
 /**
- * A refresh the stream asked for while the user was in the middle of something.
+ * What the stream asked for while the user was in the middle of something.
  *
  * The poll drops these — it simply skips its turn — because another one is
  * three seconds away. The stream has no next turn: it speaks when something
  * changed, so a signal dropped here is a change the board never hears about.
  * Holding it until the hand comes off is the difference.
+ *
+ * A flag each rather than a queue, because a signal is not a payload: ten
+ * events between two renders are one refetch. Two flags rather than one because
+ * the two signals are answered differently, and a config change that arrived
+ * behind a task change must not be answered as a task change.
  */
-let queued = false;
+const queued: Signals = { tasks: false, config: false };
 
 function listen(): void {
   connectEvents({
     onTasks() {
       if (busy.value) {
-        queued = true;
+        queued.tasks = true;
         return;
       }
-      void refreshQuietly();
+      void applySignals({ tasks: true, config: false });
+    },
+    onConfig() {
+      if (busy.value) {
+        queued.config = true;
+        return;
+      }
+      void applySignals({ tasks: false, config: true });
     },
     onScanFailed(message) {
       toast(`The server cannot read the queue: ${message}`);
@@ -284,8 +352,10 @@ function listen(): void {
   });
 
   watch(busy, (isBusy) => {
-    if (isBusy || !queued) return;
-    queued = false;
-    void refreshQuietly();
+    if (isBusy) return;
+    const held = { ...queued };
+    queued.tasks = false;
+    queued.config = false;
+    if (held.tasks || held.config) void applySignals(held);
   });
 }

@@ -81,9 +81,24 @@ func (c *Config) TaskDir() string {
 // The walk stops at the first config found. It is bounded the same way task
 // directory discovery is, so a stray config above a project cannot capture it.
 func FindConfig(startDir string) (*Config, error) {
+	path, err := ConfigPath(startDir)
+	if err != nil || path == "" {
+		return nil, err
+	}
+	return loadConfig(path)
+}
+
+// ConfigPath is the walk on its own: where the nearest config is, without
+// reading it. It returns "" without an error when there is none.
+//
+// Separate from FindConfig because a caller that only wants to know whether the
+// file moved should not need it to parse — the event stream fingerprints the
+// marker twice a second, and a half-saved file, which is exactly the case that
+// matters, is one that cannot be parsed at all.
+func ConfigPath(startDir string) (string, error) {
 	dir, err := filepath.Abs(startDir)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	stopAt := WalkBoundary(dir)
@@ -91,11 +106,11 @@ func FindConfig(startDir string) (*Config, error) {
 		path := filepath.Join(dir, ConfigFileName)
 		switch _, err := os.Stat(path); {
 		case err == nil:
-			return loadConfig(path)
+			return path, nil
 		case errors.Is(err, os.ErrPermission):
 			// A config tq cannot read is not the same as one that is not
 			// there: walking past it would silently use the wrong queue.
-			return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+			return "", fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
 		}
 		// Anything else — missing, or a non-directory somewhere on the way up
 		// — simply means there is no config at this level.
@@ -104,12 +119,12 @@ func FindConfig(startDir string) (*Config, error) {
 		// of the walk, so the message names the file the author actually wrote.
 		nearMiss := filepath.Join(dir, nearMissConfigName)
 		if _, err := os.Stat(nearMiss); err == nil {
-			return nil, fmt.Errorf("%w: %s: tq reads %s, rename it", ErrConfig, nearMiss, ConfigFileName)
+			return "", fmt.Errorf("%w: %s: tq reads %s, rename it", ErrConfig, nearMiss, ConfigFileName)
 		}
 
 		parent := filepath.Dir(dir)
 		if dir == stopAt || parent == dir {
-			return nil, nil
+			return "", nil
 		}
 		dir = parent
 	}

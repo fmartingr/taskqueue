@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,12 +28,8 @@ const eventInterval = 500 * time.Millisecond
 // the board and the server. A comment frame is the cheapest thing SSE has.
 const keepAliveInterval = 25 * time.Second
 
-// fingerprint is what the ticker compares one tick to the next: the names,
-// sizes and modification times of everything the board reads, hashed.
-//
-// The config file is in it as well as the task directory, because the marker
-// decides colours, columns and vocabularies, and an edit to it has to reach the
-// board the same way an edit to a task does.
+// taskFingerprint is what the ticker compares one tick to the next: the names,
+// sizes and modification times of every file in the task directory, hashed.
 //
 // Names, sizes and modification times rather than the file contents, because
 // these are read twice a second and reading them all would not scale past a
@@ -43,13 +38,13 @@ const keepAliveInterval = 25 * time.Second
 // the file exactly as long, so two such writes inside one second would look
 // like one. Linux and macOS both keep nanoseconds, so this is a concern for
 // exotic mounts; the escalation, if it ever bites, is hashing the contents.
-func fingerprint(taskDir string) (string, error) {
+func taskFingerprint(taskDir string) (string, error) {
 	entries, err := os.ReadDir(taskDir)
 	if err != nil {
 		return "", err
 	}
 
-	lines := make([]string, 0, len(entries)+1)
+	sum := fnv.New64a()
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -60,28 +55,44 @@ func fingerprint(taskDir string) (string, error) {
 			// in progress, which the next tick will see settled.
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s\x00%d\x00%d", entry.Name(), info.Size(), info.ModTime().UnixNano()))
-	}
-
-	// The config lives above the task directory, so it is stat-ed separately.
-	// Its absence is a state too: writing a marker is a change worth pushing.
-	if cfg, err := config.FindConfig(taskDir); err == nil && cfg != nil {
-		line := cfg.File + "\x00missing"
-		if info, err := os.Stat(cfg.File); err == nil {
-			line = fmt.Sprintf("%s\x00%d\x00%d", cfg.File, info.Size(), info.ModTime().UnixNano())
-		}
-		lines = append(lines, line)
-	}
-
-	// ReadDir sorts already, but the config is appended after it.
-	sort.Strings(lines)
-
-	sum := fnv.New64a()
-	for _, line := range lines {
-		_, _ = sum.Write([]byte(line))
-		_, _ = sum.Write([]byte("\n"))
+		// ReadDir sorts, so the order this hashes in is already stable.
+		fmt.Fprintf(sum, "%s\x00%d\x00%d\n", entry.Name(), info.Size(), info.ModTime().UnixNano())
 	}
 	return fmt.Sprintf("%016x", sum.Sum64()), nil
+}
+
+// configFingerprint is the same reading for the project marker, which decides
+// colours, columns and vocabularies and so has to reach the board the way a
+// task does — but as its own value, because it means something different: the
+// board refetches GET /api/config for it rather than the listing (TQ-0034).
+//
+// It never fails. Every state the marker can be in is a fingerprint: absent,
+// present, unreachable behind a permission error, or misspelled `.yml`. A board
+// wants to hear about all four, and the transitions between them are exactly
+// the changes worth pushing.
+//
+// It also deliberately does not parse. A file being saved is briefly invalid,
+// and that half-second is the case the whole feature exists for: parsing here
+// would make every mid-save state look identical, and the board would not be
+// told when the file settled.
+func configFingerprint(taskDir string) string {
+	path, err := config.ConfigPath(taskDir)
+	switch {
+	case err != nil:
+		// Not a fingerprint of the file but of the complaint, which is what
+		// changes when the situation does.
+		return "unreadable\x00" + err.Error()
+	case path == "":
+		return "missing"
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		// Found by the walk and gone by the stat: a write in progress, which
+		// the next tick sees settled.
+		return "missing\x00" + path
+	}
+	return fmt.Sprintf("%s\x00%d\x00%d", path, info.Size(), info.ModTime().UnixNano())
 }
 
 // event is what a subscriber is handed: the name SSE puts on the frame, and
@@ -91,21 +102,62 @@ type event struct {
 	data string
 }
 
+// The three things the hub has to say. `tasks` and `config` are both signals to
+// refetch, and they are separate because they send the board to different
+// endpoints: the listing, and the project's vocabularies (TQ-0034).
+//
+// scanFailedEvent is not called "error": EventSource dispatches its own
+// connection failures to a listener of that name, so a frame called `error`
+// would arrive indistinguishable from the stream dropping.
+const (
+	tasksEvent      = "tasks"
+	configEvent     = "config"
+	scanFailedEvent = "scan-failed"
+)
+
+// subscriber is one connected board: the frames waiting to go out, and the
+// channel that wakes its handler to write them.
+//
+// Coalesced by name rather than queued, because a frame is a signal to refetch
+// and not a record — ten writes between two renders are one refetch. Two
+// *different* signals are not interchangeable, though, which is what a single
+// buffered slot could not express: a `config` arriving behind a `tasks` has to
+// wait its turn rather than be dropped as a repeat.
+type subscriber struct {
+	wake    chan struct{}
+	pending []event
+}
+
+// queue adds a frame, replacing one of the same name that has not gone out yet.
+func (s *subscriber) queue(e event) {
+	for i, waiting := range s.pending {
+		if waiting.name == e.name {
+			s.pending[i] = e
+			return
+		}
+	}
+	s.pending = append(s.pending, e)
+}
+
 // hub notices changes and tells the connected boards about them.
 //
 // One scan serves every board, which is the point: the alternative is each
 // browser polling, so a second board doubled the disk reads. Nothing is cached
-// between ticks except the fingerprint of the last one — the boards still read
-// their tasks through the same REST endpoint and the same store as before.
+// between ticks except the fingerprints of the last one — the boards still read
+// their tasks and their config through the same REST endpoints and the same
+// store as before.
 type hub struct {
 	st       *store.Store
 	interval time.Duration
 
 	mu          sync.Mutex
-	subscribers map[chan event]struct{}
-	last        string
-	lastErr     string
-	scans       int
+	subscribers map[*subscriber]struct{}
+	// The two readings of the last scan, kept apart because they are pushed
+	// apart: an edit to the marker must not look like an edit to a task.
+	lastTasks  string
+	lastConfig string
+	lastErr    string
+	scans      int
 
 	done     chan struct{}
 	stopOnce sync.Once
@@ -116,7 +168,7 @@ func newHub(st *store.Store, interval time.Duration) *hub {
 	return &hub{
 		st:          st,
 		interval:    interval,
-		subscribers: make(map[chan event]struct{}),
+		subscribers: make(map[*subscriber]struct{}),
 		done:        make(chan struct{}),
 	}
 }
@@ -157,8 +209,9 @@ func (h *hub) run() {
 	}
 }
 
-// tick reads the directory once and pushes if anything moved. It does nothing
-// at all while no board is connected: with nobody to tell, a scan is pure cost.
+// tick reads the directory and the marker once and pushes whatever moved, as
+// its own frame. It does nothing at all while no board is connected: with
+// nobody to tell, a scan is pure cost.
 func (h *hub) tick() {
 	h.mu.Lock()
 	idle := len(h.subscribers) == 0
@@ -167,26 +220,33 @@ func (h *hub) tick() {
 		return
 	}
 
-	current, err := h.scan()
+	tasks, err := h.scan()
+	cfg := configFingerprint(h.st.Dir)
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// The config is reported even when the task directory could not be read.
+	// The two are separate files: a queue that has gone away says nothing about
+	// the marker, and a board is still able to use one without the other.
+	if cfg != h.lastConfig {
+		h.lastConfig = cfg
+		h.broadcastLocked(event{name: configEvent, data: cfg})
+	}
 
 	if err != nil {
 		// Reported once per spell of failure rather than every tick, so a
 		// directory that has gone away does not fill the stream.
 		if message := err.Error(); message != h.lastErr {
 			h.lastErr = message
-			// Not called "error": EventSource dispatches its own connection
-			// failures to a listener of that name, so a frame called `error`
-			// would arrive indistinguishable from the stream dropping.
-			h.broadcastLocked(event{name: "scan-failed", data: message})
+			h.broadcastLocked(event{name: scanFailedEvent, data: message})
 		}
 		return
 	}
 	h.lastErr = ""
-	if current != h.last {
-		h.last = current
-		h.broadcastLocked(event{name: "tasks", data: current})
+	if tasks != h.lastTasks {
+		h.lastTasks = tasks
+		h.broadcastLocked(event{name: tasksEvent, data: tasks})
 	}
 }
 
@@ -194,17 +254,17 @@ func (h *hub) scan() (string, error) {
 	h.mu.Lock()
 	h.scans++
 	h.mu.Unlock()
-	return fingerprint(h.st.Dir)
+	return taskFingerprint(h.st.Dir)
 }
 
-// subscribe returns a stream of events and the function that ends it. The
-// caller must call release, or the hub keeps writing to a channel nobody reads.
-func (h *hub) subscribe() (<-chan event, func()) {
-	// Buffered, and the send is non-blocking: an event is a signal to refetch,
-	// not a record, so a board that is behind wants the latest one rather than
-	// all of them. That is what keeps a slow reader from either growing memory
-	// or holding up the tick for everybody else.
-	ch := make(chan event, 1)
+// subscribe returns a subscriber and the function that ends it. The caller must
+// call release, or the hub keeps queueing frames for a board that has gone.
+func (h *hub) subscribe() (*subscriber, func()) {
+	// The wake channel carries no data and holds one slot: the frames live in
+	// the pending set, so a board that is behind is woken once for however many
+	// arrived rather than once each. That is what keeps a slow reader from
+	// either growing memory or holding up the tick for everybody else.
+	sub := &subscriber{wake: make(chan struct{}, 1)}
 
 	// A subscriber arriving after the hub stopped gets a channel that is
 	// already closed, so its handler returns at once. Left open it would wait
@@ -213,8 +273,8 @@ func (h *hub) subscribe() (<-chan event, func()) {
 	// to avoid, reintroduced through the reconnect the board does every 500ms.
 	select {
 	case <-h.done:
-		close(ch)
-		return ch, func() {}
+		close(sub.wake)
+		return sub, func() {}
 	default:
 	}
 
@@ -225,23 +285,27 @@ func (h *hub) subscribe() (<-chan event, func()) {
 	// Read before taking the lock, and kept only if this really is the first —
 	// two boards connecting at once would otherwise race to assign, and the
 	// later assignment could install the older reading.
-	fresh, err := fingerprint(h.st.Dir)
+	freshTasks, err := taskFingerprint(h.st.Dir)
+	freshConfig := configFingerprint(h.st.Dir)
 
 	h.mu.Lock()
-	if len(h.subscribers) == 0 && err == nil {
-		h.last = fresh
+	if len(h.subscribers) == 0 {
+		if err == nil {
+			h.lastTasks = freshTasks
+		}
+		h.lastConfig = freshConfig
 	}
-	h.subscribers[ch] = struct{}{}
+	h.subscribers[sub] = struct{}{}
 	h.mu.Unlock()
 
 	var once sync.Once
-	return ch, func() {
+	return sub, func() {
 		once.Do(func() {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			if _, ok := h.subscribers[ch]; ok {
-				delete(h.subscribers, ch)
-				close(ch)
+			if _, ok := h.subscribers[sub]; ok {
+				delete(h.subscribers, sub)
+				close(sub.wake)
 			}
 			// The next board to connect has not been told about a failure that
 			// is still going on, so let it be reported again rather than
@@ -253,21 +317,31 @@ func (h *hub) subscribe() (<-chan event, func()) {
 	}
 }
 
-// current is the fingerprint as the hub last read it, for the frame a stream
-// opens with.
-func (h *hub) current() string {
+// current is the pair of fingerprints as the hub last read them, for the frames
+// a stream opens with.
+func (h *hub) current() (tasks, cfg string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.last
+	return h.lastTasks, h.lastConfig
+}
+
+// drain takes everything waiting for one board, for its handler to write out.
+func (h *hub) drain(sub *subscriber) []event {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	waiting := sub.pending
+	sub.pending = nil
+	return waiting
 }
 
 func (h *hub) broadcastLocked(e event) {
-	for ch := range h.subscribers {
+	for sub := range h.subscribers {
+		sub.queue(e)
 		select {
-		case ch <- e:
+		case sub.wake <- struct{}{}:
 		default:
-			// One is already waiting. The board refetches everything either
-			// way, so the pending signal covers this one too.
+			// Already awake, and it will take this frame with the one that
+			// woke it.
 		}
 	}
 }
@@ -275,9 +349,9 @@ func (h *hub) broadcastLocked(e event) {
 func (h *hub) closeAll() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for ch := range h.subscribers {
-		delete(h.subscribers, ch)
-		close(ch)
+	for sub := range h.subscribers {
+		delete(h.subscribers, sub)
+		close(sub.wake)
 	}
 }
 
@@ -294,7 +368,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stream, release := s.events.subscribe()
+	sub, release := s.events.subscribe()
 	defer release()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -305,9 +379,13 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	// Say where this stream starts. A board that reconnected after missing a
-	// change refetches on this rather than trusting what it already had.
-	writeEvent(w, flusher, event{name: "tasks", data: s.events.current()})
+	// Say where this stream starts, on both counts. A board that reconnected
+	// after missing a change refetches on these rather than trusting what it
+	// already had — and the marker can have changed while it was away as
+	// easily as a task can.
+	tasks, cfg := s.events.current()
+	writeEvent(w, flusher, event{name: tasksEvent, data: tasks})
+	writeEvent(w, flusher, event{name: configEvent, data: cfg})
 
 	keepAlive := time.NewTicker(keepAliveInterval)
 	defer keepAlive.Stop()
@@ -318,11 +396,13 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			// The board went away. Returning releases the subscription and
 			// this goroutine with it.
 			return
-		case e, ok := <-stream:
+		case _, ok := <-sub.wake:
 			if !ok {
 				return // the hub is shutting down
 			}
-			writeEvent(w, flusher, e)
+			for _, e := range s.events.drain(sub) {
+				writeEvent(w, flusher, e)
+			}
 		case <-keepAlive.C:
 			// A named event rather than an SSE comment. A comment keeps the
 			// connection alive but EventSource discards it without dispatching

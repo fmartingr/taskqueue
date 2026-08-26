@@ -1,11 +1,14 @@
 /**
  * The board's live connection to the server.
  *
- * `GET /api/events` is a server-sent event stream: the server watches the task
- * directory on a ticker and says when something moved, and the board refetches.
- * That is the whole protocol — the frames carry a fingerprint, never tasks — so
- * there is one serialization path (the REST endpoint) rather than two that can
- * drift apart.
+ * `GET /api/events` is a server-sent event stream: the server reads the task
+ * directory and the project marker on a ticker and says when either moved, and
+ * the board refetches. That is the whole protocol — the frames carry a
+ * fingerprint, never tasks and never configuration — so there is one
+ * serialization path (the REST endpoints) rather than two that can drift apart.
+ *
+ * The frame's *name* is the one thing it does say: `tasks` and `config` send
+ * the board to different endpoints, so they cannot be the same signal.
  *
  * The poll in state.ts stays as the fallback for when this is unavailable, so
  * the board is never silently stale.
@@ -38,6 +41,14 @@ export const SILENCE_TIMEOUT_MS = 65_000;
 export interface StreamHandlers {
   /** Something in the task directory moved; refetch. */
   onTasks(): void;
+  /**
+   * `.taskqueue.yaml` moved; refetch the configuration (TQ-0034).
+   *
+   * Its own signal rather than a second reason to call onTasks, because it
+   * sends the board to a different endpoint: the labels, the columns and the
+   * priorities are what changed, and the listing may well be identical.
+   */
+  onConfig(): void;
   /** The server could not read the queue, and says why. */
   onScanFailed(message: string): void;
   /** The stream is up, or has gone down and is being retried. */
@@ -90,6 +101,11 @@ export function connectEvents(handlers: StreamHandlers, url = "/api/events"): ()
     source.addEventListener("tasks", () => {
       heard();
       handlers.onTasks();
+    });
+
+    source.addEventListener("config", () => {
+      heard();
+      handlers.onConfig();
     });
 
     source.addEventListener("scan-failed", (message) => {

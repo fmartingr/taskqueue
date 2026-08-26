@@ -5492,6 +5492,10 @@ function connectEvents(handlers, url = "/api/events") {
       heard();
       handlers.onTasks();
     });
+    source.addEventListener("config", () => {
+      heard();
+      handlers.onConfig();
+    });
     source.addEventListener("scan-failed", (message) => {
       heard();
       handlers.onScanFailed(message.data);
@@ -5740,17 +5744,36 @@ async function loadServerStatus() {
     console.error("status failed", error);
   }
 }
+var lastConfig = "";
+var lastConfigError = "";
 async function loadProjectConfig() {
+  let config;
   try {
-    const config = await fetchConfig();
-    labels.value = config.labels ?? {};
-    if (config.priorities?.length)
-      priorities.value = config.priorities;
-    if (config.columns?.length)
-      columns.value = config.columns;
+    config = await fetchConfig();
   } catch (error) {
-    console.error("config failed", error);
+    const message = describe(error);
+    if (message !== lastConfigError) {
+      lastConfigError = message;
+      toast(`Could not read the project configuration: ${message}`);
+    }
+    return false;
   }
+  lastConfigError = "";
+  const payload = JSON.stringify(config);
+  if (payload === lastConfig)
+    return false;
+  lastConfig = payload;
+  labels.value = config.labels ?? {};
+  if (config.priorities?.length)
+    priorities.value = config.priorities;
+  if (config.columns?.length)
+    columns.value = config.columns;
+  return true;
+}
+async function applySignals(signals) {
+  const changed = signals.config ? await loadProjectConfig() : false;
+  if (signals.tasks || changed)
+    await refreshQuietly();
 }
 async function start() {
   await Promise.all([loadServerStatus(), loadProjectConfig()]);
@@ -5765,18 +5788,25 @@ async function start() {
       return;
     if (streaming.value === true && !stale.value)
       return;
-    refreshQuietly();
+    applySignals({ tasks: true, config: true });
   }, POLL_INTERVAL_MS);
 }
-var queued = false;
+var queued = { tasks: false, config: false };
 function listen() {
   connectEvents({
     onTasks() {
       if (busy.value) {
-        queued = true;
+        queued.tasks = true;
         return;
       }
-      refreshQuietly();
+      applySignals({ tasks: true, config: false });
+    },
+    onConfig() {
+      if (busy.value) {
+        queued.config = true;
+        return;
+      }
+      applySignals({ tasks: false, config: true });
     },
     onScanFailed(message) {
       toast(`The server cannot read the queue: ${message}`);
@@ -5786,10 +5816,13 @@ function listen() {
     }
   });
   watch2(busy, (isBusy) => {
-    if (isBusy || !queued)
+    if (isBusy)
       return;
-    queued = false;
-    refreshQuietly();
+    const held = { ...queued };
+    queued.tasks = false;
+    queued.config = false;
+    if (held.tasks || held.config)
+      applySignals(held);
   });
 }
 

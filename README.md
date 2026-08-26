@@ -449,7 +449,7 @@ difference between an agent moving a task and a human dragging a card.
 | `PATCH` | `/api/tasks/{id}` | partial update; the drag-and-drop endpoint |
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
 | `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities", "columns"}` |
-| `GET` | `/api/events` | server-sent events; a `tasks` frame when the queue changes, `scan-failed` when it cannot be read |
+| `GET` | `/api/events` | server-sent events; a `tasks` frame when the queue changes, `config` when `.taskqueue.yaml` does, `scan-failed` when the queue cannot be read |
 | `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version"}` |
 | `GET` | `/api/version` | `{"version"}` |
 
@@ -461,7 +461,10 @@ Errors have a stable shape:
 
 with `400` for malformed or invalid requests (including a malformed task ID or
 an unparsable `ready` value), `404` for a well-formed ID that has no task, and
-`500` for filesystem or unreadable-task-file problems.
+`500` for filesystem problems, an unreadable task file, and a `.taskqueue.yaml`
+that will not parse (`invalid_config`) — a marker caught half-saved is a file on
+the server, not anything the request got wrong, and the board keeps the last
+configuration that worked rather than blanking its labels for it.
 
 One unreadable task file fails the whole listing rather than hiding a task: the
 board shows the error with the offending filename so it can be fixed.

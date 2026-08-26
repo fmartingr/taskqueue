@@ -6,8 +6,10 @@ priority: high
 labels:
   - bug
   - component/frontend
+depends_on:
+  - TQ-0076
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-26T10:31:16+02:00
 ---
 
 ## Finding
@@ -25,3 +27,9 @@ Open a card, type "deploy blocked on TQ-0009" into the note field and press Ente
 Handle Enter on the note input directly (add the note, prevent the implicit submit), or move the input out of the form element.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-26T10:31:16+02:00 — Blocked on TQ-0076 (migrate the board to Vue 3), which lists this bug in its acceptance criteria. The fix is a keydown handler on an input that TQ-0076 turns into a component, so doing it first is work that gets ported.

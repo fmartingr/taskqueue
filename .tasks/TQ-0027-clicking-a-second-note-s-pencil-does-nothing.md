@@ -6,8 +6,10 @@ priority: normal
 labels:
   - bug
   - component/frontend
+depends_on:
+  - TQ-0076
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-26T10:31:16+02:00
 ---
 
 ## Finding
@@ -25,3 +27,9 @@ VERIFIED with real mouse input in Chromium against a running `tq serve`: on a ta
 Commit the edit on mousedown, or re-render only the note that changed so the click target is not detached before mouseup.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-26T10:31:16+02:00 — Blocked on TQ-0076 (migrate the board to Vue 3), which lists this bug in its acceptance criteria and names it as a symptom of rebuilding the whole notes list by hand. TQ-0076 requires it fixed deliberately with a regression test, not assumed fixed because a keyed re-render no longer detaches the click target.

@@ -6,8 +6,10 @@ priority: high
 labels:
   - bug
   - component/frontend
+depends_on:
+  - TQ-0076
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-26T10:31:16+02:00
 ---
 
 ## Finding
@@ -25,3 +27,9 @@ User opens TQ-0007; state.openBody is frozen at app.ts:517 and the poll skips ev
 Re-read the task immediately before saving and merge: keep the server's notes, apply only the content and note edits the user actually made.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-26T10:31:16+02:00 — Blocked on TQ-0076 (migrate the board to Vue 3), which names this bug in its acceptance criteria: it must fix it deliberately, with a regression test, rather than assume a different re-render fixes it. The fix itself — re-read the task and merge before saving — is framework-independent, so of the three bugs TQ-0076 claims this is the one most worth fixing ahead of it if the migration stays in the backlog. It is silent data loss.

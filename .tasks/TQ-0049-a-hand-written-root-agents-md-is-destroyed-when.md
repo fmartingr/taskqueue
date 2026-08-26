@@ -1,14 +1,14 @@
 ---
 id: TQ-0049
 title: A hand-written root AGENTS.md is destroyed when the task dir is the repo root
-status: done
+status: rejected
 priority: normal
 labels:
   - bug
   - component/cli
   - wontfix
 created: 2026-08-25T14:08:39+02:00
-updated: 2026-08-25T16:26:46+02:00
+updated: 2026-08-26T16:29:20+02:00
 ---
 
 ## Finding
@@ -62,3 +62,4 @@ addressed only the convergence half. Found by verifying that ticket's fix.
 - 2026-08-25T16:26:46+02:00 — Rejected as a scope decision, not as unreproducible: it still reproduces on the current build, verified after TQ-0055.
 - 2026-08-25T16:26:46+02:00 — Reaching it requires pointing TQ_DIR at the repository root, which makes the root AGENTS.md the guide's own path by definition. That is a deliberate, unusual configuration, and the file tq overwrites is the one the user told it to write. Guarding it would mean tq inspecting a document again, which is exactly what TQ-0055 removed.
 - 2026-08-25T16:26:46+02:00 — Reopen if a real project hits this without setting TQ_DIR by hand.
+- 2026-08-26T16:29:20+02:00 — Moved from done to rejected. This was closed as wontfix — the work was declined, not completed — and until TQ-0035 the board had only a done column to close it into. Rejected is now that column, and deliberately does not satisfy dependencies: a task waiting on work nobody will do is still blocked, which done would have quietly said otherwise about.

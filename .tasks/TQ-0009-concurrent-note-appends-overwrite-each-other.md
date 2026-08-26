@@ -1,14 +1,14 @@
 ---
 id: TQ-0009
 title: Concurrent note appends overwrite each other
-status: done
+status: rejected
 priority: high
 labels:
   - bug
   - component/api
   - wontfix
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T18:42:18+02:00
+updated: 2026-08-26T16:29:20+02:00
 ---
 
 ## Finding
@@ -38,3 +38,4 @@ Filed from a `/code-review` pass at max effort.
 - 2026-08-25T18:42:18+02:00 — Reclassified as wontfix rather than done. No work was done for this ticket: the half that was fixable was already fixed under TQ-0067, and the half that remains — losing an appended note across processes — is not going to be fixed.
 - 2026-08-25T18:42:18+02:00 — Cross-process safety would need file locking, which contradicts the design this project states: Markdown files are the source of truth, every read hits the disk, and simultaneous edits are last-writer-wins by choice. The README says so, now with the measured numbers.
 - 2026-08-25T18:42:18+02:00 — Reopen if the same note loss is shown inside a single process, which is the part that carries a real guarantee.
+- 2026-08-26T16:29:20+02:00 — Moved from done to rejected. This was closed as wontfix — the work was declined, not completed — and until TQ-0035 the board had only a done column to close it into. Rejected is now that column, and deliberately does not satisfy dependencies: a task waiting on work nobody will do is still blocked, which done would have quietly said otherwise about.

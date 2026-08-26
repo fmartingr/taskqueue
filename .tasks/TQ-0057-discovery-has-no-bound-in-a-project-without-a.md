@@ -1,14 +1,14 @@
 ---
 id: TQ-0057
 title: Discovery has no bound in a project without a repository root
-status: done
+status: rejected
 priority: high
 labels:
   - bug
   - component/store
   - wontfix
 created: 2026-08-25T17:44:25+02:00
-updated: 2026-08-25T17:47:31+02:00
+updated: 2026-08-26T16:29:20+02:00
 ---
 
 ## Finding
@@ -47,3 +47,4 @@ Found by `/code-review` over 20b06d2; reproduced by hand.
 - 2026-08-25T17:47:31+02:00 — What remains is consistent behaviour, not a defect: tq add, tq list and tq init all walk up the same way and agree on the same task directory. A queue above your project capturing it is the documented walk-up working as described.
 - 2026-08-25T17:47:31+02:00 — Option B was the fix on offer and is the reason for rejecting: treating go.mod, package.json and similar as roots is guesswork about what a project is. It would make discovery depend on which marker files happen to exist, and would surprise people whose layouts do not match the list. .git is a boundary tq can be certain about.
 - 2026-08-25T17:47:31+02:00 — Reopen if the walk is shown to reach a task directory a user did not intend in a layout that has no .git and no reasonable marker.
+- 2026-08-26T16:29:20+02:00 — Moved from done to rejected. This was closed as wontfix — the work was declined, not completed — and until TQ-0035 the board had only a done column to close it into. Rejected is now that column, and deliberately does not satisfy dependencies: a task waiting on work nobody will do is still blocked, which done would have quietly said otherwise about.

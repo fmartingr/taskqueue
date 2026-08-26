@@ -34,7 +34,7 @@ func TestLabelSetDefaultsWhenTheKeyIsAbsent(t *testing.T) {
 // No config file at all is the same case: the defaults apply, and a nil
 // *Config is what FindConfig hands back for it.
 func TestLabelSetDefaultsWithoutAConfigFile(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.Root(t))
+	cfg, err := config.FindConfig(tqtest.RootWithGit(t))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}
@@ -217,7 +217,8 @@ func TestSortedLabelsOrdersByName(t *testing.T) {
 // The seeded block has to read back as what was seeded: it is written by hand
 // rather than marshalled, so nothing but a test keeps the two in step.
 func TestWriteConfigSeedsTheBaseSet(t *testing.T) {
-	root := tqtest.Root(t)
+	// WriteConfigIfMissing only writes where there is no marker.
+	root := tqtest.RootWithGit(t)
 	path, err := config.WriteConfigIfMissing(root, filepath.Join(root, config.TaskDirName))
 	if err != nil {
 		t.Fatalf("config.WriteConfigIfMissing: %v", err)

@@ -4,21 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"os"
 	"path/filepath"
 
 	"github.com/fmartingr/taskqueue/internal/config"
 	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
-
-// writeProjectConfig plants a hand-written marker, for the tests whose premise
-// is a project that declares something other than the defaults.
-func writeProjectConfig(t *testing.T, root, body string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, config.ConfigFileName), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
 
 // labelRow mirrors what `tq label list --json` prints, which is part of the
 // agent-facing contract.
@@ -145,7 +135,7 @@ func TestCLILabelListHumanOutput(t *testing.T) {
 // outside it stay usable.
 func TestCLILabelListReadsTheProjectsOwnSet(t *testing.T) {
 	tc := newBareCLI(t)
-	writeProjectConfig(t, tc.root, "version: 1\npath: "+config.TaskDirName+
+	tqtest.WriteConfig(t, tc.root, "version: 1\npath: "+config.TaskDirName+
 		"\nlabels:\n  spicy:\n    color: \"#ff0000\"\n    display_name: Spicy\n")
 	tc.mustRun("add", "Hot", "--label", "spicy", "--label", "bug")
 
@@ -232,11 +222,11 @@ func TestCLILabelListWorksWithoutAProject(t *testing.T) {
 // — which resolves from the store — draws it in its configured colour.
 func TestCLILabelListReadsTheConfigOfTheQueueItLists(t *testing.T) {
 	tc := newBareCLI(t)
-	writeProjectConfig(t, tc.root, "version: 1\npath: "+config.TaskDirName+
+	tqtest.WriteConfig(t, tc.root, "version: 1\npath: "+config.TaskDirName+
 		"\nlabels:\n  here:\n    color: \"#ff0000\"\n    display_name: Here\n")
 
 	elsewhere := tqtest.Root(t)
-	writeProjectConfig(t, elsewhere, "version: 1\npath: "+config.TaskDirName+
+	tqtest.WriteConfig(t, elsewhere, "version: 1\npath: "+config.TaskDirName+
 		"\nlabels:\n  there:\n    color: \"#00ff00\"\n    display_name: There\n")
 	t.Setenv(config.EnvTaskDir, filepath.Join(elsewhere, config.TaskDirName))
 	tc.mustRun("add", "Over there", "--label", "there")

@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"errors"
@@ -9,141 +9,70 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/fmartingr/taskqueue/internal/task"
-
 	"github.com/fmartingr/taskqueue/internal/config"
+	"github.com/fmartingr/taskqueue/internal/store"
+	"github.com/fmartingr/taskqueue/internal/task"
+	"github.com/fmartingr/taskqueue/internal/tqtest"
 )
 
-// TestMain clears the environment the whole suite runs under. TQ_DIR is the
-// documented way to point tq at a queue, so a developer may well have it
-// exported; without this every test would operate on their real one, and one
-// of them deletes the directory it is given.
-func TestMain(m *testing.M) {
-	isolate()
-	os.Exit(m.Run())
-}
-
-// testRoot returns a temp directory discovery cannot climb out of. t.TempDir()
-// alone is not a barrier: it honours TMPDIR, and the walk up looks for .git in
-// every parent, so with TMPDIR inside a repository the fixtures would bind to
-// that repository's queue.
-func testRoot(t *testing.T) string {
-	t.Helper()
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
-// writeConfig plants a project marker in dir and returns its path.
-func writeConfig(t *testing.T, dir, body string) string {
-	t.Helper()
-	path := filepath.Join(dir, config.ConfigFileName)
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-// isolate removes the configuration that could send a test outside its own
-// temp directory. Individual tests still set these with t.Setenv when that is
-// what they are testing.
-func isolate() {
-	for _, name := range []string{config.EnvTaskDir, config.EnvWalkForever} {
-		_ = os.Unsetenv(name)
-	}
-}
-
-// testRoot returns a temp directory that discovery cannot climb out of.
-// testRoot(t) alone is not an isolation barrier: it honours TMPDIR, and the
-// walk up looks for .git and .tasks in every parent, so with TMPDIR inside a
-// repository the fixtures would bind to that repository's committed queue.
-
-// newTestStore returns a store backed by a fresh .tasks directory.
-func newTestStore(t *testing.T) *Store {
-	t.Helper()
-	// Belt and braces: TestMain cleared the ambient values, this clears
-	// anything a test set before reaching for a fixture.
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := testRoot(t)
-	store, err := InitStore(root)
-	if err != nil {
-		t.Fatalf("InitStore: %v", err)
-	}
-	return store
-}
-
-func mustCreate(t *testing.T, s *Store, in CreateTaskInput) task.Task {
-	t.Helper()
-	tk, err := s.Create(in)
-	if err != nil {
-		t.Fatalf("Create(%q): %v", in.Title, err)
-	}
-	return tk
-}
-
 func TestInitStore(t *testing.T) {
-	root := testRoot(t)
-	store, err := InitStore(root)
+	root := tqtest.Root(t)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	if want := filepath.Join(root, config.TaskDirName); store.Dir != want {
-		t.Errorf("Dir = %q, want %q", store.Dir, want)
+	if want := filepath.Join(root, config.TaskDirName); st.Dir != want {
+		t.Errorf("Dir = %q, want %q", st.Dir, want)
 	}
-	if info, err := os.Stat(store.Dir); err != nil || !info.IsDir() {
+	if info, err := os.Stat(st.Dir); err != nil || !info.IsDir() {
 		t.Fatalf("task directory not created: %v", err)
 	}
-	if !store.Created {
+	if !st.Created {
 		t.Error("Created should be true the first time")
 	}
 
 	// Initialising again is harmless and reports that nothing was created.
-	again, err := InitStore(root)
+	again, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("second InitStore: %v", err)
 	}
-	if again.Dir != store.Dir || again.Created {
+	if again.Dir != st.Dir || again.Created {
 		t.Errorf("second InitStore = %+v, want the same directory with Created=false", again)
 	}
 }
 
 func TestOpenStoreCreatesTaskDirOnDemand(t *testing.T) {
-	root := testRoot(t)
+	root := tqtest.Root(t)
 
-	store, err := OpenStore(root)
+	st, err := store.OpenStore(root)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	if want := filepath.Join(root, config.TaskDirName); store.Dir != want {
-		t.Errorf("Dir = %q, want %q", store.Dir, want)
+	if want := filepath.Join(root, config.TaskDirName); st.Dir != want {
+		t.Errorf("Dir = %q, want %q", st.Dir, want)
 	}
-	if !store.Created {
+	if !st.Created {
 		t.Error("Created should report that OpenStore made the directory")
 	}
-	if info, err := os.Stat(store.Dir); err != nil || !info.IsDir() {
+	if info, err := os.Stat(st.Dir); err != nil || !info.IsDir() {
 		t.Fatalf("task directory not created: %v", err)
 	}
 
 	// Opening it again finds the existing directory instead of recreating it.
-	again, err := OpenStore(root)
+	again, err := store.OpenStore(root)
 	if err != nil {
 		t.Fatalf("second OpenStore: %v", err)
 	}
-	if again.Dir != store.Dir || again.Created {
+	if again.Dir != st.Dir || again.Created {
 		t.Errorf("second OpenStore = %+v, want the same directory with Created=false", again)
 	}
 }
 
 func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
-	root := testRoot(t)
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// The repository bound is the thing under test, so the fixture is anchored
+	// by .git and carries no marker: with one, the marker would decide and the
+	// fallback below it would never run.
+	root := tqtest.RootWithGit(t)
 	nested := filepath.Join(root, "src", "deep")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
@@ -151,12 +80,12 @@ func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
 
 	// A new task directory belongs next to .git, not in whichever
 	// subdirectory the agent happened to be standing in.
-	store, err := OpenStore(nested)
+	st, err := store.OpenStore(nested)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	if want := filepath.Join(root, config.TaskDirName); store.Dir != want {
-		t.Errorf("Dir = %q, want %q", store.Dir, want)
+	if want := filepath.Join(root, config.TaskDirName); st.Dir != want {
+		t.Errorf("Dir = %q, want %q", st.Dir, want)
 	}
 	if _, err := os.Stat(filepath.Join(nested, config.TaskDirName)); err == nil {
 		t.Errorf("no %s should have been created in the subdirectory", config.TaskDirName)
@@ -164,29 +93,30 @@ func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
 }
 
 func TestOpenStoreReportsUncreatableDir(t *testing.T) {
-	root := testRoot(t)
+	root := tqtest.Root(t)
 	file := filepath.Join(root, "not-a-directory")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// The root is anchored, so creation would otherwise fall back to it:
-	// make that unwritable too, leaving nothing creatable to report on.
-	if err := os.Chmod(root, 0o555); err != nil {
+	// The root is anchored, so creation falls back to the place its marker
+	// names: put a regular file there too. A permission bit would not do —
+	// uid 0 ignores it, and CI runs as root in a container — but no privilege
+	// makes a directory out of a file.
+	if err := os.WriteFile(filepath.Join(root, config.TaskDirName), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
 
 	// Nothing can be created below a regular file, so this is still "no usable
 	// task directory" rather than a filesystem error nobody can act on.
-	_, err := OpenStore(filepath.Join(file, "sub"))
-	if !errors.Is(err, ErrProjectNotFound) {
+	_, err := store.OpenStore(filepath.Join(file, "sub"))
+	if !errors.Is(err, store.ErrProjectNotFound) {
 		t.Errorf("err = %v, want ErrProjectNotFound", err)
 	}
 }
 
 func TestCreateWritesMarkdownFile(t *testing.T) {
-	store := newTestStore(t)
-	tk := mustCreate(t, store, CreateTaskInput{
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{
 		Title:    "Implement REST API",
 		Priority: task.PriorityHigh,
 		Labels:   []string{"backend"},
@@ -204,7 +134,7 @@ func TestCreateWritesMarkdownFile(t *testing.T) {
 	}
 
 	// The filename carries a slug of the title so the directory is browsable.
-	data, err := os.ReadFile(filepath.Join(store.Dir, "TQ-0001-implement-rest-api.md"))
+	data, err := os.ReadFile(filepath.Join(st.Dir, "TQ-0001-implement-rest-api.md"))
 	if err != nil {
 		t.Fatalf("read task file: %v", err)
 	}
@@ -217,35 +147,35 @@ func TestCreateWritesMarkdownFile(t *testing.T) {
 }
 
 func TestCreateDefaultsPriorityToNormal(t *testing.T) {
-	store := newTestStore(t)
-	tk := mustCreate(t, store, CreateTaskInput{Title: "No priority given"})
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "No priority given"})
 	if tk.Priority != task.PriorityNormal {
 		t.Errorf("Priority = %q, want %q", tk.Priority, task.PriorityNormal)
 	}
 }
 
 func TestCreateRejectsInvalidInput(t *testing.T) {
-	store := newTestStore(t)
-	for _, in := range []CreateTaskInput{
+	st := tqtest.NewStore(t)
+	for _, in := range []store.CreateTaskInput{
 		{Title: ""},
 		{Title: "x", Priority: "whenever"},
 		{Title: "x", Status: "shipped"},
 		{Title: "x", DependsOn: []string{"nope"}},
 	} {
-		if _, err := store.Create(in); err == nil {
+		if _, err := st.Create(in); err == nil {
 			t.Errorf("Create(%+v) should have failed", in)
 		}
 	}
-	entries, _ := os.ReadDir(store.Dir)
+	entries, _ := os.ReadDir(st.Dir)
 	if len(entries) != 0 {
 		t.Errorf("no files should be written for invalid input, found %d", len(entries))
 	}
 }
 
 func TestNextIDIsSequential(t *testing.T) {
-	store := newTestStore(t)
+	st := tqtest.NewStore(t)
 	for _, want := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
-		got := mustCreate(t, store, CreateTaskInput{Title: "task"})
+		got := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "task"})
 		if got.ID != want {
 			t.Fatalf("ID = %q, want %q", got.ID, want)
 		}
@@ -253,10 +183,10 @@ func TestNextIDIsSequential(t *testing.T) {
 
 	// IDs continue past four digits without renumbering existing tasks, and the
 	// title suffix does not confuse the scan.
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-9999-nearly-out-of-digits.md"), []byte("---\nid: TQ-9999\ntitle: x\nstatus: todo\n---\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-9999-nearly-out-of-digits.md"), []byte("---\nid: TQ-9999\ntitle: x\nstatus: todo\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	next, err := store.NextID()
+	next, err := st.NextID()
 	if err != nil {
 		t.Fatalf("NextID: %v", err)
 	}
@@ -266,10 +196,10 @@ func TestNextIDIsSequential(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	store := newTestStore(t)
-	created := mustCreate(t, store, CreateTaskInput{Title: "Findable", Body: "Body text."})
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Findable", Body: "Body text."})
 
-	got, err := store.Get(created.ID)
+	got, err := st.Get(created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -277,20 +207,20 @@ func TestGet(t *testing.T) {
 		t.Errorf("Get returned %+v", got)
 	}
 
-	if _, err := store.Get("TQ-4242"); !errors.Is(err, ErrTaskNotFound) {
+	if _, err := st.Get("TQ-4242"); !errors.Is(err, store.ErrTaskNotFound) {
 		t.Errorf("Get(missing) = %v, want ErrTaskNotFound", err)
 	}
-	if _, err := store.Get("not-an-id"); err == nil {
+	if _, err := st.Get("not-an-id"); err == nil {
 		t.Error("Get should reject malformed IDs")
 	}
 }
 
 func TestListSortsAndReportsBadFiles(t *testing.T) {
-	store := newTestStore(t)
-	mustCreate(t, store, CreateTaskInput{Title: "first"})
-	second := mustCreate(t, store, CreateTaskInput{Title: "second", Priority: task.PriorityUrgent})
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
+	second := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "second", Priority: task.PriorityUrgent})
 
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -299,41 +229,41 @@ func TestListSortsAndReportsBadFiles(t *testing.T) {
 	}
 
 	// Files that are not tasks are ignored.
-	if err := os.WriteFile(filepath.Join(store.Dir, "README.md"), []byte("not a task"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(st.Dir, "README.md"), []byte("not a task"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if tasks, err = store.List(); err != nil || len(tasks) != 2 {
+	if tasks, err = st.List(); err != nil || len(tasks) != 2 {
 		t.Errorf("List() = %d tasks, %v; want 2 tasks and no error", len(tasks), err)
 	}
 
 	// A malformed task file is a hard error that names the file.
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0003.md"), []byte("no frontmatter here"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0003.md"), []byte("no frontmatter here"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.List()
+	_, err = st.List()
 	if err == nil || !strings.Contains(err.Error(), "TQ-0003.md") {
 		t.Errorf("List error = %v, want it to name TQ-0003.md", err)
 	}
 }
 
 func TestListRejectsIDFilenameMismatch(t *testing.T) {
-	store := newTestStore(t)
+	st := tqtest.NewStore(t)
 	content := "---\nid: TQ-0009\ntitle: mismatched\nstatus: todo\n---\n"
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0008.md"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0008.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.List(); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if _, err := st.List(); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Errorf("List error = %v, want a filename/id mismatch error", err)
 	}
 }
 
 func TestUpdateRewritesFileAtomically(t *testing.T) {
-	store := newTestStore(t)
-	created := mustCreate(t, store, CreateTaskInput{Title: "Original", Body: "Body."})
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Original", Body: "Body."})
 
 	created.Title = "Renamed"
 	created.Status = task.StatusInProgress
-	updated, err := store.Update(created)
+	updated, err := st.Update(created)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -341,7 +271,7 @@ func TestUpdateRewritesFileAtomically(t *testing.T) {
 		t.Error("Update should refresh the updated timestamp")
 	}
 
-	reloaded, err := store.Get(created.ID)
+	reloaded, err := st.Get(created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -351,7 +281,7 @@ func TestUpdateRewritesFileAtomically(t *testing.T) {
 
 	// The rewrite leaves exactly one valid file behind (no temp files, and no
 	// leftover from the old title).
-	entries, err := os.ReadDir(store.Dir)
+	entries, err := os.ReadDir(st.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,21 +304,21 @@ func TestTaskFileName(t *testing.T) {
 	}
 	for _, tc := range tests {
 		tk := task.Task{ID: "TQ-0001", Title: tc.title, Status: task.StatusTodo}
-		if got := TaskFileName(tk); got != tc.want {
+		if got := store.TaskFileName(tk); got != tc.want {
 			t.Errorf("TaskFileName(%q) = %q, want %q", tc.title, got, tc.want)
 		}
 	}
 }
 
 func TestGetFindsTasksWhateverTheSuffix(t *testing.T) {
-	store := newTestStore(t)
+	st := tqtest.NewStore(t)
 	// A file written before titles were part of the filename.
 	legacy := "---\nid: TQ-0001\ntitle: Written by an older version\nstatus: todo\n---\n\nBody.\n"
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0001.md"), []byte(legacy), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0001.md"), []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	tk, err := store.Get("TQ-0001")
+	tk, err := st.Get("TQ-0001")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -396,33 +326,33 @@ func TestGetFindsTasksWhateverTheSuffix(t *testing.T) {
 		t.Errorf("task = %+v", tk)
 	}
 
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil || len(tasks) != 1 {
 		t.Errorf("List() = %d tasks, %v; want 1", len(tasks), err)
 	}
 
 	// Touching it adopts the new naming.
-	if _, err := store.Update(tk); err != nil {
+	if _, err := st.Update(tk); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(store.Dir, "TQ-0001-written-by-an-older-version.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(st.Dir, "TQ-0001-written-by-an-older-version.md")); err != nil {
 		t.Errorf("update should have renamed the file: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(store.Dir, "TQ-0001.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(st.Dir, "TQ-0001.md")); err == nil {
 		t.Error("the old filename should be gone")
 	}
 }
 
 func TestUpdateKeepsTheFilenameWhenTheTitleIsUnchanged(t *testing.T) {
-	store := newTestStore(t)
-	tk := mustCreate(t, store, CreateTaskInput{Title: "Stable title"})
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Stable title"})
 
 	tk.Status = task.StatusInProgress
-	if _, err := store.Update(tk); err != nil {
+	if _, err := st.Update(tk); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	entries, err := os.ReadDir(store.Dir)
+	entries, err := os.ReadDir(st.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,19 +362,19 @@ func TestUpdateKeepsTheFilenameWhenTheTitleIsUnchanged(t *testing.T) {
 }
 
 func TestDuplicateFilesForOneIDAreRejected(t *testing.T) {
-	store := newTestStore(t)
-	tk := mustCreate(t, store, CreateTaskInput{Title: "Original"})
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Original"})
 
 	// A half-finished manual rename leaves two files claiming one ID.
 	rendered, err := task.RenderTask(tk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(store.Dir, "TQ-0001-copy.md"), rendered, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0001-copy.md"), rendered, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = store.Get("TQ-0001")
+	_, err = st.Get("TQ-0001")
 	if !errors.Is(err, task.ErrInvalidTaskFile) {
 		t.Errorf("Get = %v, want task.ErrInvalidTaskFile", err)
 	}
@@ -457,11 +387,11 @@ func TestDuplicateFilesForOneIDAreRejected(t *testing.T) {
 
 // Update normalizes an unknown status to the first column on write.
 func TestUpdateCorrectsAStatusTheBoardDoesNotHave(t *testing.T) {
-	store := newTestStore(t)
-	created := mustCreate(t, store, CreateTaskInput{Title: "Valid"})
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Valid"})
 	created.Status = "shipped"
 
-	written, err := store.Update(created)
+	written, err := st.Update(created)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -469,37 +399,37 @@ func TestUpdateCorrectsAStatusTheBoardDoesNotHave(t *testing.T) {
 		t.Errorf("Status = %q, want it corrected to the first column", written.Status)
 	}
 
-	reloaded, err := store.Get("TQ-0001")
+	reloaded, err := st.Get("TQ-0001")
 	if err != nil || reloaded.Status != task.StatusInbox {
 		t.Errorf("the correction should have reached the file, got %+v (%v)", reloaded, err)
 	}
 }
 
 func TestUpdateUnknownTask(t *testing.T) {
-	store := newTestStore(t)
+	st := tqtest.NewStore(t)
 	ghost := task.Task{ID: "TQ-0404", Title: "ghost", Status: task.StatusTodo}
-	if _, err := store.Update(ghost); !errors.Is(err, ErrTaskNotFound) {
+	if _, err := st.Update(ghost); !errors.Is(err, store.ErrTaskNotFound) {
 		t.Errorf("Update(missing) = %v, want ErrTaskNotFound", err)
 	}
 }
 
 func TestDelete(t *testing.T) {
-	store := newTestStore(t)
-	mustCreate(t, store, CreateTaskInput{Title: "Temporary"})
-	if err := store.Delete("TQ-0001"); err != nil {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Temporary"})
+	if err := st.Delete("TQ-0001"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := store.Get("TQ-0001"); !errors.Is(err, ErrTaskNotFound) {
+	if _, err := st.Get("TQ-0001"); !errors.Is(err, store.ErrTaskNotFound) {
 		t.Errorf("Get after Delete = %v, want ErrTaskNotFound", err)
 	}
-	if err := store.Delete("TQ-0001"); !errors.Is(err, ErrTaskNotFound) {
+	if err := st.Delete("TQ-0001"); !errors.Is(err, store.ErrTaskNotFound) {
 		t.Errorf("Delete(missing) = %v, want ErrTaskNotFound", err)
 	}
 }
 
 func TestDiscoverTaskDirWalksUp(t *testing.T) {
-	root := testRoot(t)
-	if _, err := InitStore(root); err != nil {
+	root := tqtest.Root(t)
+	if _, err := store.InitStore(root); err != nil {
 		t.Fatal(err)
 	}
 	nested := filepath.Join(root, "src", "deep")
@@ -507,7 +437,7 @@ func TestDiscoverTaskDirWalksUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, err := DiscoverTaskDir(nested)
+	dir, err := store.DiscoverTaskDir(nested)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
@@ -517,33 +447,34 @@ func TestDiscoverTaskDirWalksUp(t *testing.T) {
 }
 
 func TestDiscoverTaskDirNotFound(t *testing.T) {
-	_, err := DiscoverTaskDir(testRoot(t))
-	if !errors.Is(err, ErrProjectNotFound) {
+	// No marker: its absence is the case under test, so .git is the anchor.
+	_, err := store.DiscoverTaskDir(tqtest.RootWithGit(t))
+	if !errors.Is(err, store.ErrProjectNotFound) {
 		t.Errorf("err = %v, want ErrProjectNotFound", err)
 	}
 }
 
 func TestDiscoverTaskDirEnvOverride(t *testing.T) {
-	root := testRoot(t)
-	store, err := InitStore(root)
+	root := tqtest.Root(t)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	elsewhere := testRoot(t)
+	elsewhere := tqtest.Root(t)
 
-	t.Setenv(config.EnvTaskDir, store.Dir)
-	dir, err := DiscoverTaskDir(elsewhere)
+	t.Setenv(config.EnvTaskDir, st.Dir)
+	dir, err := store.DiscoverTaskDir(elsewhere)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
-	if dir != store.Dir {
-		t.Errorf("dir = %q, want the %s override %q", dir, config.EnvTaskDir, store.Dir)
+	if dir != st.Dir {
+		t.Errorf("dir = %q, want the %s override %q", dir, config.EnvTaskDir, st.Dir)
 	}
 
 	// A missing override is "not there yet", which is what lets OpenStore
 	// create it.
 	t.Setenv(config.EnvTaskDir, filepath.Join(elsewhere, "missing"))
-	if _, err := DiscoverTaskDir(elsewhere); !errors.Is(err, ErrProjectNotFound) {
+	if _, err := store.DiscoverTaskDir(elsewhere); !errors.Is(err, store.ErrProjectNotFound) {
 		t.Errorf("DiscoverTaskDir with a missing %s = %v, want ErrProjectNotFound", config.EnvTaskDir, err)
 	}
 }
@@ -552,16 +483,16 @@ func TestDiscoverTaskDirEnvOverride(t *testing.T) {
 // It reports whether the filesystem folded the two names into one entry, which
 // is what makes the alias dangerous: on a case-sensitive, byte-exact
 // filesystem they are simply two files and there is nothing to test.
-func aliasOnDisk(t *testing.T, store *Store, id, alias string) bool {
+func aliasOnDisk(t *testing.T, st *store.Store, id, alias string) bool {
 	t.Helper()
-	current, err := store.locate(id)
+	current, err := st.Locate(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(filepath.Join(store.Dir, current), filepath.Join(store.Dir, alias)); err != nil {
+	if err := os.Rename(filepath.Join(st.Dir, current), filepath.Join(st.Dir, alias)); err != nil {
 		t.Fatal(err)
 	}
-	aliased, err := store.locate(id)
+	aliased, err := st.Locate(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,21 +514,21 @@ func TestUpdateKeepsTheTaskWhenTheFilenameDiffersOnlySpelling(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := newTestStore(t)
-			tk := mustCreate(t, store, CreateTaskInput{Title: tt.title})
-			if got := TaskFileName(tk); got != tt.canonical {
+			st := tqtest.NewStore(t)
+			tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: tt.title})
+			if got := store.TaskFileName(tk); got != tt.canonical {
 				t.Fatalf("TaskFileName = %q, want %q", got, tt.canonical)
 			}
-			if !aliasOnDisk(t, store, tk.ID, tt.alias) {
+			if !aliasOnDisk(t, st, tk.ID, tt.alias) {
 				t.Skipf("this filesystem keeps %q and %q apart, so there is no alias to lose", tt.canonical, tt.alias)
 			}
 
 			tk.Status = task.StatusInProgress
-			if _, err := store.Update(tk); err != nil {
+			if _, err := st.Update(tk); err != nil {
 				t.Fatalf("Update: %v", err)
 			}
 
-			reloaded, err := store.Get(tk.ID)
+			reloaded, err := st.Get(tk.ID)
 			if err != nil {
 				t.Fatalf("the task should have survived the update: %v", err)
 			}
@@ -605,7 +536,7 @@ func TestUpdateKeepsTheTaskWhenTheFilenameDiffersOnlySpelling(t *testing.T) {
 				t.Errorf("Status = %q, want %q", reloaded.Status, task.StatusInProgress)
 			}
 			// The alias is a stale title suffix like any other: it converges.
-			entries, err := os.ReadDir(store.Dir)
+			entries, err := os.ReadDir(st.Dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -638,10 +569,10 @@ func TestRetireOldFile(t *testing.T) {
 	// The one entry both names resolve to on a folding filesystem, expressed
 	// so that every filesystem can run it: one entry, reached twice.
 	t.Run("a single entry is never removed", func(t *testing.T) {
-		dir := testRoot(t)
+		dir := tqtest.Root(t)
 		path := filepath.Join(dir, "task.md")
 		write(t, path)
-		if err := retireOldFile(path, path); err != nil {
+		if err := store.RetireOldFile(path, path); err != nil {
 			t.Fatalf("retireOldFile: %v", err)
 		}
 		if _, err := os.Lstat(path); err != nil {
@@ -653,13 +584,13 @@ func TestRetireOldFile(t *testing.T) {
 	// a no-op leaves both. That is the store's loud "claimed by 2 files"
 	// state, which is recoverable; deleting the task would not be.
 	t.Run("hard links keep the written task", func(t *testing.T) {
-		dir := testRoot(t)
+		dir := tqtest.Root(t)
 		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
 		write(t, newPath)
 		if err := os.Link(newPath, oldPath); err != nil {
 			t.Fatal(err)
 		}
-		if err := retireOldFile(oldPath, newPath); err != nil {
+		if err := store.RetireOldFile(oldPath, newPath); err != nil {
 			t.Fatalf("retireOldFile: %v", err)
 		}
 		if _, err := os.Lstat(newPath); err != nil {
@@ -668,11 +599,11 @@ func TestRetireOldFile(t *testing.T) {
 	})
 
 	t.Run("a genuinely different file is removed", func(t *testing.T) {
-		dir := testRoot(t)
+		dir := tqtest.Root(t)
 		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
 		write(t, oldPath)
 		write(t, newPath)
-		if err := retireOldFile(oldPath, newPath); err != nil {
+		if err := store.RetireOldFile(oldPath, newPath); err != nil {
 			t.Fatalf("retireOldFile: %v", err)
 		}
 		if _, err := os.Lstat(oldPath); !errors.Is(err, os.ErrNotExist) {
@@ -684,13 +615,13 @@ func TestRetireOldFile(t *testing.T) {
 	})
 
 	t.Run("a dangling symlink is unlinked", func(t *testing.T) {
-		dir := testRoot(t)
+		dir := tqtest.Root(t)
 		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
 		write(t, newPath)
 		if err := os.Symlink(filepath.Join(dir, "gone.md"), oldPath); err != nil {
 			t.Fatal(err)
 		}
-		if err := retireOldFile(oldPath, newPath); err != nil {
+		if err := store.RetireOldFile(oldPath, newPath); err != nil {
 			t.Fatalf("retireOldFile: %v", err)
 		}
 		// Left behind, it would be a second file claiming the same task ID.
@@ -700,10 +631,10 @@ func TestRetireOldFile(t *testing.T) {
 	})
 
 	t.Run("an already removed old file is not an error", func(t *testing.T) {
-		dir := testRoot(t)
+		dir := tqtest.Root(t)
 		newPath := filepath.Join(dir, "new.md")
 		write(t, newPath)
-		if err := retireOldFile(filepath.Join(dir, "old.md"), newPath); err != nil {
+		if err := store.RetireOldFile(filepath.Join(dir, "old.md"), newPath); err != nil {
 			t.Errorf("retireOldFile: %v", err)
 		}
 	})
@@ -712,8 +643,8 @@ func TestRetireOldFile(t *testing.T) {
 // A queue above a project must not capture it: a developer who once ran tq in
 // their home directory would otherwise have every new repository file into it.
 func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
-	outer := testRoot(t)
-	if _, err := InitStore(outer); err != nil {
+	outer := tqtest.Root(t)
+	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(outer, "project")
@@ -721,8 +652,8 @@ func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := DiscoverTaskDir(repo)
-	if !errors.Is(err, ErrProjectNotFound) {
+	_, err := store.DiscoverTaskDir(repo)
+	if !errors.Is(err, store.ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound rather than the queue above the repository", err)
 	}
 	// The message has to explain itself: the queue is plainly there, one level
@@ -735,8 +666,8 @@ func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
 }
 
 func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
-	outer := testRoot(t)
-	if _, err := InitStore(outer); err != nil {
+	outer := tqtest.Root(t)
+	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(outer, "project")
@@ -745,7 +676,7 @@ func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
 	}
 	t.Setenv(config.EnvWalkForever, "true")
 
-	dir, err := DiscoverTaskDir(repo)
+	dir, err := store.DiscoverTaskDir(repo)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
@@ -756,8 +687,8 @@ func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
 
 // Only "true" lifts the bound; anything else leaves the default in place.
 func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
-	outer := testRoot(t)
-	if _, err := InitStore(outer); err != nil {
+	outer := tqtest.Root(t)
+	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(outer, "project")
@@ -766,7 +697,7 @@ func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
 	}
 	t.Setenv(config.EnvWalkForever, "1")
 
-	if _, err := DiscoverTaskDir(repo); !errors.Is(err, ErrProjectNotFound) {
+	if _, err := store.DiscoverTaskDir(repo); !errors.Is(err, store.ErrProjectNotFound) {
 		t.Errorf("err = %v, want the bound to hold for a value other than \"true\"", err)
 	}
 }
@@ -774,11 +705,10 @@ func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
 // The bound is the repository root, not the starting directory: a queue at the
 // root is still found from a subdirectory of the same repository.
 func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
-	repo := testRoot(t)
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InitStore(repo); err != nil {
+	// The repository is the bound under test, so it is what anchors the
+	// fixture; InitStore leaves the marker behind on its own.
+	repo := tqtest.RootWithGit(t)
+	if _, err := store.InitStore(repo); err != nil {
 		t.Fatal(err)
 	}
 	nested := filepath.Join(repo, "src", "deep")
@@ -786,7 +716,7 @@ func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, err := DiscoverTaskDir(nested)
+	dir, err := store.DiscoverTaskDir(nested)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
@@ -799,17 +729,17 @@ func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
 // them to use — must still get an isolated suite. Without this the whole suite
 // operates on their real queue, and one test deletes it.
 func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
-	outside := filepath.Join(testRoot(t), "real", config.TaskDirName)
+	outside := filepath.Join(tqtest.Root(t), "real", config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(config.EnvTaskDir, outside)
 
-	store := newTestStore(t)
-	if store.Dir == outside {
-		t.Fatalf("newTestStore used the ambient %s: %s", config.EnvTaskDir, store.Dir)
+	st := tqtest.NewStore(t)
+	if st.Dir == outside {
+		t.Fatalf("the fixture used the ambient %s: %s", config.EnvTaskDir, st.Dir)
 	}
-	mustCreate(t, store, CreateTaskInput{Title: "fixture task"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "fixture task"})
 
 	entries, err := os.ReadDir(outside)
 	if err != nil {
@@ -821,28 +751,47 @@ func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 }
 
 // The same for the walk-forever escape hatch: an exported value must not let a
-// fixture climb out of its own temp directory. Asserted on the environment
-// rather than on a walk, because there is nowhere above testRoot(t) a test can
-// safely plant a queue to walk into.
+// fixture climb out of its own temp directory. The assertion is on where the
+// store landed, not on the variables — clearing them is one way to get there,
+// and the tasks are what actually has to stay inside the fixture.
 func TestFixturesNeutraliseAmbientConfiguration(t *testing.T) {
-	t.Setenv(config.EnvTaskDir, "/somewhere/real/.tasks")
+	// A real project, above the fixture, for the ambient configuration to
+	// point at. It lives in the test's own temp space: naming an absolute
+	// path like /somewhere/real/.tasks would have a suite running as uid 0
+	// create it.
+	above := tqtest.AboveFixtures(t)
+	outside := filepath.Join(above, config.TaskDirName)
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tqtest.WriteConfig(t, above, "version: 1\npath: "+config.TaskDirName+"\n")
+
+	// TQ_DIR names it outright, and walk-forever lifts the bound that would
+	// otherwise stop the search short of it.
+	t.Setenv(config.EnvTaskDir, outside)
 	t.Setenv(config.EnvWalkForever, "true")
 
-	newTestStore(t)
+	st := tqtest.NewStore(t)
+	if st.Dir == outside {
+		t.Fatalf("the fixture bound to the queue above it: %s", st.Dir)
+	}
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "fixture task"})
 
-	for _, name := range []string{config.EnvTaskDir, config.EnvWalkForever} {
-		if got := os.Getenv(name); got != "" {
-			t.Errorf("%s = %q after newTestStore, want it cleared", name, got)
-		}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the fixture wrote into the queue above it: %d entries", len(entries))
 	}
 }
 
-// testRoot(t) is not an isolation barrier: it honours TMPDIR, and discovery
+// t.TempDir() is not an isolation barrier: it honours TMPDIR, and discovery
 // walks up out of it. With TMPDIR inside a git repository — normal in Nix,
 // Bazel and containerised CI — the fixtures would otherwise bind to that
 // repository's committed queue and write into it.
 func TestFixturesStayInsideTempDirWhenTMPDIRIsInARepository(t *testing.T) {
-	// Not testRoot(t): it fixes its base directory on first use, so calling
+	// Not t.TempDir(): it fixes its base directory on first use, so calling
 	// it here would pin the base before TMPDIR changes and the fixture
 	// would never see the repository.
 	repo, mkErr := os.MkdirTemp("", "tq-tmpdir-repo-*")
@@ -863,11 +812,11 @@ func TestFixturesStayInsideTempDirWhenTMPDIRIsInARepository(t *testing.T) {
 	}
 	t.Setenv("TMPDIR", tmp)
 
-	store := newTestStore(t)
-	if store.Dir == real {
-		t.Fatalf("the fixture bound to the enclosing repository's queue: %s", store.Dir)
+	st := tqtest.NewStore(t)
+	if st.Dir == real {
+		t.Fatalf("the fixture bound to the enclosing repository's queue: %s", st.Dir)
 	}
-	mustCreate(t, store, CreateTaskInput{Title: "fixture task"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "fixture task"})
 
 	entries, err := os.ReadDir(real)
 	if err != nil {
@@ -883,7 +832,7 @@ func TestFixturesStayInsideTempDirWhenTMPDIRIsInARepository(t *testing.T) {
 // racer the same number, and a task that shares its ID with another is
 // unreachable: locate refuses to guess between them.
 func TestCreateUnderConcurrencyGivesEveryTaskItsOwnID(t *testing.T) {
-	store := newTestStore(t)
+	st := tqtest.NewStore(t)
 
 	const racers = 20
 	var wg sync.WaitGroup
@@ -894,7 +843,7 @@ func TestCreateUnderConcurrencyGivesEveryTaskItsOwnID(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tk, err := store.Create(CreateTaskInput{Title: fmt.Sprintf("task %d", i)})
+			tk, err := st.Create(store.CreateTaskInput{Title: fmt.Sprintf("task %d", i)})
 			ids[i], errs[i] = tk.ID, err
 		}()
 	}
@@ -913,12 +862,12 @@ func TestCreateUnderConcurrencyGivesEveryTaskItsOwnID(t *testing.T) {
 
 	// Every task must still be reachable by its ID.
 	for _, id := range ids {
-		if _, err := store.Get(id); err != nil {
+		if _, err := st.Get(id); err != nil {
 			t.Errorf("Get(%s): %v", id, err)
 		}
 	}
 
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -930,7 +879,7 @@ func TestCreateUnderConcurrencyGivesEveryTaskItsOwnID(t *testing.T) {
 // Racers sharing a title used to produce the same filename, so the second
 // rename replaced the first and a task vanished behind a successful return.
 func TestCreateUnderConcurrencyKeepsTasksWithTheSameTitle(t *testing.T) {
-	store := newTestStore(t)
+	st := tqtest.NewStore(t)
 
 	const racers = 10
 	var wg sync.WaitGroup
@@ -938,14 +887,14 @@ func TestCreateUnderConcurrencyKeepsTasksWithTheSameTitle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := store.Create(CreateTaskInput{Title: "same title"}); err != nil {
+			if _, err := st.Create(store.CreateTaskInput{Title: "same title"}); err != nil {
 				t.Errorf("Create: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -957,8 +906,8 @@ func TestCreateUnderConcurrencyKeepsTasksWithTheSameTitle(t *testing.T) {
 // A note is an append, so a lost one is information nobody can reconstruct.
 // Two agents working the same task is what the queue exists for.
 func TestNoteUnderConcurrencyKeepsEveryNote(t *testing.T) {
-	store := newTestStore(t)
-	tk := mustCreate(t, store, CreateTaskInput{Title: "probe"})
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "probe"})
 
 	const notes = 10
 	var wg sync.WaitGroup
@@ -966,14 +915,14 @@ func TestNoteUnderConcurrencyKeepsEveryNote(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := store.Note(tk.ID, fmt.Sprintf("note %d", i)); err != nil {
+			if _, err := st.Note(tk.ID, fmt.Sprintf("note %d", i)); err != nil {
 				t.Errorf("Note: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	after, err := store.Get(tk.ID)
+	after, err := st.Get(tk.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -986,8 +935,8 @@ func TestNoteUnderConcurrencyKeepsEveryNote(t *testing.T) {
 
 // --add-label is an append too, so concurrent patches must not lose one.
 func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
-	store := newTestStore(t)
-	tk := mustCreate(t, store, CreateTaskInput{Title: "probe"})
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "probe"})
 
 	const labels = 10
 	var wg sync.WaitGroup
@@ -995,14 +944,14 @@ func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := store.Patch(tk.ID, task.TaskPatch{AddLabels: []string{fmt.Sprintf("label-%d", i)}}); err != nil {
+			if _, err := st.Patch(tk.ID, task.TaskPatch{AddLabels: []string{fmt.Sprintf("label-%d", i)}}); err != nil {
 				t.Errorf("Patch: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	after, err := store.Get(tk.ID)
+	after, err := st.Get(tk.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1014,8 +963,8 @@ func TestPatchUnderConcurrencyKeepsEveryLabel(t *testing.T) {
 // The config is the marker discovery looks for: its path decides where the
 // tasks live, from anywhere in the project.
 func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
-	root := testRoot(t)
-	writeConfig(t, root, "version: 1\npath: docs/queue\n")
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
 	want := filepath.Join(root, "docs", "queue")
 	if err := os.MkdirAll(want, 0o755); err != nil {
 		t.Fatal(err)
@@ -1025,7 +974,7 @@ func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, err := DiscoverTaskDir(nested)
+	dir, err := store.DiscoverTaskDir(nested)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
@@ -1037,29 +986,29 @@ func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
 // A config naming a directory that does not exist yet is not an error: the
 // queue is created where it says.
 func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
-	root := testRoot(t)
-	writeConfig(t, root, "version: 1\npath: docs/queue\n")
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
 
-	store, err := InitStore(filepath.Join(root, "src"))
+	st, err := store.InitStore(filepath.Join(root, "src"))
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	if want := filepath.Join(root, "docs", "queue"); store.Dir != want {
-		t.Errorf("Dir = %q, want %q", store.Dir, want)
+	if want := filepath.Join(root, "docs", "queue"); st.Dir != want {
+		t.Errorf("Dir = %q, want %q", st.Dir, want)
 	}
 }
 
 // TQ_DIR is the task directory, full stop — the config's path is ignored.
 func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
-	root := testRoot(t)
-	writeConfig(t, root, "version: 1\npath: from-config\n")
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: from-config\n")
 	override := filepath.Join(root, "from-env")
 	if err := os.MkdirAll(override, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(config.EnvTaskDir, override)
 
-	dir, err := DiscoverTaskDir(root)
+	dir, err := store.DiscoverTaskDir(root)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
@@ -1072,13 +1021,14 @@ func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
 // called .tasks, with no marker above it, is somebody else's business — the
 // guessing it would take to claim it is what the marker replaces.
 func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
-	root := testRoot(t)
+	// A marker of its own is exactly what this root must not have.
+	root := tqtest.RootWithGit(t)
 	if err := os.MkdirAll(filepath.Join(root, config.TaskDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := DiscoverTaskDir(root)
-	if !errors.Is(err, ErrProjectNotFound) {
+	_, err := store.DiscoverTaskDir(root)
+	if !errors.Is(err, store.ErrProjectNotFound) {
 		t.Errorf("err = %v, want ErrProjectNotFound", err)
 	}
 	if err != nil && !strings.Contains(err.Error(), config.ConfigFileName) {
@@ -1089,14 +1039,14 @@ func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
 // A broken config must not read as "no task directory": the caller has to know
 // their file is wrong, not have a queue created somewhere else.
 func TestDiscoverTaskDirReportsABrokenConfig(t *testing.T) {
-	root := testRoot(t)
-	writeConfig(t, root, "version: 99\n")
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 99\n")
 
-	_, err := DiscoverTaskDir(root)
+	_, err := store.DiscoverTaskDir(root)
 	if !errors.Is(err, config.ErrConfig) {
 		t.Errorf("err = %v, want it to wrap config.ErrConfig", err)
 	}
-	if errors.Is(err, ErrProjectNotFound) {
+	if errors.Is(err, store.ErrProjectNotFound) {
 		t.Errorf("err = %v, must not be reported as a missing task directory", err)
 	}
 }
@@ -1104,9 +1054,11 @@ func TestDiscoverTaskDirReportsABrokenConfig(t *testing.T) {
 // Creating a queue leaves the marker behind, so the next command finds it by
 // the file rather than by guessing at directory names.
 func TestInitStoreWritesTheConfigMarker(t *testing.T) {
-	root := testRoot(t)
+	// The marker InitStore writes is the subject, so the fixture must not
+	// already have one.
+	root := tqtest.RootWithGit(t)
 
-	store, err := InitStore(root)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
@@ -1117,8 +1069,8 @@ func TestInitStoreWritesTheConfigMarker(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("no config written")
 	}
-	if cfg.TaskDir() != store.Dir {
-		t.Errorf("config points at %q, want the created %q", cfg.TaskDir(), store.Dir)
+	if cfg.TaskDir() != st.Dir {
+		t.Errorf("config points at %q, want the created %q", cfg.TaskDir(), st.Dir)
 	}
 	if cfg.Version != config.ConfigVersion {
 		t.Errorf("Version = %d, want %d", cfg.Version, config.ConfigVersion)
@@ -1127,11 +1079,11 @@ func TestInitStoreWritesTheConfigMarker(t *testing.T) {
 
 // The config is the user's file, not a generated one.
 func TestInitStoreLeavesAnExistingConfigAlone(t *testing.T) {
-	root := testRoot(t)
+	root := tqtest.Root(t)
 	body := "version: 1\npath: mine\n# hand written\n"
-	path := writeConfig(t, root, body)
+	path := tqtest.WriteConfig(t, root, body)
 
-	if _, err := InitStore(root); err != nil {
+	if _, err := store.InitStore(root); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
 	after, err := os.ReadFile(path)
@@ -1158,32 +1110,30 @@ priorities:
 `
 
 // storeWithPriorities returns a store whose project declares p0..p2.
-func storeWithPriorities(t *testing.T) *Store {
+func storeWithPriorities(t *testing.T) *store.Store {
 	t.Helper()
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := testRoot(t)
-	writeConfig(t, root, customPriorities)
-	store, err := InitStore(root)
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, customPriorities)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	return store
+	return st
 }
 
 func TestCreateUsesTheConfiguredDefault(t *testing.T) {
-	store := storeWithPriorities(t)
+	st := storeWithPriorities(t)
 
-	tk := mustCreate(t, store, CreateTaskInput{Title: "Defaulted"})
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Defaulted"})
 	if tk.Priority != "p2" {
 		t.Errorf("Priority = %q, want p2 (the entry marked default)", tk.Priority)
 	}
 }
 
 func TestCreateRejectsAPriorityOutsideTheVocabulary(t *testing.T) {
-	store := storeWithPriorities(t)
+	st := storeWithPriorities(t)
 
-	_, err := store.Create(CreateTaskInput{Title: "Nope", Priority: task.PriorityUrgent})
+	_, err := st.Create(store.CreateTaskInput{Title: "Nope", Priority: task.PriorityUrgent})
 	if err == nil {
 		t.Fatal("Create() = nil, want an error: urgent is not in this project's set")
 	}
@@ -1193,12 +1143,12 @@ func TestCreateRejectsAPriorityOutsideTheVocabulary(t *testing.T) {
 }
 
 func TestListSortsByTheConfiguredRank(t *testing.T) {
-	store := storeWithPriorities(t)
-	mustCreate(t, store, CreateTaskInput{Title: "middle", Priority: "p1"})
-	mustCreate(t, store, CreateTaskInput{Title: "least", Priority: "p2"})
-	mustCreate(t, store, CreateTaskInput{Title: "most", Priority: "p0"})
+	st := storeWithPriorities(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "middle", Priority: "p1"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "least", Priority: "p2"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "most", Priority: "p0"})
 
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1215,20 +1165,18 @@ func TestListSortsByTheConfiguredRank(t *testing.T) {
 // value they carry, still list, and sort last — and, crucially, can still be
 // moved and closed: refusing the write would freeze every one of them.
 func TestATaskKeepsAPriorityTheProjectHasDropped(t *testing.T) {
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := testRoot(t)
-	store, err := InitStore(root)
+	root := tqtest.Root(t)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	stale := mustCreate(t, store, CreateTaskInput{Title: "Filed earlier", Priority: task.PriorityUrgent})
-	fresh := mustCreate(t, store, CreateTaskInput{Title: "Filed after", Priority: task.PriorityLow})
+	stale := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed earlier", Priority: task.PriorityUrgent})
+	fresh := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed after", Priority: task.PriorityLow})
 
 	// The vocabulary changes out from under both of them.
-	writeConfig(t, root, customPriorities)
+	tqtest.WriteConfig(t, root, customPriorities)
 
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil {
 		t.Fatalf("List after the vocabulary changed: %v", err)
 	}
@@ -1241,24 +1189,24 @@ func TestATaskKeepsAPriorityTheProjectHasDropped(t *testing.T) {
 
 	// Moving it does not touch the priority, so it must not be refused.
 	stale.Status = task.StatusDone
-	if _, err := store.Update(stale); err != nil {
+	if _, err := st.Update(stale); err != nil {
 		t.Errorf("Update() on a task under a dropped priority = %v, want it to save", err)
 	}
 	// Nor does a patch that leaves the priority alone.
-	if _, err := store.Patch(fresh.ID, task.TaskPatch{Title: ptr("Retitled")}); err != nil {
+	if _, err := st.Patch(fresh.ID, task.TaskPatch{Title: ptr("Retitled")}); err != nil {
 		t.Errorf("Patch() on a task under a dropped priority = %v, want it to save", err)
 	}
 	// Restating the value a task already carries changes nothing, so it is not
 	// refused. The board's dialog sends every field at once, so this is exactly
 	// what saving such a task looks like on the wire.
-	if _, err := store.Patch(fresh.ID, task.TaskPatch{Priority: ptr(task.PriorityLow), Title: ptr("Same priority")}); err != nil {
+	if _, err := st.Patch(fresh.ID, task.TaskPatch{Priority: ptr(task.PriorityLow), Title: ptr("Same priority")}); err != nil {
 		t.Errorf("Patch() restating a dropped priority = %v, want it accepted", err)
 	}
 	// Filing one under it afresh is the mistake worth naming.
-	if _, err := store.Patch(fresh.ID, task.TaskPatch{Priority: ptr(task.PriorityUrgent)}); err == nil {
+	if _, err := st.Patch(fresh.ID, task.TaskPatch{Priority: ptr(task.PriorityUrgent)}); err == nil {
 		t.Error("Patch(priority: urgent) = nil, want it refused")
 	}
-	if _, err := store.Patch(fresh.ID, task.TaskPatch{Priority: ptr("p0")}); err != nil {
+	if _, err := st.Patch(fresh.ID, task.TaskPatch{Priority: ptr("p0")}); err != nil {
 		t.Errorf("Patch(priority: p0) = %v, want it accepted", err)
 	}
 }
@@ -1281,30 +1229,28 @@ columns:
     consider_done: true
 `
 
-func storeWithBoard(t *testing.T) *Store {
+func storeWithBoard(t *testing.T) *store.Store {
 	t.Helper()
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := testRoot(t)
-	writeConfig(t, root, customBoard)
-	store, err := InitStore(root)
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, customBoard)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	return store
+	return st
 }
 
 func TestCreateUsesTheBoardsDefaultColumn(t *testing.T) {
-	store := storeWithBoard(t)
-	tk := mustCreate(t, store, CreateTaskInput{Title: "Filed with no column"})
+	st := storeWithBoard(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed with no column"})
 	if tk.Status != "doing" {
 		t.Errorf("Status = %q, want the column marked default", tk.Status)
 	}
 }
 
 func TestCreateRejectsAStatusTheBoardHasNoColumnFor(t *testing.T) {
-	store := storeWithBoard(t)
-	_, err := store.Create(CreateTaskInput{Title: "Nope", Status: task.StatusTodo})
+	st := storeWithBoard(t)
+	_, err := st.Create(store.CreateTaskInput{Title: "Nope", Status: task.StatusTodo})
 	if err == nil {
 		t.Fatal("Create() = nil, want todo refused on a board that has no todo")
 	}
@@ -1314,12 +1260,12 @@ func TestCreateRejectsAStatusTheBoardHasNoColumnFor(t *testing.T) {
 }
 
 func TestListSortsByTheBoardOrder(t *testing.T) {
-	store := storeWithBoard(t)
-	mustCreate(t, store, CreateTaskInput{Title: "last", Status: "shipped"})
-	mustCreate(t, store, CreateTaskInput{Title: "first", Status: "spotted"})
-	mustCreate(t, store, CreateTaskInput{Title: "middle", Status: "doing"})
+	st := storeWithBoard(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "last", Status: "shipped"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first", Status: "spotted"})
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "middle", Status: "doing"})
 
-	tasks, err := store.List()
+	tasks, err := st.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1334,18 +1280,16 @@ func TestListSortsByTheBoardOrder(t *testing.T) {
 
 // Removed columns normalize on read; the file updates on the next write.
 func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing.T) {
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := testRoot(t)
-	store, err := InitStore(root)
+	root := tqtest.Root(t)
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	stranded := mustCreate(t, store, CreateTaskInput{Title: "Filed before the board changed", Status: task.StatusDone})
+	stranded := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed before the board changed", Status: task.StatusDone})
 
-	writeConfig(t, root, customBoard)
+	tqtest.WriteConfig(t, root, customBoard)
 
-	listed, err := store.List()
+	listed, err := st.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1353,7 +1297,7 @@ func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing
 		t.Fatalf("List() = %+v, want the task shown in the first column", listed)
 	}
 
-	onDisk, err := os.ReadFile(filepath.Join(store.Dir, TaskFileName(stranded)))
+	onDisk, err := os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(stranded)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1361,10 +1305,10 @@ func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing
 		t.Errorf("a listing rewrote the file; it should still say %q", task.StatusDone)
 	}
 
-	if _, err := store.Note(stranded.ID, "something unrelated"); err != nil {
+	if _, err := st.Note(stranded.ID, "something unrelated"); err != nil {
 		t.Fatalf("Note: %v", err)
 	}
-	onDisk, err = os.ReadFile(filepath.Join(store.Dir, TaskFileName(stranded)))
+	onDisk, err = os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(stranded)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1375,13 +1319,13 @@ func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing
 
 // backlog resolves to inbox via the built-in alias.
 func TestBacklogStillReadsAsInbox(t *testing.T) {
-	store := newTestStore(t)
-	created := mustCreate(t, store, CreateTaskInput{Title: "Filed under the old name", Status: task.StatusBacklog})
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed under the old name", Status: task.StatusBacklog})
 	if created.Status != task.StatusInbox {
 		t.Errorf("Create(backlog) stored %q, want it resolved to inbox", created.Status)
 	}
 
-	got, err := store.Get(created.ID)
+	got, err := st.Get(created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

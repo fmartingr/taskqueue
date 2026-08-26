@@ -120,7 +120,8 @@ func TestConfigFingerprintMovesForAFileItCannotParse(t *testing.T) {
 
 // The absence of a marker is a state too: writing one is worth pushing.
 func TestConfigFingerprintDistinguishesNoMarkerAtAll(t *testing.T) {
-	root := tqtest.Root(t)
+	// Starting without a marker is the premise, so .git anchors this one.
+	root := tqtest.RootWithGit(t)
 	taskDir := filepath.Join(root, ".tasks")
 	if err := os.MkdirAll(taskDir, 0o755); err != nil {
 		t.Fatal(err)

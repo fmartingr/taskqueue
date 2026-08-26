@@ -45,7 +45,7 @@ func TestPrioritySetDefaultsWhenTheKeyIsAbsent(t *testing.T) {
 
 // No config file at all is the same case, and a nil *Config answers it.
 func TestPrioritySetDefaultsWithoutAConfigFile(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.Root(t))
+	cfg, err := config.FindConfig(tqtest.RootWithGit(t))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}
@@ -138,7 +138,8 @@ func TestPriorityConfigErrors(t *testing.T) {
 // The marker a first command writes carries the vocabulary, so a project that
 // never runs `tq init` still has one to edit rather than an invisible default.
 func TestWriteConfigSeedsThePriorities(t *testing.T) {
-	root := tqtest.Root(t)
+	// WriteConfigIfMissing only writes where there is no marker.
+	root := tqtest.RootWithGit(t)
 	if _, err := config.WriteConfigIfMissing(root, root+"/.tasks"); err != nil {
 		t.Fatalf("WriteConfigIfMissing: %v", err)
 	}

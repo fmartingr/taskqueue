@@ -67,35 +67,22 @@ func (b *syncBuffer) Reset() {
 	b.buf.Reset()
 }
 
-// newTestCLI returns a CLI rooted in a temporary project that already has a
-// task directory.
-// requireNoQueueAbove skips a test whose premise is that nothing was excluded,
+// requireNoQueueAbove fails a test whose premise is that nothing was excluded
 // when the machine it runs on says otherwise: TMPDIR may sit inside a project
-// that has its own queue, and the notice under test would then be correct.
+// that has its own queue, and the notice under test would then be correct. It
+// asks the store the same question the CLI asks rather than walking the tree
+// itself, so it cannot drift from the bound and the variables the real answer
+// takes into account — and it fails rather than skipping, because a skip that
+// only shows under -v is how this stops being noticed.
 func requireNoQueueAbove(t *testing.T, dir string) {
 	t.Helper()
-	for cur := filepath.Dir(dir); ; {
-		if info, err := os.Stat(filepath.Join(cur, config.TaskDirName)); err == nil && info.IsDir() {
-			t.Skipf("%s sits above the fixture, so a notice about it is correct", filepath.Join(cur, config.TaskDirName))
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return
-		}
-		cur = parent
+	if shadowed, ok := store.ShadowedTaskDir(dir); ok {
+		t.Fatalf("%s sits above the fixture, so the notice this test says must not appear is correct", shadowed)
 	}
 }
 
-// anchorProject marks a directory as a repository root, so task directory
-// discovery stops there. Without it a fixture walks out of tqtest.Root(t) and can
-// reach — and write into — a developer's own queue (TQ-0053).
-func anchorProject(t *testing.T, dir string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
+// newTestCLI returns a CLI rooted in a temporary project that already has a
+// task directory.
 func newTestCLI(t *testing.T) *testCLI {
 	t.Helper()
 	tc := newBareCLI(t)
@@ -106,20 +93,31 @@ func newTestCLI(t *testing.T) *testCLI {
 	return tc
 }
 
-// newBareCLI returns a CLI rooted in a temporary directory with no project.
+// newBareCLI returns a CLI rooted in a fixture directory that is not a project
+// yet — the shape `tq init` is meant to turn into one. Its anchor is .git and
+// not the marker, because an absent marker is the premise: the repository bound
+// is then the only thing that can stop the walk climbing out of the temp
+// directory and into a developer's own queue (TQ-0053).
 func newBareCLI(t *testing.T) *testCLI {
 	t.Helper()
-	// Same isolation the store fixtures take: never reach a real queue.
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := tqtest.Root(t)
+	return newCLIIn(t, tqtest.RootWithGit(t))
+}
+
+// newCLIIn returns a CLI running in dir. It is the only place a testCLI is
+// built: a test that assembled its own would skip the isolation here, and the
+// fixture guards below would have nothing to fail on.
+func newCLIIn(t *testing.T, dir string) *testCLI {
+	t.Helper()
+	// The CLI fixtures build their own store, so they take the same isolation
+	// the store fixtures do: never reach a real queue.
+	tqtest.ClearEnv(t)
 	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	return &testCLI{
-		cli:    &cli{stdout: stdout, stderr: stderr, dir: root, version: testVersion},
+		cli:    &cli{stdout: stdout, stderr: stderr, dir: dir, version: testVersion},
 		t:      t,
 		stdout: stdout,
 		stderr: stderr,
-		root:   root,
+		root:   dir,
 	}
 }
 
@@ -571,13 +569,14 @@ func TestCLIReportsUncreatableTaskDir(t *testing.T) {
 	}
 	tc.dir = filepath.Join(file, "sub")
 
-	// Fixtures are anchored, so creation now falls back to the repository
-	// root: make that unwritable too, or there is nothing uncreatable left to
-	// report. Restored before t.TempDir's own cleanup, which runs after this.
-	if err := os.Chmod(tc.root, 0o555); err != nil {
+	// Fixtures are anchored, so creation falls back to the repository root:
+	// put a regular file where the task directory would go, or there is
+	// nothing uncreatable left to report. A permission bit would not do —
+	// uid 0 ignores it, and CI runs as root in a container — but no privilege
+	// makes a directory out of a file.
+	if err := os.WriteFile(filepath.Join(tc.root, config.TaskDirName), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(tc.root, 0o755) })
 
 	for _, args := range [][]string{{"list"}, {"add", "x"}, {"ready"}} {
 		if code := tc.run(args...); code != exitProjectNotFound {
@@ -671,11 +670,10 @@ func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, stderr := &syncBuffer{}, &syncBuffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: repo}
+	tc := newCLIIn(t, repo)
 	tc.mustRun("list")
 
-	notice := stderr.String()
+	notice := tc.stderr.String()
 	for _, want := range []string{filepath.Join(outer, config.TaskDirName), config.EnvWalkForever} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("stderr = %q, want it to mention %q", notice, want)
@@ -695,36 +693,35 @@ func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
 }
 
 // The reason this fix was reverted once: with init discovering, an unanchored
-// fixture walks out of tqtest.Root(t). TQ-0017's bound does not help here, since
-// a bare temp directory has no repository root to stop at, so the fixtures
-// carry their own anchor.
+// fixture walks out of its temp directory. TQ-0017's bound does not help there,
+// since a bare temp directory has no repository root to stop at, so the fixture
+// carries its own anchor. This drives the shared fixture rather than building
+// one: give newBareCLI a bare t.TempDir() back and this is what fails.
 func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
-	outer := tqtest.Root(t)
-	if _, err := store.InitStore(outer); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadDir(filepath.Join(outer, config.TaskDirName))
-	if err != nil {
-		t.Fatal(err)
-	}
+	tc := newBareCLI(t)
 
-	project := filepath.Join(outer, "project")
-	if err := os.MkdirAll(project, 0o755); err != nil {
+	// A real project one level above the fixture root — exactly where a walk
+	// that escaped the fixture would arrive, and where a developer's own queue
+	// sits when TMPDIR is inside their repository.
+	above := tqtest.AboveFixtures(t)
+	outside := filepath.Join(above, config.TaskDirName)
+	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr := &syncBuffer{}, &syncBuffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: project, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: project}
-	anchorProject(t, project)
+	tqtest.WriteConfig(t, above, "version: 1\npath: "+config.TaskDirName+"\n")
 
 	tc.mustRun("init")
 	tc.mustRun("add", "fixture task")
 
-	after, err := os.ReadDir(filepath.Join(outer, config.TaskDirName))
+	entries, err := os.ReadDir(outside)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after) != len(before) {
-		t.Errorf("the fixture wrote into the queue above it: %d entries, was %d", len(after), len(before))
+	if len(entries) != 0 {
+		t.Errorf("the fixture wrote into the queue above it: %d entries", len(entries))
+	}
+	if _, err := os.Stat(filepath.Join(tc.root, config.TaskDirName)); err != nil {
+		t.Errorf("the fixture should have made its own queue instead: %v", err)
 	}
 }
 
@@ -734,8 +731,9 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 // stops at it and init lands in the right place by accident. The enclosing
 // temp directory carries the .git anchor so the walk cannot escape it.
 func TestCLIInitFindsTheQueueAbove(t *testing.T) {
-	outer := tqtest.Root(t)
-	anchorProject(t, outer)
+	// The enclosing repository is the bound the walk has to stop at, and it
+	// must carry no marker of its own: the project below is what owns one.
+	outer := tqtest.RootWithGit(t)
 
 	project := filepath.Join(outer, "project")
 	nested := filepath.Join(project, "backend")
@@ -753,12 +751,9 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seedOut, seedErr := &syncBuffer{}, &syncBuffer{}
-	seed := &testCLI{cli: &cli{stdout: seedOut, stderr: seedErr, dir: project, version: testVersion}, t: t, stdout: seedOut, stderr: seedErr, root: project}
-	seed.mustRun("add", "existing work")
+	newCLIIn(t, project).mustRun("add", "existing work")
 
-	stdout, stderr := &syncBuffer{}, &syncBuffer{}
-	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: nested, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: nested}
+	sub := newCLIIn(t, nested)
 
 	var out struct {
 		TaskDir string `json:"task_dir"`
@@ -795,8 +790,7 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr := &syncBuffer{}, &syncBuffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: repo}
+	tc := newCLIIn(t, repo)
 
 	var out struct {
 		TaskDir string `json:"task_dir"`
@@ -834,21 +828,14 @@ func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 }
 
 // tq init must not write a guide into a task directory belonging to another
-// project. The fixture is deliberately unanchored, because a project with no
-// repository root is the shape where discovery has no bound; a queue at the
-// temp root stops the walk inside the fixture, so nothing escapes it.
+// project. The fixture has no repository root, which is the shape where
+// discovery has no bound; its marker is what stops the walk, and the queue that
+// marker names is the one the guide must be kept out of.
 func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
-	t.Setenv(config.EnvTaskDir, "")
-	t.Setenv(config.EnvWalkForever, "")
-	root := t.TempDir()
+	root := tqtest.Root(t)
 
 	outside := filepath.Join(root, config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// With a marker above it, the deep directory discovers this queue — which
-	// is the situation the guide must not be written into.
-	if err := os.WriteFile(filepath.Join(root, config.ConfigFileName), []byte("version: 1\npath: "+config.TaskDirName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	deep := filepath.Join(root, "projects", "foo")
@@ -856,18 +843,17 @@ func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, stderr := &syncBuffer{}, &syncBuffer{}
-	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: deep}
+	tc := newCLIIn(t, deep)
 	tc.mustRun("init")
 
 	if _, err := os.Stat(filepath.Join(outside, guide.AgentsFileName)); !os.IsNotExist(err) {
 		t.Errorf("init wrote a guide into %s, which belongs to another project", outside)
 	}
-	if strings.Contains(stdout.String(), "Wrote ") {
-		t.Errorf("init reported a write it must not make: %q", stdout)
+	if strings.Contains(tc.stdout.String(), "Wrote ") {
+		t.Errorf("init reported a write it must not make: %q", tc.stdout)
 	}
-	if !strings.Contains(stderr.String(), outside) {
-		t.Errorf("stderr should say which directory was left alone, got %q", stderr)
+	if !strings.Contains(tc.stderr.String(), outside) {
+		t.Errorf("stderr should say which directory was left alone, got %q", tc.stderr)
 	}
 }
 
@@ -887,9 +873,7 @@ func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
 	if err := os.Remove(guide); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr := &syncBuffer{}, &syncBuffer{}
-	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: tc.root}
-	sub.mustRun("init")
+	newCLIIn(t, deep).mustRun("init")
 
 	if _, err := os.Stat(guide); err != nil {
 		t.Errorf("init inside the repository should still write the guide: %v", err)

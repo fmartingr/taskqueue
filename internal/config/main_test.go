@@ -11,3 +11,5 @@ func TestMain(m *testing.M) {
 	tqtest.Isolate()
 	os.Exit(m.Run())
 }
+
+func TestTheSuiteIsIsolated(t *testing.T) { tqtest.RequireIsolated(t) }

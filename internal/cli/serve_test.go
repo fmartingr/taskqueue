@@ -67,7 +67,9 @@ func TestServeDefaultsPrecedence(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tc := tc
-			root := tqtest.Root(t)
+			// A case with no config needs a root that genuinely has no
+			// marker, and .git is then the only thing that anchors it.
+			root := tqtest.RootWithGit(t)
 			if tc.config != "" {
 				tqtest.WriteConfig(t, root, tc.config)
 			}

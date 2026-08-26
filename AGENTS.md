@@ -127,15 +127,28 @@ frontend`, `make typecheck` or `make dev` will run.
 
 ## Testing
 
-`go test ./...` covers frontmatter parsing/rendering, the store (with
-`t.TempDir()`), dependency/ready logic, the CLI (through `runCLI`, without
-spawning a binary) and the HTTP API (through `httptest`). Frontend logic that is
-pure — the notes split/join/merge in `frontend/notes.ts`, and the indexing,
-dependency and filter rules in `frontend/board.ts` — has `bun test` unit tests
-next to it (`make test-frontend`). Those two files know nothing about Vue, which
+`go test ./...` covers frontmatter parsing/rendering, the store, dependency/ready
+logic, the CLI (through `runCLI`, without spawning a binary) and the HTTP API
+(through `httptest`). Frontend logic that is pure — the notes split/join/merge in
+`frontend/notes.ts`, and the indexing, dependency and filter rules in
+`frontend/board.ts` — has `bun test` unit tests next to it
+(`make test-frontend`). Those two files know nothing about Vue, which
 is what keeps the components down to rendering and events; `board.ts`'s
 `isReady` is checked against the same cases as `task.IsReady`, since the two are
 separate implementations of one rule.
+
+A bare `t.TempDir()` is not an isolation barrier: discovery walks up out of it,
+and `TQ_DIR` in a developer's shell points the whole suite at their real queue
+(TQ-0021, TQ-0053, TQ-0063). So every test package that can reach the store has a
+`TestMain` calling `tqtest.Isolate` and a `TestTheSuiteIsIsolated` calling
+`tqtest.RequireIsolated`, which fails if that call is ever dropped. Fixtures come
+from `internal/tqtest` and nowhere else: `Root` for a root anchored by the
+project marker, `RootWithGit` for the tests whose premise is a directory that is
+*not* a project yet — an absent marker leaves the repository bound as the only
+anchor — and `NewStore`, `MustCreate`, `WriteConfig`, `AboveFixtures` above them.
+`internal/store`'s tests are in the external `store_test` package for this
+reason: `tqtest` imports the store, so an in-package test file cannot import the
+fixtures. `export_test.go` is the two unexported names those tests still need.
 
 `make typecheck` is the gate `bun build` is not: the bundler strips types
 without checking them, so nothing else would catch a frontend regression before

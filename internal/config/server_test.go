@@ -10,7 +10,7 @@ import (
 )
 
 func TestServerBindIsAbsentWithoutAConfigFile(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.Root(t))
+	cfg, err := config.FindConfig(tqtest.RootWithGit(t))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}

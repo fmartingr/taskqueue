@@ -1,7 +1,7 @@
 ---
 id: TQ-0019
 title: Enter in the note field saves the dialog instead of adding the note
-status: todo
+status: done
 priority: high
 labels:
   - bug
@@ -9,7 +9,7 @@ labels:
 depends_on:
   - TQ-0076
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-26T10:31:16+02:00
+updated: 2026-08-26T13:13:15+02:00
 ---
 
 ## Finding
@@ -33,3 +33,8 @@ Filed from a `/code-review` pass at max effort.
 ## Notes
 
 - 2026-08-26T10:31:16+02:00 — Blocked on TQ-0076 (migrate the board to Vue 3), which lists this bug in its acceptance criteria. The fix is a keydown handler on an input that TQ-0076 turns into a component, so doing it first is work that gets ported.
+- 2026-08-26T13:13:15+02:00 — Fixed by TQ-0076's migration. The note field handles Enter itself and never lets it reach the form, so it appends instead of submitting.
+
+  Covered by browser/regressions.test.ts, verified by reverting the handler. The review added the other direction too — a test that Enter in the title field still saves — because a form-level handler would have passed the original test while quietly killing implicit submit everywhere else in the dialog.
+
+  Written as an explicit handler rather than Vue's .enter.exact modifier: .exact also swallows Ctrl/Alt/Meta+Enter, which the old board treated as an ordinary Enter.

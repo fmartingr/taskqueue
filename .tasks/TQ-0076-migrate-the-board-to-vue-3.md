@@ -1,13 +1,13 @@
 ---
 id: TQ-0076
 title: Migrate the board to Vue 3
-status: in-progress
+status: done
 priority: normal
 labels:
   - refactor
   - component/frontend
 created: 2026-08-26T08:14:45+02:00
-updated: 2026-08-26T11:54:31+02:00
+updated: 2026-08-26T13:13:31+02:00
 ---
 
 ## Where the frontend is today
@@ -217,3 +217,16 @@ three bugs its acceptance criteria claim.
   is the only one of the three still ahead, and its ordering is genuinely open —
   it is deliberately not blocked on this ticket, since most of it is config, store
   and CLI rather than board.
+- 2026-08-26T13:13:31+02:00 — Done. app.ts is gone; the board is 13 single-file components over frontend/state.ts, with board.ts and notes.ts unchanged, framework-free and still the safety net.
+
+  Numbers worth correcting in this ticket's own record: public/app.js is 217 KB, not the 156 KB the Settled section projected. That figure came from a two-component prototype, and the claim that 'application code is rounding error against the Vue floor' did not survive a real 13-component app. Every criterion still holds — unminified, three feature flags applied and folded, deterministic, staleness gate clean — but nobody should treat 156 KB as a budget.
+
+  One decision taken during the work that was not in the Settled list: a fourth define, process.env.NODE_ENV = production. Without it Bun bundles Vue's development runtime — component warnings, prop validators — into the release binary at 274 KB. Documented in build.ts.
+
+  Five parallel reviews ran at the end. Security found nothing and confirmed the migration removes the codebase's last innerHTML. Architecture found no rule violation and verified the flags are folded rather than merely passed. The correctness review found one real regression against the old board, fixed in the follow-up commit: filing a card closed a composer opened in another column, because the shared composing ref was written unconditionally after an await. Its unmount blur then filed the partial text, which at typing speed is a card titled 't'.
+
+  The most valuable finding was that three tests pinned less than they looked like. Mutation testing showed the append path to the TQ-0010 bug was unprotected, the pencil's keyboard half was unprotected, and matching notes on text alone passed every mergeNotes test because none of them reordered the file — the one property matching-by-content exists for. All now covered; the merge rule's real limit (two notes identical in both fields) is written down as a test.
+
+  Filed rather than fixed here: TQ-0079 (save still overwrites body content, predates this), TQ-0080 (CreateDialog, Toasts, filter-bar wiring and keyboard card-open are untested at any layer), TQ-0081 (a dialog reopened within a millisecond is swallowed, and a poll-gate guard), TQ-0082 (noUncheckedIndexedAccess).
+
+  TQ-0068, TQ-0069 and TQ-0070 are unblocked by this.

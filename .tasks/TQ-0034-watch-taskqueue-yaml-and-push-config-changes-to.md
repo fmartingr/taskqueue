@@ -11,7 +11,7 @@ depends_on:
   - TQ-0029
   - TQ-0033
 created: 2026-08-25T12:07:30+02:00
-updated: 2026-08-26T16:50:54+02:00
+updated: 2026-08-26T17:38:37+02:00
 ---
 
 ## Proposal
@@ -92,3 +92,18 @@ board refetches `GET /api/config` and re-renders chips, selects and filters.
   recolour and a new filter option, a column added, an unparsable file leaving the
   board on its last good configuration behind a toast, and reverting restoring it.
   Full suite green: go test, integration, frontend, browser (52), lint, build.
+- 2026-08-26T17:38:37+02:00 — Added the multi-board e2e test, and the harness primitive it needed.
+
+  Playwright will not make a second page in the context browser.newPage() creates
+  ('Please use browser.newContext()'), so the harness grew openBoard.another(board):
+  a second page on a project and server already running, with its own context. Its
+  afterEach now closes every page before cleaning any project, because two boards
+  can share one and stopping that server with the second page still open is the
+  thing that ordering exists to avoid.
+
+  The test opens two boards on one server, edits .taskqueue.yaml once, and waits on
+  both pages together — same one-poll-interval budget from the edit, so neither can
+  be the fallback catching up while the other is asserted.
+
+  Checked it can fail: with broadcastLocked mutated to tell only the first
+  subscriber, it failed three runs out of three. Full browser suite 53 pass.

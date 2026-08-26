@@ -126,6 +126,43 @@ test("a marker that will not parse leaves the board on its last good configurati
   );
 });
 
+// One scan on the server serves every connected board — that is what the event
+// stream bought over each browser polling for itself. Two pages, one edit, and
+// neither of them asked.
+test("one edit to the marker reaches every connected board", async () => {
+  let id = "";
+  const board = await openBoard((project) => {
+    setConfig(project, RED);
+    id = project.add("Carries a label", "--label", "bug");
+  });
+  const other = await openBoard.another(board);
+
+  const pages = [board.page, other.page];
+  for (const page of pages) {
+    expect(await chips(page, id)).toEqual([{ text: "Bug", background: "rgb(215, 58, 74)" }]);
+  }
+
+  setConfig(board.project, GREEN);
+
+  // Waited on together, not one after the other: each page has the same one
+  // poll interval from the edit to repaint in, so neither can be the fallback
+  // catching up while the other is being asserted.
+  await Promise.all(
+    pages.map((page) =>
+      page.waitForFunction(
+        (selector) => document.querySelector(selector)?.textContent?.trim() === "Defect",
+        `${card(id)} .label`,
+        BEFORE_A_POLL,
+      ),
+    ),
+  );
+
+  for (const page of pages) {
+    expect(await chips(page, id)).toEqual([{ text: "Defect", background: "rgb(14, 138, 22)" }]);
+    expect(await filterOptions(page)).toEqual(["", "bug", "chore"]);
+  }
+});
+
 test("reverting the marker restores the board with no reload", async () => {
   let id = "";
   const { page, project } = await openBoard((project) => {

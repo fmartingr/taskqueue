@@ -10,7 +10,7 @@
 
 import { expect, test } from "bun:test";
 import type { Page } from "playwright-core";
-import { POLL_INTERVAL_MS, card, cardIn, idsIn, useBoard } from "./harness";
+import { POLL_INTERVAL_MS, card, cardIn, idsIn, useBoard, type OpenBoard } from "./harness";
 
 const useBoardFor = useBoard();
 
@@ -22,7 +22,7 @@ const useBoardFor = useBoard();
  * keep passing if the poll were deleted, which is precisely the coverage the
  * fallback needs. The stream has its own tests in events.test.ts.
  */
-const openBoard: typeof useBoardFor = (seed) =>
+const openBoard: OpenBoard = (seed) =>
   useBoardFor(seed, async (page) => {
     await page.route("**/api/events", (route) => route.abort());
   });

@@ -332,7 +332,27 @@ export type Seed = (project: Project) => void;
  */
 export type BeforeLoad = (page: Page) => Promise<void>;
 
-export function useBoard(): (seed?: Seed, before?: BeforeLoad) => Promise<Board> {
+/** The call a test file makes to get a board of its own. */
+export type OpenBoard = (seed?: Seed, before?: BeforeLoad) => Promise<Board>;
+
+/**
+ * What useBoard hands back: the call above, plus `another` for the tests about
+ * a change reaching more than one board.
+ */
+export interface BoardOpener extends OpenBoard {
+  /**
+   * A second board on a server that is already running: same project, same
+   * server, its own page. It is what proves that one scan serves every
+   * connected board rather than each browser fetching for itself.
+   *
+   * Its own browser context, because Playwright will not make a second page in
+   * the one `browser.newPage()` created — and a context of its own is closer to
+   * two people looking at the same board anyway.
+   */
+  another(board: Board): Promise<Board>;
+}
+
+export function useBoard(): BoardOpener {
   setDefaultTimeout(TEST_TIMEOUT_MS);
 
   // One Chromium per test file, held in this closure rather than in a module
@@ -345,10 +365,14 @@ export function useBoard(): (seed?: Seed, before?: BeforeLoad) => Promise<Board>
   });
 
   afterEach(async () => {
-    // Pages go first, and they must: a page left open keeps polling a server
-    // that is about to stop existing, which is both noise and load on every
-    // test that follows.
-    for (const board of opened.splice(0)) {
+    const boards = opened.splice(0);
+
+    // Every page goes first, and they must: a page left open keeps polling a
+    // server that is about to stop existing, which is both noise and load on
+    // every test that follows. All of them before any project, because two
+    // boards can share one — stopping that server with the second page still
+    // open is the very thing this order exists to avoid.
+    for (const board of boards) {
       // One board failing to tear down must not strand the servers and temp
       // directories of the boards after it.
       try {
@@ -356,7 +380,10 @@ export function useBoard(): (seed?: Seed, before?: BeforeLoad) => Promise<Board>
       } catch {
         // The browser is already gone; the project still has to be cleaned up.
       }
-      await board.project.cleanup();
+    }
+
+    for (const project of new Set(boards.map((board) => board.project))) {
+      await project.cleanup();
     }
   });
 
@@ -365,15 +392,10 @@ export function useBoard(): (seed?: Seed, before?: BeforeLoad) => Promise<Board>
     browser = undefined;
   });
 
-  return async (seed?: Seed, before?: BeforeLoad): Promise<Board> => {
+  /** Points a fresh page at a running server and waits for it to render. */
+  const show = async (project: Project, server: Server, before?: BeforeLoad): Promise<Board> => {
     if (!browser) throw new Error("the board was opened outside a test");
 
-    const project = new Project();
-    // Seeding before the server starts means the first render already has the
-    // tasks, so no test has to wait a poll for its own fixtures.
-    seed?.(project);
-
-    const server = await project.serve();
     const page = await browser.newPage();
     const board = { project, server, page };
     opened.push(board);
@@ -385,6 +407,19 @@ export function useBoard(): (seed?: Seed, before?: BeforeLoad) => Promise<Board>
     await page.waitForSelector(".column", { timeout: READY_TIMEOUT_MS });
     return board;
   };
+
+  const open = async (seed?: Seed, before?: BeforeLoad): Promise<Board> => {
+    const project = new Project();
+    // Seeding before the server starts means the first render already has the
+    // tasks, so no test has to wait a poll for its own fixtures.
+    seed?.(project);
+
+    return show(project, await project.serve(), before);
+  };
+
+  return Object.assign(open, {
+    another: (board: Board) => show(board.project, board.server),
+  });
 }
 
 /** The card for a task, wherever it currently is. */

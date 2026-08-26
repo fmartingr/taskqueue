@@ -20,7 +20,14 @@ var ErrInvalidTaskFile = errors.New("invalid task file")
 // ParseTask reads one Markdown task file. The filename is only used to make
 // errors actionable; the authoritative ID lives in the frontmatter.
 func ParseTask(filename string, data []byte) (Task, error) {
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	// A UTF-8 byte-order mark is invisible in an editor and some of them write
+	// one, so a file that looks exactly right would be rejected for not
+	// starting with "---" — and the message would blame the delimiter that is
+	// plainly there. The mark carries no information here: the encoding is
+	// UTF-8 either way, and RenderTask never writes one, so the next save drops
+	// it for good.
+	text := strings.TrimPrefix(string(data), "\ufeff")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != fmDelimiter {

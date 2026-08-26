@@ -310,15 +310,42 @@ func (s *Store) Columns() (task.Columns, error) {
 	return cfg.Board(), nil
 }
 
+// UnreadableFile is a task file a scan had to skip, and why. The reason is the
+// error's message without the file name it already carried, because every
+// caller prints the name itself.
+type UnreadableFile struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
+}
+
+// Listing is what one scan of the task directory found: the tasks it could
+// read, in the default order, and the files it could not.
+//
+// The two travel together because a caller must be able to show both. A broken
+// file is a real problem — a merge conflict, a hand-edited key — and staying
+// quiet about it would trade one loud failure for a queue that is quietly a
+// task short.
+type Listing struct {
+	Tasks      []task.Task
+	Unreadable []UnreadableFile
+}
+
 // List returns every task in the directory in the default order: status,
 // priority, creation time, ID.
-func (s *Store) List() ([]task.Task, error) {
+//
+// A file that cannot be read is skipped and reported rather than failing the
+// scan: two agents each running `tq add` on their own branch is the ordinary
+// way a task file ends up with conflict markers in it, and one such file must
+// not hide every other task from both surfaces (TQ-0011). The error return is
+// for what makes the whole directory unreadable — the directory itself, or the
+// project config the order depends on.
+func (s *Store) List() (Listing, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
 
-	tasks := make([]task.Task, 0, len(entries))
+	listing := Listing{Tasks: make([]task.Task, 0, len(entries))}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -328,10 +355,20 @@ func (s *Store) List() ([]task.Task, error) {
 			continue
 		}
 		t, err := s.readFile(name)
-		if err != nil {
-			return nil, err
+		switch {
+		case errors.Is(err, ErrTaskNotFound):
+			// The file was there when the directory was read and is gone now,
+			// which is what a concurrent write looks like: update writes the
+			// new name and only then retires the old one, and delete unlinks.
+			// Nothing is broken, so there is nothing to report — reporting it
+			// would put a red toast on the board for an ordinary retitle.
+			// Whether the task itself was missed by this scan is TQ-0012.
+			continue
+		case err != nil:
+			listing.Unreadable = append(listing.Unreadable, UnreadableFile{File: name, Reason: skipReason(name, err)})
+			continue
 		}
-		tasks = append(tasks, t)
+		listing.Tasks = append(listing.Tasks, t)
 	}
 
 	// The ranking and the board are the project's, so sorting needs both. A
@@ -339,17 +376,32 @@ func (s *Store) List() ([]task.Task, error) {
 	// last, rather than being refused by the listing that would show it.
 	priorities, err := s.Priorities()
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
 	columns, err := s.Columns()
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
-	for i := range tasks {
-		tasks[i].Status = columns.Normalize(tasks[i].Status)
+	for i := range listing.Tasks {
+		listing.Tasks[i].Status = columns.Normalize(listing.Tasks[i].Status)
 	}
-	task.SortTasks(tasks, priorities, columns)
-	return tasks, nil
+	task.SortTasks(listing.Tasks, priorities, columns)
+	return listing, nil
+}
+
+// skipReason is why a file was skipped, with the file name taken off the front.
+// readFile's errors name the file — that is what makes them actionable on their
+// own — and the callers that render a skipped file put the name in a column or
+// a field of its own, where repeating it reads as a stutter.
+//
+// One line, too: the YAML decoder's errors run to several, and both callers put
+// this where a line is a unit — a warning on stderr, a toast on the board.
+func skipReason(name string, err error) string {
+	msg := err.Error()
+	if _, rest, found := strings.Cut(msg, name+": "); found {
+		msg = rest
+	}
+	return strings.Join(strings.Fields(msg), " ")
 }
 
 // Get returns a single task by ID, with its status resolved against the board:

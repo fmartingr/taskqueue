@@ -681,12 +681,28 @@ func (c *cli) st() (*store.Store, error) {
 	return st, nil
 }
 
+// tasks lists the queue and names on stderr every file the scan had to skip,
+// so a broken file is impossible to miss without it hiding the healthy tasks.
 func (c *cli) tasks() ([]task.Task, error) {
 	st, err := c.st()
 	if err != nil {
 		return nil, err
 	}
-	return st.List()
+	listing, err := st.List()
+	if err != nil {
+		return nil, err
+	}
+	c.warnUnreadable(listing.Unreadable)
+	return listing.Tasks, nil
+}
+
+// warnUnreadable reports the files a scan skipped. On stderr, always: the
+// listing itself is the answer a caller parses, and a warning on stdout would
+// break --json for the agents that read it.
+func (c *cli) warnUnreadable(files []store.UnreadableFile) {
+	for _, f := range files {
+		fmt.Fprintf(c.stderr, "warning: skipped %s: %s\n", f.File, f.Reason)
+	}
 }
 
 func (c *cli) flagSet(name string) *flag.FlagSet {

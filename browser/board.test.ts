@@ -5,6 +5,8 @@
  */
 
 import { expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { card, cardIn, idsIn, useBoard } from "./harness";
 
 const openBoard = useBoard();
@@ -200,4 +202,31 @@ test("a blocked card says what it is waiting for, in the board and the dialog", 
   await page.waitForSelector("#task-dialog[open]");
   expect(await page.textContent("#task-blocked")).toContain(blocker);
   expect(await page.inputValue("#task-depends-on")).toBe(blocker);
+});
+
+// One file nobody can parse used to empty the board: the listing failed, and
+// with it the status line. It now costs only itself, and the board is what says
+// so — the file is skipped on the server and named here (TQ-0011).
+test("a task file that will not parse leaves the rest of the board standing", async () => {
+  let healthy = "";
+  const { page, project } = await openBoard((p) => {
+    healthy = p.add("Still here");
+  });
+  await page.waitForSelector(cardIn("todo", healthy));
+
+  // What a merge conflict in a committed .tasks/ looks like on disk.
+  writeFileSync(
+    join(project.dir, ".tasks", "TQ-0002-conflicted.md"),
+    "<<<<<<< HEAD\n---\nid: TQ-0002\ntitle: mine\nstatus: todo\n=======\n---\nid: TQ-0002\ntitle: theirs\nstatus: done\n>>>>>>> other\n---\n",
+  );
+
+  const toast = await page.waitForSelector("#toasts .toast.error");
+  expect(await toast.textContent()).toContain("TQ-0002-conflicted.md");
+
+  // The healthy card is still drawn, and the footer keeps saying so after the
+  // toast has gone.
+  expect(await idsIn(page, "todo")).toEqual([healthy]);
+  await page.waitForFunction(() =>
+    document.querySelector("#status-line")?.textContent?.includes("could not be read"),
+  );
 });

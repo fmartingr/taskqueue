@@ -42,9 +42,9 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 	}
 
 	// The guide is not a task and must not disturb the store.
-	tasks, err := st.List()
-	if err != nil || len(tasks) != 0 {
-		t.Errorf("List() = %d tasks, %v; want 0 and no error", len(tasks), err)
+	listing, err := st.List()
+	if err != nil || len(listing.Tasks) != 0 || len(listing.Unreadable) != 0 {
+		t.Errorf("List() = %+v, %v; want no tasks, nothing skipped and no error", listing, err)
 	}
 
 	// Running again rewrites nothing.

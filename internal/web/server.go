@@ -141,12 +141,16 @@ func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, err := s.st.List()
+	// A file the scan could not read is skipped rather than failing the
+	// listing, and named by GET /api/status: the response here is an array of
+	// tasks and stays one, because that is what the board and every other
+	// client parse (TQ-0011).
+	listing, err := s.st.List()
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, task.FilterTasks(tasks, filter, columns))
+	writeJSON(w, http.StatusOK, task.FilterTasks(listing.Tasks, filter, columns))
 }
 
 func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
@@ -263,17 +267,28 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleStatus reports what the server can see of the queue, including the
+// files it cannot read. This is where a broken file surfaces: GET /api/tasks is
+// an array of tasks with nowhere to put a warning, and the board already asks
+// here (TQ-0011).
 func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	tasks, err := s.st.List()
+	listing, err := s.st.List()
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
+	// Always an array, never null: a client can then say "none" without having
+	// to tell the two apart.
+	unreadable := listing.Unreadable
+	if unreadable == nil {
+		unreadable = []store.UnreadableFile{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
-		"task_count": len(tasks),
+		"task_count": len(listing.Tasks),
 		"task_dir":   s.st.Dir,
 		"version":    s.version,
+		"unreadable": unreadable,
 	})
 }
 

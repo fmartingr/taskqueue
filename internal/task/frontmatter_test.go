@@ -227,6 +227,29 @@ func TestParseTaskAcceptsCRLF(t *testing.T) {
 	}
 }
 
+// An editor that writes a byte-order mark leaves a file that looks exactly
+// right and would not parse, with an error blaming the delimiter that is
+// plainly on the first line. The mark is stripped instead (TQ-0011).
+func TestParseTaskAcceptsAByteOrderMark(t *testing.T) {
+	content := "\ufeff---\nid: TQ-0001\ntitle: marked\nstatus: todo\n---\n\nbody\n"
+	task, err := ParseTask("TQ-0001.md", []byte(content))
+	if err != nil {
+		t.Fatalf("ParseTask: %v", err)
+	}
+	if task.ID != "TQ-0001" || task.Title != "marked" || task.Body != "body" {
+		t.Errorf("task = %+v", task)
+	}
+
+	// And it does not come back on the next write: rendering never emits one.
+	rendered, err := RenderTask(task)
+	if err != nil {
+		t.Fatalf("RenderTask: %v", err)
+	}
+	if strings.HasPrefix(string(rendered), "\ufeff") {
+		t.Error("RenderTask kept the byte-order mark")
+	}
+}
+
 // A YAML block scalar may contain a line that looks like the frontmatter
 // delimiter. Only an unindented "---" closes the block, so an indented one is
 // data — and tq's own renderer produces exactly that for a multi-line value.

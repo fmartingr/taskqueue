@@ -108,6 +108,15 @@ frontend`, `make typecheck` or `make dev` will run.
 - Task files are named `<id>-<title-slug>.md`, but the ID in the frontmatter is
   what identifies a task: look tasks up by ID (`Store.locate`), never by
   reconstructing a filename from a title.
+- A task file that will not parse is skipped and reported, never fatal to a
+  listing: `Store.List` returns a `Listing` carrying the tasks it read and the
+  files it could not (TQ-0011). `.tasks/` is committed, so a merge conflict in
+  one file is ordinary — one of them must not hide the queue from both
+  surfaces. Every caller has to render the skipped files: the CLI names them on
+  stderr and still exits 0, and `GET /api/status` carries them in `unreadable`
+  while `GET /api/tasks` stays a plain array of the tasks that read. Reading a
+  single task by ID is unchanged and still fails loudly, because there the
+  broken file is the answer.
 - Preserve JSON CLI output compatibility; it is the stable agent API.
 - Keep stdout clean when `--json` is active: data on stdout, everything else on
   stderr.

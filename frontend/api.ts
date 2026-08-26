@@ -22,12 +22,23 @@ export interface TaskInput {
   body?: string;
 }
 
+/**
+ * A task file the server could not read, and why. It is skipped rather than
+ * failing the listing, so this is the only place it is ever mentioned: the
+ * board is what tells someone a file is missing from it (TQ-0011).
+ */
+export interface UnreadableFile {
+  file: string;
+  reason: string;
+}
+
 /** GET /api/status. */
 export interface ServerStatus {
   ok: boolean;
   task_count: number;
   task_dir: string;
   version: string;
+  unreadable: UnreadableFile[];
 }
 
 /** GET /api/config: the project marker as the server resolved it. */

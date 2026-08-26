@@ -215,15 +215,27 @@ func TestGet(t *testing.T) {
 	}
 }
 
+// listTasks is List for a test whose premise is that every file reads. A
+// skipped file is now reported rather than returned as an error, so without
+// this a test could lose a task and still pass.
+func listTasks(t *testing.T, st *store.Store) []task.Task {
+	t.Helper()
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listing.Unreadable) != 0 {
+		t.Fatalf("List skipped %+v, want every file readable", listing.Unreadable)
+	}
+	return listing.Tasks
+}
+
 func TestListSortsAndReportsBadFiles(t *testing.T) {
 	st := tqtest.NewStore(t)
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first"})
 	second := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "second", Priority: task.PriorityUrgent})
 
-	tasks, err := st.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
+	tasks := listTasks(t, st)
 	if len(tasks) != 2 || tasks[0].ID != second.ID {
 		t.Errorf("List should sort urgent first, got %+v", tasks)
 	}
@@ -232,28 +244,117 @@ func TestListSortsAndReportsBadFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(st.Dir, "README.md"), []byte("not a task"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if tasks, err = st.List(); err != nil || len(tasks) != 2 {
-		t.Errorf("List() = %d tasks, %v; want 2 tasks and no error", len(tasks), err)
+	if tasks = listTasks(t, st); len(tasks) != 2 {
+		t.Errorf("List() = %d tasks; want 2", len(tasks))
 	}
 
-	// A malformed task file is a hard error that names the file.
+	// A malformed task file is skipped and named, and the healthy tasks still
+	// come back: one broken file must not hide the queue (TQ-0011).
 	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0003.md"), []byte("no frontmatter here"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.List()
-	if err == nil || !strings.Contains(err.Error(), "TQ-0003.md") {
-		t.Errorf("List error = %v, want it to name TQ-0003.md", err)
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List with a broken file: %v", err)
+	}
+	if len(listing.Tasks) != 2 {
+		t.Errorf("List() = %d tasks, want the 2 healthy ones", len(listing.Tasks))
+	}
+	if len(listing.Unreadable) != 1 || listing.Unreadable[0].File != "TQ-0003.md" {
+		t.Fatalf("Unreadable = %+v, want it to name TQ-0003.md", listing.Unreadable)
+	}
+	if !strings.Contains(listing.Unreadable[0].Reason, "frontmatter") {
+		t.Errorf("reason = %q, want it to say what is wrong", listing.Unreadable[0].Reason)
+	}
+	// The reason is rendered beside the name, so it does not repeat it.
+	if strings.Contains(listing.Unreadable[0].Reason, "TQ-0003.md") {
+		t.Errorf("reason = %q, want the file name left to the File field", listing.Unreadable[0].Reason)
 	}
 }
 
-func TestListRejectsIDFilenameMismatch(t *testing.T) {
+// The shapes a hand-edited or merge-conflicted file arrives in. Each is one
+// unreadable file among healthy ones, and each must cost only itself.
+func TestListSkipsEveryShapeOfBrokenFile(t *testing.T) {
+	broken := map[string]string{
+		"TQ-0002-extra-key.md":         "---\nid: TQ-0002\ntitle: extra key\nstatus: todo\npriority: normal\nepic: platform\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n",
+		"TQ-0003-conflicted.md":        "<<<<<<< HEAD\n---\nid: TQ-0003\ntitle: mine\nstatus: todo\n=======\n---\nid: TQ-0003\ntitle: theirs\nstatus: done\n>>>>>>> branch\n---\n",
+		"TQ-0004-id-mismatch.md":       "---\nid: TQ-0009\ntitle: mismatched\nstatus: todo\npriority: normal\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n",
+		"TQ-0005-unterminated.md":      "---\nid: TQ-0005\ntitle: unterminated\nstatus: todo\n",
+		"TQ-0006-invalid-yaml.md":      "---\nid: TQ-0006\ntitle: [unclosed\nstatus: todo\n---\n",
+		"TQ-0007-missing-fields.md":    "---\nnothing: here\n---\n",
+		"TQ-0008-not-a-task-at-all.md": "just some prose that ended up in .tasks\n",
+	}
+
+	for name, content := range broken {
+		t.Run(name, func(t *testing.T) {
+			st := tqtest.NewStore(t)
+			healthy := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "healthy"})
+			if err := os.WriteFile(filepath.Join(st.Dir, name), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			listing, err := st.List()
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(listing.Tasks) != 1 || listing.Tasks[0].ID != healthy.ID {
+				t.Errorf("List() = %+v, want the healthy task", listing.Tasks)
+			}
+			if len(listing.Unreadable) != 1 || listing.Unreadable[0].File != name {
+				t.Fatalf("Unreadable = %+v, want it to name %s", listing.Unreadable, name)
+			}
+			if listing.Unreadable[0].Reason == "" {
+				t.Error("Unreadable carries no reason, so nothing can say what to fix")
+			}
+		})
+	}
+}
+
+// A name whose file is not there is not a broken file: `tq update --title`
+// writes the new name before retiring the old one, and `tq delete` unlinks, so
+// a scan that caught the old name has nothing to report. A dangling symlink is
+// that state, held still. (Whether the task itself was missed by the scan is
+// TQ-0012, and not this.)
+func TestListDoesNotReportAFileThatIsNoLongerThere(t *testing.T) {
 	st := tqtest.NewStore(t)
-	content := "---\nid: TQ-0009\ntitle: mismatched\nstatus: todo\n---\n"
-	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0008.md"), []byte(content), 0o644); err != nil {
+	healthy := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "healthy"})
+
+	link := filepath.Join(st.Dir, "TQ-0009-vanished.md")
+	if err := os.Symlink(filepath.Join(st.Dir, "TQ-0009-gone.md"), link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.List(); err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Errorf("List error = %v, want a filename/id mismatch error", err)
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listing.Tasks) != 1 || listing.Tasks[0].ID != healthy.ID {
+		t.Errorf("List() = %+v, want the healthy task", listing.Tasks)
+	}
+	if len(listing.Unreadable) != 0 {
+		t.Errorf("Unreadable = %+v, want nothing: a file that is gone is not a file that is broken", listing.Unreadable)
+	}
+}
+
+// A byte-order mark is invisible in an editor and some of them write one. The
+// file is otherwise perfect, so it parses (TQ-0011).
+func TestListReadsAFileWithAByteOrderMark(t *testing.T) {
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "marked"})
+
+	name := store.TaskFileName(created)
+	path := filepath.Join(st.Dir, name)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append([]byte("\ufeff"), content...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := listTasks(t, st)
+	if len(tasks) != 1 || tasks[0].ID != created.ID {
+		t.Errorf("List() = %+v, want the task read straight through the mark", tasks)
 	}
 }
 
@@ -326,9 +427,8 @@ func TestGetFindsTasksWhateverTheSuffix(t *testing.T) {
 		t.Errorf("task = %+v", tk)
 	}
 
-	tasks, err := st.List()
-	if err != nil || len(tasks) != 1 {
-		t.Errorf("List() = %d tasks, %v; want 1", len(tasks), err)
+	if tasks := listTasks(t, st); len(tasks) != 1 {
+		t.Errorf("List() = %d tasks; want 1", len(tasks))
 	}
 
 	// Touching it adopts the new naming.
@@ -885,11 +985,7 @@ func TestCreateUnderConcurrencyGivesEveryTaskItsOwnID(t *testing.T) {
 		}
 	}
 
-	tasks, err := st.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(tasks) != racers {
+	if tasks := listTasks(t, st); len(tasks) != racers {
 		t.Errorf("List() = %d tasks, want %d", len(tasks), racers)
 	}
 }
@@ -912,11 +1008,7 @@ func TestCreateUnderConcurrencyKeepsTasksWithTheSameTitle(t *testing.T) {
 	}
 	wg.Wait()
 
-	tasks, err := st.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(tasks) != racers {
+	if tasks := listTasks(t, st); len(tasks) != racers {
 		t.Errorf("List() = %d tasks, want %d: a create was lost", len(tasks), racers)
 	}
 }
@@ -1166,10 +1258,7 @@ func TestListSortsByTheConfiguredRank(t *testing.T) {
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "least", Priority: "p2"})
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "most", Priority: "p0"})
 
-	tasks, err := st.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
+	tasks := listTasks(t, st)
 	got := make([]string, 0, len(tasks))
 	for _, tk := range tasks {
 		got = append(got, tk.Priority)
@@ -1194,10 +1283,7 @@ func TestATaskKeepsAPriorityTheProjectHasDropped(t *testing.T) {
 	// The vocabulary changes out from under both of them.
 	tqtest.WriteConfig(t, root, customPriorities)
 
-	tasks, err := st.List()
-	if err != nil {
-		t.Fatalf("List after the vocabulary changed: %v", err)
-	}
+	tasks := listTasks(t, st)
 	if len(tasks) != 2 {
 		t.Fatalf("List() returned %d tasks, want both", len(tasks))
 	}
@@ -1283,10 +1369,7 @@ func TestListSortsByTheBoardOrder(t *testing.T) {
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "first", Status: "spotted"})
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "middle", Status: "doing"})
 
-	tasks, err := st.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
+	tasks := listTasks(t, st)
 	got := make([]string, 0, len(tasks))
 	for _, tk := range tasks {
 		got = append(got, tk.Status)
@@ -1307,10 +1390,7 @@ func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing
 
 	tqtest.WriteConfig(t, root, customBoard)
 
-	listed, err := st.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
+	listed := listTasks(t, st)
 	if len(listed) != 1 || listed[0].Status != "spotted" {
 		t.Fatalf("List() = %+v, want the task shown in the first column", listed)
 	}

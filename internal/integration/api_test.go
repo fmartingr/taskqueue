@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -98,6 +99,53 @@ func TestAPIReadOnlyEndpoints(t *testing.T) {
 			t.Errorf("file = %q, want the marker this project carries", cfg.File)
 		}
 	})
+}
+
+// A running server keeps serving the queue around a file it cannot read: the
+// listing is still an array of the healthy tasks, and /api/status names what
+// was skipped so the board can say so (TQ-0011).
+func TestAPISurvivesAnUnreadableFile(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "healthy")
+	srv := p.serve(t)
+
+	const broken = "TQ-0002-broken.md"
+	if err := os.WriteFile(p.path(".tasks", broken), []byte("<<<<<<< HEAD\nnot a task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := srv.request(t, http.MethodGet, "/api/tasks", "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d, want 200: body %s", code, body)
+	}
+	// Still an array, and parsed as one: the board reads it that way, so a
+	// warning cannot be wrapped around the listing.
+	var listed []taskJSON
+	if err := json.Unmarshal([]byte(body), &listed); err != nil {
+		t.Fatalf("GET /api/tasks is not an array of tasks: %v\n%s", err, body)
+	}
+	if len(listed) != 1 || listed[0].ID != "TQ-0001" {
+		t.Errorf("tasks = %+v, want the healthy one", listed)
+	}
+
+	var status struct {
+		TaskCount  int `json:"task_count"`
+		Unreadable []struct {
+			File   string `json:"file"`
+			Reason string `json:"reason"`
+		} `json:"unreadable"`
+	}
+	srv.get(t, "/api/status", &status)
+	if status.TaskCount != 1 {
+		t.Errorf("task_count = %d, want the healthy task still counted", status.TaskCount)
+	}
+	if len(status.Unreadable) != 1 || status.Unreadable[0].File != broken {
+		t.Fatalf("unreadable = %+v, want it to name %s", status.Unreadable, broken)
+	}
+	if status.Unreadable[0].Reason == "" {
+		t.Error("unreadable carries no reason, so the board cannot say what to fix")
+	}
 }
 
 // Notes over HTTP, which the board's detail panel uses.

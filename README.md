@@ -351,6 +351,13 @@ one. Removing the `priorities` key restores the built-in `urgent`, `high`,
 | `2` | task not found |
 | `3` | the `.tasks` directory is missing and could not be created |
 
+A task file that will not parse — a merge conflict in a committed `.tasks/`, a
+key the format does not have — does not fail a listing. `tq list` and `tq ready`
+print the tasks they could read, exit `0`, and name each file they skipped on
+stderr, so `--json` stdout stays parseable and a script sees a queue that is
+short rather than one that is empty. Reading a single task by ID still fails
+loudly, because there the broken file is the answer.
+
 ## CLI reference
 
 ```text
@@ -448,7 +455,7 @@ difference between an agent moving a task and a human dragging a card.
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
 | `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels", "priorities", "columns"}` |
 | `GET` | `/api/events` | server-sent events; a `tasks` frame when the queue changes, `config` when `.taskqueue.yaml` does, `scan-failed` when the queue cannot be read |
-| `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version"}` |
+| `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version", "unreadable"}`; `unreadable` is `[{"file", "reason"}]` for the task files the scan had to skip |
 | `GET` | `/api/version` | `{"version"}` |
 
 Errors have a stable shape:
@@ -459,13 +466,18 @@ Errors have a stable shape:
 
 with `400` for malformed or invalid requests (including a malformed task ID or
 an unparsable `ready` value), `404` for a well-formed ID that has no task, and
-`500` for filesystem problems, an unreadable task file, and a `.taskqueue.yaml`
-that will not parse (`invalid_config`) — a marker caught half-saved is a file on
-the server, not anything the request got wrong, and the board keeps the last
-configuration that worked rather than blanking its labels for it.
+`500` for filesystem problems, a task file that will not parse where that file
+is the answer (`GET`, `PATCH` and the note endpoint, all of which address one
+task by ID), and a `.taskqueue.yaml` that will not parse (`invalid_config`) — a
+marker caught half-saved is a file on the server, not anything the request got
+wrong, and the board keeps the last configuration that worked rather than
+blanking its labels for it.
 
-One unreadable task file fails the whole listing rather than hiding a task: the
-board shows the error with the offending filename so it can be fixed.
+A task file the server cannot read is skipped rather than failing the listing:
+`GET /api/tasks` answers `200` with the tasks it could read, and `GET
+/api/status` carries an `unreadable` array naming each file it could not and
+why. One conflicted file is how a shared `.tasks/` breaks, and it must not hide
+every other task — the board draws what it has and says what is missing.
 
 `tq serve` binds to `127.0.0.1:7331` by default, and a project can pin its own
 address — see [Where the server binds](#where-the-server-binds) for the keys and

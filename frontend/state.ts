@@ -14,7 +14,15 @@
 
 import { computed, reactive, ref, watch } from "vue";
 
-import { createTask, describe, fetchConfig, fetchStatus, fetchTasks, patchTask } from "./api";
+import {
+  createTask,
+  describe,
+  fetchConfig,
+  fetchStatus,
+  fetchTasks,
+  patchTask,
+  type UnreadableFile,
+} from "./api";
 import { connectEvents } from "./events";
 import {
   indexTasks,
@@ -64,6 +72,16 @@ export const columns = ref<ColumnSet>(FALLBACK_COLUMNS);
 export const taskDir = ref("");
 export const version = ref("");
 
+/**
+ * The task files the server could not read, from GET /api/status.
+ *
+ * The listing itself cannot carry this: /api/tasks is an array of tasks, and a
+ * skipped file is not one. It is a real problem — a merge conflict, a
+ * hand-edited key — so the board says so twice over: a toast when it appears,
+ * and a count in the footer for as long as it lasts (TQ-0011).
+ */
+export const unreadable = ref<UnreadableFile[]>([]);
+
 /** False until the first listing lands, so the footer can say so. */
 export const loaded = ref(false);
 
@@ -94,7 +112,11 @@ export const statusLine = computed(() => {
   // nothing while it is still connecting. The word appears only once a
   // connection has actually failed, when updates really have got slower.
   const link = streaming.value === false ? "polling" : "";
-  return [counts, taskDir.value, version.value && `tq ${version.value}`, link]
+  // A toast is gone in six seconds and a broken file is not: whoever opens the
+  // board an hour later still has to be told the count is short.
+  const broken = unreadable.value.length;
+  const skipped = broken ? `${broken} file${broken === 1 ? "" : "s"} could not be read` : "";
+  return [counts, skipped, taskDir.value, version.value && `tq ${version.value}`, link]
     .filter(Boolean)
     .join(" · ");
 });
@@ -200,14 +222,53 @@ export async function quickAdd(title: string, status: Status): Promise<void> {
   await refresh();
 }
 
+/**
+ * Rises with every status request started, so an older response that resolves
+ * last can be dropped — the same guard `refresh` keeps, and for the same
+ * reason: two change signals half a second apart put two of these in flight,
+ * and the stale one would leave the footer complaining about a file that has
+ * since been fixed.
+ */
+let statusIssued = 0;
+
 async function loadServerStatus(): Promise<void> {
+  const ticket = ++statusIssued;
   try {
     const status = await fetchStatus();
+    if (ticket !== statusIssued) return; // a newer request is already in flight
     taskDir.value = status.task_dir;
     version.value = status.version;
+    reportUnreadable(status.unreadable ?? []);
   } catch (error) {
     console.error("status failed", error);
   }
+}
+
+/** The files already complained about, so a broken file is one toast rather
+ *  than one per refresh — and a fixed one that breaks again is a new toast. */
+let complainedAbout = new Set<string>();
+
+/** How many broken files are named one by one before the rest are summarised.
+ *  A conflicted merge breaks several at once, and a toast per file would cover
+ *  the board it is complaining about. */
+const NAMED_IN_TOASTS = 3;
+
+/**
+ * Records the files the server had to skip and toasts about the ones that are
+ * new. A skipped file is a task missing from the board, so the count that
+ * follows it in the footer would otherwise just look wrong.
+ */
+function reportUnreadable(files: UnreadableFile[]): void {
+  unreadable.value = files;
+  const seen = new Set(files.map((file) => `${file.file}: ${file.reason}`));
+  const fresh = [...seen].filter((complaint) => !complainedAbout.has(complaint));
+  complainedAbout = seen;
+
+  for (const complaint of fresh.slice(0, NAMED_IN_TOASTS)) {
+    toast(`Not on the board — ${complaint}`);
+  }
+  const rest = fresh.length - NAMED_IN_TOASTS;
+  if (rest > 0) toast(`…and ${rest} more file${rest === 1 ? "" : "s"} could not be read`);
 }
 
 /** Serialized last configuration, so a refetch that changed nothing re-renders
@@ -277,7 +338,14 @@ interface Signals {
  */
 async function applySignals(signals: Signals): Promise<void> {
   const changed = signals.config ? await loadProjectConfig() : false;
-  if (signals.tasks || changed) await refreshQuietly();
+  if (!signals.tasks && !changed) return;
+  await refreshQuietly();
+  // The listing is an array of tasks and has nowhere to say that a file was
+  // skipped, so the files the server could not read come from /api/status —
+  // asked for again here because the change that just arrived is exactly how a
+  // file becomes unreadable, or stops being (TQ-0011). It is one extra request
+  // per change, not per tick: nothing asks while the queue is sitting still.
+  await loadServerStatus();
 }
 
 /**

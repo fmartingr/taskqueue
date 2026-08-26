@@ -68,6 +68,15 @@ type apiError struct {
 	Code  string `json:"code"`
 }
 
+// serverStatus is GET /api/status as a client sees it, the board included.
+type serverStatus struct {
+	OK         bool                   `json:"ok"`
+	TaskCount  int                    `json:"task_count"`
+	TaskDir    string                 `json:"task_dir"`
+	Version    string                 `json:"version"`
+	Unreadable []store.UnreadableFile `json:"unreadable"`
+}
+
 func expectError(t *testing.T, resp *http.Response, payload string, status int, code string) {
 	t.Helper()
 	if resp.StatusCode != status {
@@ -286,14 +295,14 @@ func TestAPIStatusAndVersion(t *testing.T) {
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "One"})
 
 	_, payload := do(t, srv, "GET", "/api/status", "")
-	status := decode[struct {
-		OK        bool   `json:"ok"`
-		TaskCount int    `json:"task_count"`
-		TaskDir   string `json:"task_dir"`
-		Version   string `json:"version"`
-	}](t, payload)
+	status := decode[serverStatus](t, payload)
 	if !status.OK || status.TaskCount != 1 || status.TaskDir != st.Dir || status.Version != testVersion {
 		t.Errorf("status = %+v", status)
+	}
+	// An array, never null, so a client can say "none" without telling the two
+	// apart.
+	if status.Unreadable == nil || len(status.Unreadable) != 0 {
+		t.Errorf("unreadable = %#v, want an empty array with nothing broken", status.Unreadable)
 	}
 
 	_, payload = do(t, srv, "GET", "/api/version", "")
@@ -308,16 +317,39 @@ func TestAPIUnknownRouteReturnsJSON(t *testing.T) {
 	expectError(t, resp, payload, http.StatusNotFound, "not_found")
 }
 
+// One file the server cannot read costs only itself: the listing still serves
+// the healthy tasks, and GET /api/status names what was skipped (TQ-0011).
 func TestAPIMalformedTaskFile(t *testing.T) {
 	srv, st := newTestServer(t)
-	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0001-broken.md"), []byte("no frontmatter"), 0o644); err != nil {
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Healthy"})
+	if err := os.WriteFile(filepath.Join(st.Dir, "TQ-0002-broken.md"), []byte("no frontmatter"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	resp, payload := do(t, srv, "GET", "/api/tasks", "")
-	expectError(t, resp, payload, http.StatusInternalServerError, "invalid_task_file")
-	if !strings.Contains(decode[apiError](t, payload).Error, "TQ-0001-broken.md") {
-		t.Errorf("the error should name the offending file: %s", payload)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", resp.StatusCode, payload)
+	}
+	// An array, and only an array: the board and every other client parse it as
+	// one, so a warning cannot be wrapped around it.
+	tasks := decode[[]task.Task](t, payload)
+	if len(tasks) != 1 || tasks[0].ID != "TQ-0001" {
+		t.Errorf("tasks = %+v, want the healthy one", tasks)
+	}
+
+	resp, payload = do(t, srv, "GET", "/api/status", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", resp.StatusCode, payload)
+	}
+	status := decode[serverStatus](t, payload)
+	if status.TaskCount != 1 || status.TaskDir != st.Dir {
+		t.Errorf("status = %+v, want it to still describe the queue", status)
+	}
+	if len(status.Unreadable) != 1 || status.Unreadable[0].File != "TQ-0002-broken.md" {
+		t.Fatalf("unreadable = %+v, want it to name TQ-0002-broken.md", status.Unreadable)
+	}
+	if status.Unreadable[0].Reason == "" {
+		t.Error("unreadable carries no reason, so nothing can say what to fix")
 	}
 }
 

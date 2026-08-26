@@ -48,10 +48,11 @@ func (c *cli) runLabelList(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	tasks, err := st.List()
+	listing, err := st.List()
 	if err != nil {
 		return c.fail(err)
 	}
+	c.warnUnreadable(listing.Unreadable)
 	// The vocabulary is resolved from the queue being listed, not from the
 	// working directory: TQ_DIR can point at a queue in another project, and
 	// reading that project's tasks against this one's config would have the CLI
@@ -62,7 +63,7 @@ func (c *cli) runLabelList(args []string) int {
 		return c.fail(err)
 	}
 
-	entries := labelEntries(cfg.LabelSet(), tasks)
+	entries := labelEntries(cfg.LabelSet(), listing.Tasks)
 	if *jsonOut {
 		return c.printJSON(entries)
 	}

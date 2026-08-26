@@ -5667,6 +5667,7 @@ var priorities = ref(FALLBACK_PRIORITIES);
 var columns = ref(FALLBACK_COLUMNS);
 var taskDir = ref("");
 var version2 = ref("");
+var unreadable = ref([]);
 var loaded = ref(false);
 var streaming = ref(null);
 var stale = ref(false);
@@ -5679,7 +5680,9 @@ var statusLine = computed2(() => {
   const shown = visible.value.length;
   const counts = shown === total ? `${total} tasks` : `${shown} of ${total} tasks`;
   const link = streaming.value === false ? "polling" : "";
-  return [counts, taskDir.value, version2.value && `tq ${version2.value}`, link].filter(Boolean).join(" · ");
+  const broken = unreadable.value.length;
+  const skipped = broken ? `${broken} file${broken === 1 ? "" : "s"} could not be read` : "";
+  return [counts, skipped, taskDir.value, version2.value && `tq ${version2.value}`, link].filter(Boolean).join(" · ");
 });
 var dragging = ref(null);
 var composing = ref(null);
@@ -5735,14 +5738,33 @@ async function quickAdd(title, status) {
   await createTask({ title, status });
   await refresh();
 }
+var statusIssued = 0;
 async function loadServerStatus() {
+  const ticket = ++statusIssued;
   try {
     const status = await fetchStatus();
+    if (ticket !== statusIssued)
+      return;
     taskDir.value = status.task_dir;
     version2.value = status.version;
+    reportUnreadable(status.unreadable ?? []);
   } catch (error) {
     console.error("status failed", error);
   }
+}
+var complainedAbout = new Set;
+var NAMED_IN_TOASTS = 3;
+function reportUnreadable(files) {
+  unreadable.value = files;
+  const seen = new Set(files.map((file) => `${file.file}: ${file.reason}`));
+  const fresh = [...seen].filter((complaint) => !complainedAbout.has(complaint));
+  complainedAbout = seen;
+  for (const complaint of fresh.slice(0, NAMED_IN_TOASTS)) {
+    toast(`Not on the board — ${complaint}`);
+  }
+  const rest = fresh.length - NAMED_IN_TOASTS;
+  if (rest > 0)
+    toast(`…and ${rest} more file${rest === 1 ? "" : "s"} could not be read`);
 }
 var lastConfig = "";
 var lastConfigError = "";
@@ -5772,8 +5794,10 @@ async function loadProjectConfig() {
 }
 async function applySignals(signals) {
   const changed = signals.config ? await loadProjectConfig() : false;
-  if (signals.tasks || changed)
-    await refreshQuietly();
+  if (!signals.tasks && !changed)
+    return;
+  await refreshQuietly();
+  await loadServerStatus();
 }
 async function start() {
   await Promise.all([loadServerStatus(), loadProjectConfig()]);

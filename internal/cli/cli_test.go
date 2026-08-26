@@ -316,6 +316,55 @@ func TestCLIShowDescribesDependencies(t *testing.T) {
 	}
 }
 
+// One file nobody can parse — a merge conflict, a hand-added key — used to take
+// the whole queue down. It now costs only itself: the healthy tasks print, the
+// file is named on stderr, and the exit code stays 0 (TQ-0011).
+func TestCLIListAndReadySkipAnUnreadableFile(t *testing.T) {
+	broken := "TQ-0003-broken.md"
+	newProject := func(t *testing.T) *testCLI {
+		t.Helper()
+		tc := newTestCLI(t)
+		tc.mustRun("add", "Healthy and ready", "--status", "todo")
+		tc.mustRun("add", "Healthy too", "--status", "todo")
+		content := "---\nid: TQ-0003\ntitle: broken\nstatus: todo\nepic: platform\n---\n"
+		if err := os.WriteFile(filepath.Join(tc.root, config.TaskDirName, broken), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return tc
+	}
+
+	for _, command := range []string{"list", "ready"} {
+		t.Run(command, func(t *testing.T) {
+			tc := newProject(t)
+
+			out := tc.mustRun(command)
+			for _, id := range []string{"TQ-0001", "TQ-0002"} {
+				if !strings.Contains(out, id) {
+					t.Errorf("%s output is missing %s:\n%s", command, id, out)
+				}
+			}
+			if !strings.Contains(tc.stderr.String(), broken) {
+				t.Errorf("stderr should name %s, got %q", broken, tc.stderr)
+			}
+		})
+
+		t.Run(command+" --json", func(t *testing.T) {
+			tc := newProject(t)
+
+			var tasks []task.Task
+			tc.mustRunJSON(&tasks, command, "--json")
+			if len(tasks) != 2 {
+				t.Errorf("%s --json returned %d tasks, want the 2 healthy ones", command, len(tasks))
+			}
+			// The whole point of the split: stdout parsed above, so the warning
+			// went where it cannot corrupt what an agent reads.
+			if !strings.Contains(tc.stderr.String(), broken) {
+				t.Errorf("stderr should name %s, got %q", broken, tc.stderr)
+			}
+		})
+	}
+}
+
 func TestCLIShowSurvivesUnreadableSiblingTask(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "Readable", "--depends-on", "TQ-0002")

@@ -194,6 +194,11 @@ whole string, so `+"`tq list --label component/backend`"+` takes the whole key.
 - A task is *ready* when it is neither done nor in-progress and every task in
   `+"`depends_on`"+` exists and is done. A missing dependency blocks it.
 - `+"`--json`"+` prints JSON to stdout and nothing else; errors go to stderr.
+- A file this directory holds that cannot be parsed — a merge conflict, a key
+  the format does not have — is skipped rather than failing the listing.
+  `+"`tq list`"+` and `+"`tq ready`"+` still exit 0 and print what they could
+  read, and name each skipped file on stderr. The queue is that many tasks
+  short until the file is fixed, so fix it rather than reading past the warning.
 - Exit codes: 0 success, 1 validation error, 2 task not found, 3 task directory
   missing and uncreatable.
 

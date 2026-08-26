@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -148,6 +149,61 @@ func TestListAndReadyFilters(t *testing.T) {
 	// not an empty list.
 	if r := p.run(t, "list", "--status", "nope"); r.Code != 1 {
 		t.Errorf("an invalid status filter = %d, want 1", r.Code)
+	}
+}
+
+// A file the parser cannot read is skipped, named on stderr, and the command
+// still succeeds. Only a real process shows the two things this is about: the
+// exit code, and which stream the warning went to (TQ-0011).
+func TestListAndReadySurviveAnUnreadableFile(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "healthy", "--status", "todo")
+	p.mustRun(t, "add", "healthy too", "--status", "todo")
+
+	// A conflicted file is how this happens in practice: two agents each ran
+	// `tq add` on their own branch, and .tasks is committed.
+	const broken = "TQ-0003-conflicted.md"
+	conflicted := "<<<<<<< HEAD\n---\nid: TQ-0003\ntitle: mine\nstatus: todo\n=======\n---\nid: TQ-0003\ntitle: theirs\nstatus: done\n>>>>>>> other\n---\n"
+	if err := os.WriteFile(p.path(".tasks", broken), []byte(conflicted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, command := range []string{"list", "ready"} {
+		t.Run(command, func(t *testing.T) {
+			r := p.run(t, command)
+			if r.Code != 0 {
+				t.Errorf("tq %s = %d, want 0: one broken file must not fail the command\nstderr: %s", command, r.Code, r.Stderr)
+			}
+			for _, id := range []string{"TQ-0001", "TQ-0002"} {
+				if !strings.Contains(r.Stdout, id) {
+					t.Errorf("tq %s stdout is missing %s:\n%s", command, id, r.Stdout)
+				}
+			}
+			if !strings.Contains(r.Stderr, broken) {
+				t.Errorf("tq %s should name %s on stderr, got: %q", command, broken, r.Stderr)
+			}
+			if strings.Contains(r.Stdout, broken) {
+				t.Errorf("tq %s put the warning on stdout:\n%s", command, r.Stdout)
+			}
+		})
+
+		t.Run(command+" --json", func(t *testing.T) {
+			r := p.run(t, command, "--json")
+			if r.Code != 0 {
+				t.Errorf("tq %s --json = %d, want 0\nstderr: %s", command, r.Code, r.Stderr)
+			}
+			// JSON decodes stdout on its own, which is the contract an agent
+			// reads: the warning has to be on stderr for this to pass.
+			var listed []taskJSON
+			r.JSON(t, &listed)
+			if len(listed) != 2 {
+				t.Errorf("tq %s --json = %d tasks, want the 2 healthy ones", command, len(listed))
+			}
+			if !strings.Contains(r.Stderr, broken) {
+				t.Errorf("tq %s --json should name %s on stderr, got: %q", command, broken, r.Stderr)
+			}
+		})
 	}
 }
 

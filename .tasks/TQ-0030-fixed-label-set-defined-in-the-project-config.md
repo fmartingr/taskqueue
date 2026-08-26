@@ -1,7 +1,7 @@
 ---
 id: TQ-0030
 title: Fixed label set defined in the project config
-status: in-progress
+status: done
 priority: normal
 labels:
   - component/config
@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-26T08:36:33+02:00
+updated: 2026-08-26T08:38:06+02:00
 ---
 
 ## Proposal

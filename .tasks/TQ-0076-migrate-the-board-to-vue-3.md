@@ -7,7 +7,7 @@ labels:
   - refactor
   - component/frontend
 created: 2026-08-26T08:14:45+02:00
-updated: 2026-08-26T08:14:59+02:00
+updated: 2026-08-26T08:16:22+02:00
 ---
 
 ## Where the frontend is today
@@ -34,9 +34,9 @@ that drives the real binary — the migration's safety net.
 
 ## Target
 
-Vue 3 with TypeScript, bundled by Bun into `public/app.js` exactly as now:
-committed output, `go:embed` unchanged, the CI staleness gate unchanged, no CDN
-and nothing fetched at runtime.
+Vue 3 with TypeScript, bundled by Bun into `internal/web/public/app.js`
+exactly as now: committed output, `go:embed` unchanged, the CI staleness gate
+unchanged, no CDN and nothing fetched at runtime.
 
 ## Three things to settle before starting
 
@@ -79,7 +79,8 @@ a separate change and would hide regressions inside this one.
 - TQ-0010, TQ-0019 and TQ-0027 are fixed **deliberately**, each with a
   regression test — not assumed fixed because the framework re-renders
   differently.
-- `make frontend` output is deterministic and committed; `make build`, `DEV=1`
+- `make frontend` output is deterministic and committed to
+  `internal/web/public/`; `make build`, `DEV=1`
   serving and the CI staleness gate all behave as before.
 - `bun test frontend/` still passes: `board.ts` and `notes.ts` keep their tests.
 

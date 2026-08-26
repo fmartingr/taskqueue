@@ -10,7 +10,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T11:53:19+02:00
-updated: 2026-08-26T08:38:06+02:00
+updated: 2026-08-26T13:22:52+02:00
 ---
 
 ## Proposal
@@ -142,3 +142,4 @@ made this one command.
 - 2026-08-26T08:36:33+02:00 — Kept as is, and worth a second opinion: a bad label colour fails every command, not just the drawing. validateLabels runs in loadConfig, which every command reaches through discovery, so an unquoted hex — the exact mistake the error text anticipates — makes the queue unreadable until the file is fixed. The review argued that colour is presentation and should degrade to a neutral chip.
 
   Kept strict because it matches the contract the marker already has: a future version, malformed YAML and the .yml typo all fail the same way and name the file, and TQ-0029 chose that deliberately. The alternative fails silently at the one thing the config exists to do — a chip that never gets its colour and nobody notices. If you would rather it degraded, the change is one branch in validateLabels plus a warning on stderr.
+- 2026-08-26T13:22:52+02:00 — TQ-0083 moves the colour from the label to its scope: every component/* chip shares one colour and the value half distinguishes them. The base-set table here changes with it — the component/* rows lose their individual colours and the group gains a single one.

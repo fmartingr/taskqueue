@@ -8,7 +8,7 @@ labels:
   - component/frontend
   - component/config
 created: 2026-08-26T13:20:40+02:00
-updated: 2026-08-26T13:20:40+02:00
+updated: 2026-08-26T13:22:41+02:00
 ---
 
 ## Symptom
@@ -37,16 +37,55 @@ One pill, two halves:
    ^ label colour    ^ contrasting half
 ```
 
-- Scope half: the label's colour as background, readable text on it — what the
-  chip does today.
-- Value half: the contrasting surface, with the label colour as its text, and
-  the pill's border in the label colour so the two halves read as one object.
+- Scope half: the **scope's** colour as background, readable text on it.
+- Value half: the contrasting surface, with the scope colour as its text, and
+  the pill's border in that colour so the two halves read as one object.
 - A label with no `/` keeps the single-tone chip it has now.
 - "White" has to be a theme token, not a literal: the board has a dark palette,
   and the existing chips already compute readable text rather than assuming.
 
 Applies to card chips, the filter bar and the task dialog. The CLI keeps
 printing raw keys — that is what agents match on.
+
+## The colour belongs to the scope
+
+Every label in a group is drawn in the same colour: all `component/*` chips
+share one, and the value half is what tells them apart. That is the point of a
+scope — it should be recognisable across a board at a glance, and today
+`component/cli` is `#0052cc` while `component/api` is `#006b75`, so the group
+reads as unrelated labels that happen to share a prefix.
+
+So the colour stops being per-label for scoped labels and becomes a property of
+the scope:
+
+```yaml
+labels:
+  bug:
+    color: "#d73a4a"
+  component/api:
+    display_name: API
+  component/cli:
+    display_name: CLI
+
+label_scopes:
+  component:
+    color: "#1d76db"
+    display_name: Component
+```
+
+- A scoped label takes its colour from its scope. A `color` on a scoped label is
+  only read when the scope has none — decide whether that is a silent fallback
+  or a config warning; a config that carries a colour nobody uses will drift.
+- Unscoped labels keep their own `color`, unchanged.
+- A scope with no entry in `label_scopes` still has to render. Recommendation:
+  derive a colour deterministically from the scope name, so freeform groups stay
+  visually distinct without anyone configuring them; the alternative is the
+  neutral chip, which makes every unconfigured group look identical.
+- `display_name` on the scope covers the same casing problem as on a label:
+  nothing derives `CI` from `ci`.
+
+This changes the seeded defaults and the base-set table in TQ-0030: the
+`component/*` rows lose their individual colours and the group gains one.
 
 ## What happens to `display_name`
 
@@ -79,7 +118,10 @@ the version with no `display_name` at all.
 ## Acceptance criteria
 
 - `component/api` renders as `Component | API` on cards, in the filter bar and
-  in the task dialog, with the scope on the label colour.
+  in the task dialog.
+- Every `component/*` chip is the same colour, and the value half is what
+  distinguishes them; changing the scope's colour recolours the whole group in
+  one edit.
 - A label with no `/` is unchanged.
 - `display_name` is optional; absent, the halves derive from the key; present,
   it sets the value half.

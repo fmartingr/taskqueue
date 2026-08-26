@@ -1,14 +1,14 @@
 ---
 id: TQ-0078
 title: Bind address from the project config
-status: todo
+status: in-progress
 priority: normal
 labels:
   - feature
   - component/config
   - component/api
 created: 2026-08-26T12:52:30+02:00
-updated: 2026-08-26T12:52:30+02:00
+updated: 2026-08-26T13:20:29+02:00
 ---
 
 ## Proposal

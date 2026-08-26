@@ -7,7 +7,7 @@ labels:
   - bug
   - component/frontend
 created: 2026-08-26T13:12:58+02:00
-updated: 2026-08-26T13:12:58+02:00
+updated: 2026-08-26T18:01:38+02:00
 ---
 
 ## Finding
@@ -47,3 +47,25 @@ the id the emitting dialog was mounted with — rather than blindly nulling. Do
 not add a test at that timing granularity; the test is the flake.
 
 Found by the review of TQ-0076.
+
+---
+
+## Notes
+
+- 2026-08-26T18:01:38+02:00 — Revalidated on main (2d8ddfa): still present, and the suggested fix alone is not sufficient.
+
+  Reproduced in a real Chromium against the real tq serve binary. The synthetic same-task reproduction fails 100% of the time for both the task dialog and the create dialog; a realistic Escape-then-Enter reopen was swallowed 8 times in 20 (40%), matching the rate in the original finding. A control reopen with a wait passes.
+
+  A DOM trace pins the ordering and shows the defect has two halves, not one:
+
+      right after close():                 dialog=mounted open=false id=TQ-0001
+      right after click on other card:     dialog=mounted open=false id=TQ-0001
+      after microtasks (Vue has flushed):  dialog=mounted open=false id=TQ-0002
+      << close event fires >>
+      after one macrotask:                 dialog=absent
+
+  Vue's microtask flush beats the queued close, so the reopen is already lost before the late close arrives. Because v-if carries no :key (App.vue:37), the reopened dialog is patched in place rather than remounted, so onMounted(() => dialog.value?.showModal()) (TaskDialog.vue:54) never re-runs. The late close then nulls openTaskID and unmounts it.
+
+  With only the stale-close id guard added, the dialog would survive as a mounted element with no open attribute and the click would still be swallowed — silently, which is worse. A complete fix needs both: the id comparison on close, AND a path that re-shows the element. A :key on the task id handles the different-task case; the same-task case needs the element re-shown explicitly.
+
+  The related shape is also still unguarded: busy reads openTaskID (state.ts:113-119) while TaskDialog only mounts when tasks still contains that id (App.vue:19), with no reconciliation between them.

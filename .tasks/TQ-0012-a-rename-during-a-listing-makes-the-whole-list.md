@@ -7,7 +7,7 @@ labels:
   - bug
   - component/store
 created: 2026-08-25T11:30:21+02:00
-updated: 2026-08-25T12:19:31+02:00
+updated: 2026-08-26T18:01:38+02:00
 ---
 
 ## Finding
@@ -25,3 +25,19 @@ I reproduced this independently: with a 29-task queue, a running `tq serve` and 
 Treat a file that disappeared between ReadDir and ReadFile as skipped rather than fatal.
 
 Filed from a `/code-review` pass at max effort.
+
+---
+
+## Notes
+
+- 2026-08-26T18:01:38+02:00 — Revalidated on main (2d8ddfa): still present, measured under load.
+
+  Store.List remains a TOCTOU — it snapshots names with os.ReadDir then reads each one (internal/store/store.go:305-325, return nil, err on any read error), and readFile turns os.ErrNotExist into ErrTaskNotFound (store.go:372-378), so a rename from a concurrent tq update --title aborts the entire listing.
+
+  Measured against a real tq serve with 60 tasks and a rename loop, 25s:
+    GET /api/tasks   total=1588  200=1505  404=83   (5.2%)
+    tq list --json   runs=1211   failures=75        (6.2%, each exit 2)
+
+  404 body: {"code":"task_not_found","error":"task not found: TQ-0042-....md"} — writeStoreError maps ErrTaskNotFound to 404 for the whole collection response (internal/web/server.go:306, applied at :144).
+
+  One thing changed since filing: the board no longer freezes forever. refreshQuietly (frontend/state.ts:171-181) sets a stale flag so the fallback poll retries, so the board recovers instead of sitting on stale cards. That is symptom mitigation in one client — the store-level defect and the CLI's exit 2 are untouched, and the suggested fix (treat a file that vanished between ReadDir and ReadFile as skipped rather than fatal) still applies at internal/store/store.go:321-324.

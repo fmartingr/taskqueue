@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/fmartingr/taskqueue/internal/task"
@@ -28,9 +29,42 @@ const testVersion = "test-version"
 type testCLI struct {
 	*cli
 	t      *testing.T
-	stdout *bytes.Buffer
-	stderr *bytes.Buffer
+	stdout *syncBuffer
+	stderr *syncBuffer
 	root   string
+}
+
+// syncBuffer is a bytes.Buffer a test can read while a command is still
+// writing to it. `tq serve` runs until it is signalled, so the tests that drive
+// it poll its output from one goroutine while the command writes from another —
+// which on a bare bytes.Buffer is a data race, and `go test -race` says so.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
 }
 
 // newTestCLI returns a CLI rooted in a temporary project that already has a
@@ -79,7 +113,7 @@ func newBareCLI(t *testing.T) *testCLI {
 	t.Setenv(config.EnvTaskDir, "")
 	t.Setenv(config.EnvWalkForever, "")
 	root := tqtest.Root(t)
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	return &testCLI{
 		cli:    &cli{stdout: stdout, stderr: stderr, dir: root, version: testVersion},
 		t:      t,
@@ -637,7 +671,7 @@ func TestCLINamesAQueueTheBoundExcluded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: repo}
 	tc.mustRun("list")
 
@@ -678,7 +712,7 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 	if err := os.MkdirAll(project, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: project, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: project}
 	anchorProject(t, project)
 
@@ -719,11 +753,11 @@ func TestCLIInitFindsTheQueueAbove(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seedOut, seedErr := &bytes.Buffer{}, &bytes.Buffer{}
+	seedOut, seedErr := &syncBuffer{}, &syncBuffer{}
 	seed := &testCLI{cli: &cli{stdout: seedOut, stderr: seedErr, dir: project, version: testVersion}, t: t, stdout: seedOut, stderr: seedErr, root: project}
 	seed.mustRun("add", "existing work")
 
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: nested, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: nested}
 
 	var out struct {
@@ -761,7 +795,7 @@ func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: repo, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: repo}
 
 	var out struct {
@@ -822,7 +856,7 @@ func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	tc := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: deep}
 	tc.mustRun("init")
 
@@ -853,7 +887,7 @@ func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
 	if err := os.Remove(guide); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	sub := &testCLI{cli: &cli{stdout: stdout, stderr: stderr, dir: deep, version: testVersion}, t: t, stdout: stdout, stderr: stderr, root: tc.root}
 	sub.mustRun("init")
 

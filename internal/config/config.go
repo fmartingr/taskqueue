@@ -43,6 +43,10 @@ type Config struct {
 	// the base set when the key is absent.
 	Labels map[string]Label `yaml:"labels" json:"labels"`
 
+	// Server is where `tq serve` binds when the project pins it. Read it
+	// through ServerHost and ServerPort, which answer through a nil *Config.
+	Server Server `yaml:"server" json:"server"`
+
 	// Priorities is the project's priority vocabulary, most severe first: a
 	// sequence rather than a mapping, because the order is the ranking and a
 	// decoded YAML mapping has none. Read it through PrioritySet, or through
@@ -131,6 +135,9 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
 	}
 	if err := validatePriorities(cfg.Priorities); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+	}
+	if err := validateServer(cfg.Server); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
 	}
 	return &cfg, nil

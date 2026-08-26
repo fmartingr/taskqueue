@@ -148,6 +148,47 @@ so, rather than a silent partial read.
 `TQ_WALK_FOREVER=true` lets the search continue past the repository root, for
 one queue shared above several repositories.
 
+### Where the server binds
+
+`tq serve` listens on `127.0.0.1:7331` by default. A project can pin its own
+address, so two checkouts served at once do not collide on the same port and
+the browser tab stays bookmarkable:
+
+```yaml
+server:
+  host: 127.0.0.1
+  port: 7412
+```
+
+Both keys are optional and each stands alone. Precedence runs highest first:
+
+| | |
+| --- | --- |
+| `--host`, `--port` | flags |
+| `TQ_HOST`, `TQ_PORT` | environment |
+| `server.host`, `server.port` | `.taskqueue.yaml`, committed with the project |
+| `127.0.0.1`, `7331` | built in |
+
+An environment variable that is set but empty reads as unset, so `TQ_HOST= tq
+serve` falls through to the config rather than clearing it. To override a
+committed address for a single run, pass the flag.
+
+`port: 0` asks the operating system to pick a free one, which is what the test
+harnesses use; the start-up banner always prints the address actually bound, so
+there is something to read back. A port already in use is a real error rather
+than a silent fallback — quietly moving would defeat the point of pinning one.
+A port out of range or not a number, and a host that is neither an IP address
+nor a hostname, are refused when the config loads, with the file named — a
+bracketed `[::1]` included, since that spelling reaches the listener as
+`[[::1]]:7331` and fails there with a message naming nothing useful.
+
+**A committed `host` is a safety decision, not a convenience.** The board has no
+authentication in front of it, so `host: 0.0.0.0` in a file everyone clones puts
+every clone's task queue on whatever network it is run — a café, a conference,
+an office VLAN. `tq` prints a warning on start-up whenever the bound host is not
+a loopback address. Prefer leaving `host` out and passing `--host` when you
+actually mean it.
+
 ### Labels
 
 Labels are freeform: `--label` takes any string, and always has. What
@@ -361,9 +402,10 @@ an unparsable `ready` value), `404` for a well-formed ID that has no task, and
 One unreadable task file fails the whole listing rather than hiding a task: the
 board shows the error with the offending filename so it can be fixed.
 
-`tq serve` binds to `127.0.0.1:7331` by default; `TQ_HOST` and `TQ_PORT` change
-the defaults and the flags win over both. There is no authentication, so think
-before binding to `0.0.0.0`.
+`tq serve` binds to `127.0.0.1:7331` by default, and a project can pin its own
+address — see [Where the server binds](#where-the-server-binds) for the keys and
+the precedence. There is no authentication, so think before binding to
+`0.0.0.0`.
 
 ## Development
 

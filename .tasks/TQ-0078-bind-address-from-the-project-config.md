@@ -1,14 +1,14 @@
 ---
 id: TQ-0078
 title: Bind address from the project config
-status: in-progress
+status: done
 priority: normal
 labels:
   - feature
   - component/config
   - component/api
 created: 2026-08-26T12:52:30+02:00
-updated: 2026-08-26T13:20:29+02:00
+updated: 2026-08-26T13:33:52+02:00
 ---
 
 ## Proposal
@@ -74,3 +74,21 @@ flag still beats a committed config.
 - `port: 0` still works, and the harnesses keep passing.
 - README and `tq help` document the keys and the precedence, including the
   warning about a non-loopback host in a committed file.
+
+---
+
+## Notes
+
+- 2026-08-26T13:33:52+02:00 — Done. server.host and server.port in .taskqueue.yaml, sitting between the environment and the built-in default.
+
+  The one design decision worth recording: Port is a *int, not an int. port: 0 is a real value meaning 'let the OS pick', which the browser and integration harnesses rely on, and a plain int cannot tell that from a project pinning nothing. Mutation-tested — treating 0 as absent fails two tests at two layers.
+
+  Validation is at load, with the file named, because the alternative is a bind error that names neither the file nor the key. The review caught that this covered the port and not the host: 'host: [::1]' is the spelling people reach for, since that is how the address is written once a port is on it, and left alone it reached net.Listen as [[::1]]:7331 — and ExposedHost, unable to parse it, warned that a loopback address was reachable from the network. Both now refused at load, with the unbracketing in the message.
+
+  A non-loopback host warns on start-up, on stderr so it cannot be mistaken for the banner a script parses the address out of.
+
+  Two things the review changed about how this is tested. The exposure warning was being tested by actually running 'tq serve --host 0.0.0.0', which puts an unauthenticated board on every interface of whatever machine runs 'go test' — a firewall prompt locally, a real exposure on CI. It now drives the warning function directly, with the loopback half still covered through a real serve because loopback is safe to bind. And the serve tests raced on the shared output buffer: 'tq serve' writes from one goroutine while the test polls from another. Fixed with a mutex-guarded buffer, which also closes the pre-existing race in TestCLIServePrintsTheAddressItActuallyGot; go test -race is clean.
+
+  Also moved signal.Notify above the banner in runServe. The banner is what tells a caller the server is up, so a signal arriving between the two met Go's default disposition and killed the process instead of shutting it down. That window was masked only because runServe never called signal.Stop, so an earlier test left a handler registered for the process lifetime.
+
+  Left out deliberately: the bind address is not added to GET /api/config. The ticket floated it as an option rather than a requirement, the board does not need it, and the JSON there is a stable contract.

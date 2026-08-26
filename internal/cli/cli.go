@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -128,9 +129,17 @@ Common flags:
   --                              End of flags: everything after it is an
                                   argument, even if it starts with "-"
 
+Server address (tq serve), highest precedence first:
+  --host, --port                  Flags
+  TQ_HOST, TQ_PORT                Environment
+  server.host, server.port        In %s, committed with the project
+  %-30s  Built in
+
+  A committed host that is not loopback exposes the board on the network of
+  everyone who clones the project; tq says so on start-up when it happens.
+
 Environment:
   %s      Task directory to use instead of discovering %s
-  TQ_HOST, TQ_PORT   Defaults for tq serve
   DEV                Serve frontend assets from disk instead of the embedded copy
 
 Exit codes:
@@ -144,6 +153,7 @@ func (c *cli) usage(w io.Writer) {
 		config.TaskDirName, filepath.Join(config.TaskDirName, guide.AgentsFileName),
 		strings.Join(task.Statuses, ", "),
 		strings.Join(priorities.Names(), ", "), priorities.Default(),
+		config.ConfigFileName, defaultHost+", "+defaultPort,
 		config.EnvTaskDir, config.TaskDirName,
 		config.TaskDirName)
 }
@@ -158,15 +168,57 @@ func (c *cli) usage(w io.Writer) {
 // the read that follows it. The store is what validates a write, and it reads
 // the config itself.
 func (c *cli) priorities() task.Priorities {
+	return c.config().Vocabulary()
+}
+
+// config is the project's config, resolved from the queue the command will
+// work on rather than from the working directory, so TQ_DIR pointing at another
+// project's queue reads that project's config.
+//
+// A config that cannot be read reads as none. Every caller here wants a default
+// rather than a failure — help must print, and a command that goes on to touch
+// the store reports the broken config itself, with the file named.
+func (c *cli) config() *config.Config {
 	dir := c.dir
 	if taskDir, err := store.DiscoverTaskDir(c.dir); err == nil {
 		dir = taskDir
 	}
 	cfg, err := config.FindConfig(dir)
 	if err != nil {
-		return task.Priorities{}
+		return nil
 	}
-	return cfg.Vocabulary()
+	return cfg
+}
+
+// warnIfExposed says so when the board has just been bound somewhere other
+// machines can reach it. There is no authentication in front of it, and a host
+// committed to .taskqueue.yaml exposes every clone of the project, so this is
+// worth a line rather than a surprise.
+//
+// On stderr, so it cannot be mistaken for part of the banner a script might be
+// reading the address out of.
+func warnIfExposed(w io.Writer, host string) {
+	if !config.ExposedHost(host) {
+		return
+	}
+	fmt.Fprintf(w, "warning: bound to %s, which is reachable from other machines, and the board has no authentication in front of it\n", host)
+}
+
+// serveDefaults is the address `tq serve` binds to before flags are parsed:
+// the environment, then what the project pins, then the built-in. The flag
+// layer sits on top of this by being its default value.
+func (c *cli) serveDefaults() (host, port string) {
+	host, port = defaultHost, defaultPort
+
+	cfg := c.config()
+	if pinned := cfg.ServerHost(); pinned != "" {
+		host = pinned
+	}
+	// Not `if pinned != 0`: zero is a port, and it means "let the OS pick".
+	if pinned, ok := cfg.ServerPort(); ok {
+		port = strconv.Itoa(pinned)
+	}
+	return envOr("TQ_HOST", host), envOr("TQ_PORT", port)
 }
 
 // ── Commands ────────────────────────────────────────────────────
@@ -735,8 +787,9 @@ func envOr(name, fallback string) string {
 
 func (c *cli) runServe(args []string) int {
 	fs := c.flagSet("serve")
-	host := fs.String("host", envOr("TQ_HOST", defaultHost), "host to bind to")
-	port := fs.String("port", envOr("TQ_PORT", defaultPort), "port to listen on")
+	boundHost, boundPort := c.serveDefaults()
+	host := fs.String("host", boundHost, "host to bind to")
+	port := fs.String("port", boundPort, "port to listen on")
 	if _, code, ok := c.parse(fs, args, 0); !ok {
 		return code
 	}
@@ -764,17 +817,23 @@ func (c *cli) runServe(args []string) int {
 		return c.fail(err)
 	}
 
+	// Before the banner, not after: the banner is what tells a caller the
+	// server is up, and a signal arriving between the two would meet Go's
+	// default disposition and kill the process rather than shut it down.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
 	// The listener's address, not the requested one: --port 0 asks the OS to
 	// pick, and the caller has no other way to learn what it picked.
 	fmt.Fprintf(c.stdout, "Serving %s on http://%s\n", st.Dir, listener.Addr())
+	warnIfExposed(c.stderr, *host)
 	if dev {
 		fmt.Fprintf(c.stdout, "DEV mode: frontend served from ./%s\n", web.DevDir)
 	}
 
 	// Ctrl-C should leave no half-served requests behind.
 	shutdown := make(chan struct{})
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signals
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

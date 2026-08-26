@@ -3,7 +3,7 @@
  *
  * These tests drive the real board in a real Chromium, against the real `tq`
  * binary serving a real project directory. They exist because the parts of
- * `frontend/app.ts` that matter most — native drag and drop, `<dialog>`, focus
+ * the board that matter most — native drag and drop, `<dialog>`, focus
  * and blur, the poll — are exactly the parts a simulated DOM gets wrong.
  *
  * The shape mirrors `internal/integration/harness_test.go`, because the hard
@@ -44,7 +44,7 @@ const READY_TIMEOUT_MS = 15_000;
 const TEST_TIMEOUT_MS = 30_000;
 
 /**
- * The board's poll interval, from `frontend/app.ts`. The tests that prove the
+ * The board's poll interval, from `frontend/state.ts`. The tests that prove the
  * poll runs — and the ones that prove it stands down — have to outlast it.
  */
 export const POLL_INTERVAL_MS = 3000;

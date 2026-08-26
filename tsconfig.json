@@ -1,25 +1,30 @@
 {
+  // What `make typecheck` reads. Nothing emits from here: Bun does the
+  // bundling, and vue-tsc only ever answers whether the sources typecheck —
+  // which is the gap TQ-0024 filed, since `bun build` strips types without
+  // ever checking them. vue-tsc is a superset of tsc, so one run covers the
+  // .ts files and the templates inside the .vue ones alike.
+  //
+  // No noUnusedLocals/noUnusedParameters: bun-plugin-vue3 ships TypeScript
+  // source rather than declarations, so build.ts's import of it pulls three
+  // files that trip both flags into the program, and neither skipLibCheck nor
+  // exclude reaches code that arrives through an import.
   "compilerOptions": {
     "target": "ES2022",
-    "module": "Preserve",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "types": ["bun"],
+    "jsx": "preserve",
+
     "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "allowImportingTsExtensions": true,
-    "types": [
-      "bun"
-    ]
+    "skipLibCheck": true,
+
+    "noEmit": true
   },
-  "include": [
-    "frontend/**/*.ts",
-    "browser/**/*.ts"
-  ]
+  "include": ["frontend/**/*.ts", "frontend/**/*.vue", "browser/**/*.ts"]
 }

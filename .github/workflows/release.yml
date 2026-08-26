@@ -19,8 +19,10 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - run: make ci-lint
       - run: make test
+      - run: make typecheck
       - run: make test-frontend
       - run: make frontend
       - name: The built frontend must match the committed output

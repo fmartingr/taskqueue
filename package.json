@@ -4,11 +4,17 @@
   "type": "module",
   "scripts": {
     "build": "bun run frontend/build.ts",
-    "dev": "bun run frontend/build.ts --watch"
+    "dev": "bun run frontend/build.ts --watch",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "3.5.41"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.0",
+    "@types/bun": "1.4.0",
+    "bun-plugin-vue3": "1.1.0",
     "playwright-core": "^1.62.1",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "vue-tsc": "3.3.11"
   }
 }

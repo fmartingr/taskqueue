@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatNote, joinBody, parseNotes, splitBody, type Note } from "./notes";
+import { formatNote, joinBody, mergeNotes, parseNotes, splitBody, type Note } from "./notes";
 
 const STAMP = "2026-08-25T09:42:00+02:00";
 
@@ -237,4 +237,49 @@ test("splitBody opens the section on an indented Notes heading", () => {
   const split = splitBody("Description.\n\n---\n\n  ## Notes\n\n- 2026-01-01T00:00:00Z — old");
   expect(split.content).toBe("Description.");
   expect(split.notes.length).toBe(1);
+});
+
+describe("mergeNotes", () => {
+  const note = (timestamp: string, text: string): Note => ({ timestamp, text });
+
+  const first = note("2026-08-25T09:00:00+02:00", "the first note");
+  const second = note("2026-08-25T10:00:00+02:00", "the second note");
+  const later = note("2026-08-25T11:00:00+02:00", "written while the dialog was open");
+
+  test("a note appended under an open dialog is kept (TQ-0010)", () => {
+    // Nothing was edited: the dialog holds what it opened with, the file has
+    // moved on, and every one of those notes has to survive the save.
+    expect(mergeNotes([first], [first], [first, later])).toEqual([first, later]);
+  });
+
+  test("a dialog opened on a task with no notes does not erase the ones since", () => {
+    expect(mergeNotes([], [], [later])).toEqual([later]);
+  });
+
+  test("an edit is applied to the note it was made on, wherever it now sits", () => {
+    const edited = note(first.timestamp, "reworded in the dialog");
+    expect(mergeNotes([first, second], [edited, second], [first, second, later])).toEqual([
+      edited,
+      second,
+      later,
+    ]);
+  });
+
+  test("the file decides which notes exist: one it dropped stays dropped", () => {
+    expect(mergeNotes([first, second], [first, second], [second])).toEqual([second]);
+  });
+
+  test("a note the dialog no longer recognises is left as the file has it", () => {
+    // Same position, different content: this is not the note that was edited,
+    // so the edit must not land on it.
+    const edited = note(first.timestamp, "reworded in the dialog");
+    const rewritten = note(first.timestamp, "rewritten on disk");
+    expect(mergeNotes([first], [edited], [rewritten])).toEqual([rewritten]);
+  });
+
+  test("two identical notes take one edit each, in order", () => {
+    const twin = note(first.timestamp, "the first note");
+    const edited = note(first.timestamp, "only the first one changed");
+    expect(mergeNotes([first, twin], [edited, twin], [first, twin])).toEqual([edited, twin]);
+  });
 });

@@ -62,10 +62,10 @@ test:
 test-integration:
 	go test -tags integration ./internal/integration/
 
-## typecheck: Typecheck the TypeScript sources (Bun strips types without checking)
+## typecheck: Typecheck the frontend, TypeScript and Vue templates alike
 .PHONY: typecheck
 typecheck:
-	bunx tsc --noEmit
+	bun run typecheck
 
 ## test-frontend: Run the frontend unit tests with Bun
 .PHONY: test-frontend

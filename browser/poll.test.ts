@@ -1,5 +1,5 @@
 /**
- * The poll. `frontend/app.ts` refreshes the board every few seconds so that
+ * The poll. `frontend/state.ts` refreshes the board every few seconds so that
  * work an agent does on the CLI shows up on its own, and stands down while the
  * user is dragging, composing or has a dialog open, so the board never moves
  * under their hands.

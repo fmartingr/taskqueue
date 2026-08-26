@@ -166,6 +166,38 @@ export function joinBody(body: SplitBody): string {
   return content === "" ? section : [content, "", NOTES_RULE, "", section].join("\n");
 }
 
+/**
+ * Merges the notes of a body being edited with the notes the file has now.
+ *
+ * The task dialog writes the whole body back, and the poll stands down for as
+ * long as it is open, so what it holds can be arbitrarily behind what the CLI
+ * has written in the meantime — every one of those notes would be erased by a
+ * save that trusted the snapshot (TQ-0010). Re-reading and merging is what
+ * makes the save keep both sides.
+ *
+ * `opened` is the notes as they were when the dialog opened, `edited` the same
+ * list as the user has since changed it — the two are the same length and line
+ * up index for index — and `current` is what the file holds now.
+ *
+ * The file wins on which notes exist: notes appended since are kept, and notes
+ * that have gone stay gone. The dialog wins only on the wording of a note it
+ * actually still recognises, which is why a note is matched by the timestamp
+ * *and* the text it was opened with rather than by its position.
+ */
+export function mergeNotes(opened: Note[], edited: Note[], current: Note[]): Note[] {
+  const taken = new Set<number>();
+
+  return current.map((note) => {
+    const at = opened.findIndex(
+      (candidate, i) =>
+        !taken.has(i) && candidate.timestamp === note.timestamp && candidate.text === note.text,
+    );
+    if (at === -1) return note; // appended while the dialog was open
+    taken.add(at);
+    return edited[at] ?? note;
+  });
+}
+
 export function formatNote(note: Note): string {
   const [first = "", ...rest] = trimBlankLines(note.text).split("\n");
   const head = note.timestamp === "" ? `- ${first.trim()}` : `- ${note.timestamp} — ${first.trim()}`;

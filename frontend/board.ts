@@ -2,9 +2,9 @@
  * The board's decisions, taken away from the DOM.
  *
  * Everything here maps data to data: the task shape the API returns, the
- * dependency lookups the cards need, and the filter bar. app.ts keeps the
- * fetching, the rendering and the event wiring, so the rules below can be
- * unit-tested with `bun test` and no browser.
+ * dependency lookups the cards need, and the filter bar. The components keep
+ * the fetching, the rendering and the event wiring, so the rules below can be
+ * unit-tested with `bun test` and no browser — and no Vue.
  *
  * isReady mirrors IsReady/IsBlocked in internal/task/task.go, which `tq ready`
  * and GET /api/tasks?ready=true go through. It is a second implementation of

@@ -101,6 +101,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      # Vue and the SFC loader are build-time dependencies now, so the build
+      # needs them installed before it can produce anything.
       - run: bun install --frozen-lockfile
       # Bun's bundler strips types without checking them, so nothing else in
       # this job would notice a type error (TQ-0024).

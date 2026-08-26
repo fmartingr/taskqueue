@@ -1917,3 +1917,238 @@ func TestShadowedProjectMarker(t *testing.T) {
 		}
 	})
 }
+
+// ── A lowercase .md, and only that (TQ-0039) ─────────────────────────────
+//
+// `.md` is the one extension a task file may have. Matching it case-folded was
+// declined: the store's view of a directory would then depend on whether the
+// filesystem folds case, which APFS, ext4 and NTFS do not agree on. So a file
+// arriving from outside spelled `.MD` — a Windows checkout, an editor with
+// opinions, a hand-copied file — is foreign: never read, never adopted, never
+// renamed. What it must not be is silent.
+
+// plantForeign moves a real task's file to a name whose extension is not the
+// lowercase .md tq writes. The content is a task file byte for byte, so what
+// keeps it out of the queue is the name and nothing else.
+func plantForeign(t *testing.T, st *store.Store, of task.Task, as string) string {
+	t.Helper()
+	current := filepath.Join(st.Dir, store.TaskFileName(of))
+	data, err := os.ReadFile(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(st.Dir, as), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return as
+}
+
+// foldsCase reports whether dir's filesystem answers to a name it did not
+// store. It is detected rather than assumed from the platform: macOS is usually
+// case-insensitive and Linux usually not, but either can be mounted the other
+// way, and where the two spellings are simply two files there is no collision
+// to see.
+func foldsCase(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, ".tq-case-probe.md")
+	if err := os.WriteFile(probe, []byte("probe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(probe) }()
+	_, err := os.Lstat(filepath.Join(dir, ".TQ-CASE-PROBE.MD"))
+	return err == nil
+}
+
+// The write half of the rule. Every path tq writes ends in a lowercase .md, and
+// the title cannot smuggle a different one in.
+func TestTaskFileNameIsAlwaysALowercaseMD(t *testing.T) {
+	tests := []struct{ title, want string }{
+		{"Fix BUG.MD", "TQ-0001-fix-bug-md.md"},
+		{"SHOUTING", "TQ-0001-shouting.md"},
+		{"README.MD", "TQ-0001-readme-md.md"},
+		{"", "TQ-0001.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			got := store.TaskFileName(task.Task{ID: "TQ-0001", Title: tt.title})
+			if got != tt.want {
+				t.Errorf("TaskFileName(%q) = %q, want %q", tt.title, got, tt.want)
+			}
+		})
+	}
+}
+
+// The read half. A planted .MD is not a task, however well it parses.
+func TestAFileSpelledMDIsNotAdopted(t *testing.T) {
+	st := tqtest.NewStore(t)
+	only := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Keep me"})
+	planted := plantForeign(t, st, only, only.ID+"-keep-me.MD")
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listing.Tasks) != 0 {
+		t.Errorf("List() = %+v, want no tasks: %s is not a task file", listing.Tasks, planted)
+	}
+
+	if _, err := st.Locate(only.ID); !errors.Is(err, store.ErrTaskNotFound) {
+		t.Errorf("Locate(%s) = %v, want ErrTaskNotFound", only.ID, err)
+	} else if !strings.Contains(err.Error(), planted) {
+		// "not found" alone sends the reader looking for a file that is
+		// plainly there.
+		t.Errorf("Locate(%s) says %q, want it to name %s", only.ID, err, planted)
+	}
+
+	// Not adopted means the number it claims is still free. That is what makes
+	// the duplicate below possible, and why the duplicate has to be reported.
+	next, err := st.NextID()
+	if err != nil {
+		t.Fatalf("NextID: %v", err)
+	}
+	if next != only.ID {
+		t.Errorf("NextID() = %q, want %q: a foreign file is not a task, so its number was never taken", next, only.ID)
+	}
+}
+
+// The silent half of the gap TQ-0040 could not close: duplicatedIDs reads the
+// task files, and this is not one, so an ID claimed by a .MD and a .md at once
+// went entirely unmentioned.
+func TestAFileSpelledMDIsReported(t *testing.T) {
+	t.Run("alone", func(t *testing.T) {
+		st := tqtest.NewStore(t)
+		only := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Keep me"})
+		planted := plantForeign(t, st, only, only.ID+"-keep-me.MD")
+
+		listing, err := st.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(listing.Unreadable) != 1 || listing.Unreadable[0].File != planted {
+			t.Fatalf("Unreadable = %+v, want it to name %s: an empty-looking queue with nothing said is the whole complaint", listing.Unreadable, planted)
+		}
+		if reason := listing.Unreadable[0].Reason; !strings.Contains(reason, ".md") {
+			t.Errorf("reason = %q, want it to state the extension rule", reason)
+		}
+	})
+
+	t.Run("beside the task file that holds its ID", func(t *testing.T) {
+		st := tqtest.NewStore(t)
+		held := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Keep me"})
+		planted := duplicate(t, st, held, held.ID+"-second-claim.MD")
+
+		listing, err := st.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		// The task file is a task file: it is read, and it stays on the board.
+		if len(listing.Tasks) != 1 || listing.Tasks[0].ID != held.ID {
+			t.Fatalf("List() = %+v, want %s: the real file is not in doubt, and withholding it would hide a healthy task", listing.Tasks, held.ID)
+		}
+		if len(listing.Unreadable) != 1 || listing.Unreadable[0].File != planted {
+			t.Fatalf("Unreadable = %+v, want it to name %s", listing.Unreadable, planted)
+		}
+		reason := listing.Unreadable[0].Reason
+		for _, want := range []string{held.ID, store.TaskFileName(held)} {
+			if !strings.Contains(reason, want) {
+				t.Errorf("reason = %q, want it to name %s: two files claiming one ID is what has to be fixed here", reason, want)
+			}
+		}
+		if len(listing.Duplicated) != 0 {
+			t.Errorf("Duplicated = %+v, want nothing: one of the two is not a task file, so there is no choosing between them", listing.Duplicated)
+		}
+	})
+}
+
+// The message the ticket is named for. A file the store cannot see occupies the
+// name the new task wants, NextID cannot see it either, so every retry derived
+// the same number and the loop ran out blaming task IDs.
+func TestCreateNamesTheEntryInTheWay(t *testing.T) {
+	st := tqtest.NewStore(t)
+	if !foldsCase(t, st.Dir) {
+		t.Skip("this filesystem keeps .md and .MD apart, so nothing is in the way of the write")
+	}
+	blocked := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Keep me"})
+	planted := plantForeign(t, st, blocked, blocked.ID+"-keep-me.MD")
+
+	_, err := st.Create(store.CreateTaskInput{Title: "Keep me"})
+	if err == nil {
+		t.Fatalf("Create should have been refused by %s", planted)
+	}
+	if !strings.Contains(err.Error(), planted) {
+		t.Errorf("Create says %q, want it to name %s", err, planted)
+	}
+	if strings.Contains(err.Error(), "attempts") {
+		t.Errorf("Create says %q; the ID was never the problem, and counting attempts told the reader nothing", err)
+	}
+	if _, err := os.Lstat(filepath.Join(st.Dir, planted)); err != nil {
+		t.Errorf("%s must be left exactly as it is: %v", planted, err)
+	}
+}
+
+// The same collision from the other side: a retitle picks its destination from
+// the new title, and write replaces whatever is at it. Replacing a path tq does
+// not own is the one thing it must never do.
+func TestUpdateRefusesToRenameOverAnEntryItDoesNotOwn(t *testing.T) {
+	st := tqtest.NewStore(t)
+	if !foldsCase(t, st.Dir) {
+		t.Skip("this filesystem keeps .md and .MD apart, so the retitle lands beside the file rather than on it")
+	}
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Before"})
+	planted := filepath.Join(st.Dir, tk.ID+"-after.MD")
+	if err := os.WriteFile(planted, []byte("not a task file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tk.Title = "After"
+	if _, err := st.Update(tk); err == nil {
+		t.Fatalf("Update should have been refused by %s", filepath.Base(planted))
+	} else if !strings.Contains(err.Error(), filepath.Base(planted)) {
+		t.Errorf("Update says %q, want it to name %s", err, filepath.Base(planted))
+	}
+
+	if content, err := os.ReadFile(planted); err != nil || string(content) != "not a task file" {
+		t.Errorf("%s = %q (%v), want it untouched", filepath.Base(planted), content, err)
+	}
+	if reloaded, err := st.Get(tk.ID); err != nil || reloaded.Title != "Before" {
+		t.Errorf("Get(%s) = %+v (%v), want the task still under its old title", tk.ID, reloaded, err)
+	}
+}
+
+// The entry in the way is found by identity, and the directory is read a moment
+// after the name was resolved: a task file written into that moment — a
+// concurrent retitle writes the new name first — can be what the match lands
+// on. That one is in nobody's way, and the retry is what handles it; only an
+// entry the store does not read is worth stopping for.
+//
+// Hard links pin that decision without a race, by giving one file two names.
+func TestCreateStopsOnlyForAnEntryTheStoreDoesNotRead(t *testing.T) {
+	st := tqtest.NewStore(t)
+	if !foldsCase(t, st.Dir) {
+		t.Skip("this filesystem keeps .md and .MD apart, so nothing is in the way of the write")
+	}
+	blocked := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Keep me"})
+	planted := plantForeign(t, st, blocked, blocked.ID+"-keep-me.MD")
+
+	// A task file sharing the foreign file's identity and sorting ahead of it:
+	// what a match by identity finds first if it does not know a task file when
+	// it sees one.
+	const decoy = "TQ-0000-a-task-file.md"
+	if err := os.Link(filepath.Join(st.Dir, planted), filepath.Join(st.Dir, decoy)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := st.Create(store.CreateTaskInput{Title: "Keep me"})
+	if err == nil {
+		t.Fatalf("Create should have been refused by %s", planted)
+	}
+	if !strings.Contains(err.Error(), planted) {
+		t.Errorf("Create says %q, want it to name %s", err, planted)
+	}
+	if strings.Contains(err.Error(), decoy) {
+		t.Errorf("Create says %q; %s is a task file, and saying it is not one of a file the store reads perfectly well is worse than the retry it replaced", err, decoy)
+	}
+}

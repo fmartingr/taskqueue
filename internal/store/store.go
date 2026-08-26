@@ -238,12 +238,34 @@ type CreateTaskInput struct {
 }
 
 // taskFilePattern matches the two shapes a task file can have: the ID alone,
-// or the ID followed by a slug of the title.
+// or the ID followed by a slug of the title. The extension is a lowercase `.md`
+// and nothing else — see foreignClaimRule.
 var taskFilePattern = regexp.MustCompile(`^(TQ-[0-9]+)(?:-[^/]*)?\.md$`)
+
+// claimPattern matches a name that claims a task ID, whatever case the
+// extension is spelled in. Only the lowercase spelling is a task file; this is
+// what recognises the others well enough to report them.
+var claimPattern = regexp.MustCompile(`^(TQ-[0-9]+)(?:-[^/]*)?\.[mM][dD]$`)
+
+// foreignClaimRule is why such a file is left alone, said in one line because
+// every caller puts it where a line is a unit — a warning on stderr, a toast on
+// the board.
+//
+// Folding case when matching was considered and declined (TQ-0039): the store's
+// view of a directory would then depend on whether the filesystem folds case,
+// which APFS, ext4 and NTFS do not agree on. So the rule is one-way instead —
+// every path tq writes, renames, links or removes ends in a lowercase `.md`,
+// and every path it matches must too — and a file that arrives spelled
+// otherwise stays foreign.
+const foreignClaimRule = "a task file's extension must be a lowercase .md"
 
 // TaskFileName is the file a task belongs in: its ID, suffixed with a slug of
 // the title so the directory is browsable and greppable by name. The ID stays
 // first, so files sort and glob by ID.
+//
+// The whole name is lowercase but for the ID: Slugify lowercases the title, and
+// the extension is written, never taken from anything the caller supplied. That
+// is the write half of the rule above.
 func TaskFileName(t task.Task) string {
 	if slug := task.Slugify(t.Title); slug != "" {
 		return t.ID + "-" + slug + ".md"
@@ -260,9 +282,53 @@ func taskFileID(name string) (string, bool) {
 	return match[1], true
 }
 
+// claimedID reports which task a name claims, task file or not.
+func claimedID(name string) (string, bool) {
+	match := claimPattern.FindStringSubmatch(name)
+	if match == nil {
+		return "", false
+	}
+	return match[1], true
+}
+
+// foreignClaim reports a name that claims a task ID under a spelling tq does
+// not read. tq neither reads such a file, nor adopts it, nor renames it — but
+// it does not pass over it in silence either, because on a case-insensitive
+// filesystem it occupies the name a task file wants (TQ-0039).
+func foreignClaim(name string) bool {
+	return claimPattern.MatchString(name) && !taskFilePattern.MatchString(name)
+}
+
+// claimedBy is every name in the list that claims the given ID.
+func claimedBy(names []string, id string) []string {
+	var claiming []string
+	for _, name := range names {
+		if claimant, ok := claimedID(name); ok && claimant == id {
+			claiming = append(claiming, name)
+		}
+	}
+	return claiming
+}
+
+// foreignReason is what a listing says about a foreign file: the rule, and the
+// task file already holding that ID when there is one. A lone foreign file
+// leaves the queue a task short; one beside a real file is a second claim on an
+// ID, which is the case duplicatedIDs cannot see — it reads the task files, and
+// this is not one.
+func foreignReason(name string, taskFiles []string) string {
+	// A name that claims nothing claims no ID either, so held comes back empty
+	// and the rule is the whole answer.
+	id, _ := claimedID(name)
+	held := claimedBy(taskFiles, id)
+	if len(held) == 0 {
+		return foreignClaimRule
+	}
+	return fmt.Sprintf("%s, and %s is already claimed by %s", foreignClaimRule, id, strings.Join(held, ", "))
+}
+
 // locate finds the file holding a task, whatever title suffix it carries.
 func (s *Store) locate(id string) (string, error) {
-	names, err := s.taskFileNames()
+	names, foreign, err := s.readTaskDir()
 	if err != nil {
 		return "", err
 	}
@@ -276,6 +342,12 @@ func (s *Store) locate(id string) (string, error) {
 
 	switch len(matches) {
 	case 0:
+		// A file claiming this ID under a name tq will not read is why a queue
+		// can look a task short. Name it: "not found" on its own sends the
+		// reader looking for a file that is plainly there (TQ-0039).
+		if blocked := claimedBy(foreign, id); len(blocked) > 0 {
+			return "", fmt.Errorf("%w: %s (%s: %s)", ErrTaskNotFound, id, strings.Join(blocked, ", "), foreignClaimRule)
+		}
 		return "", fmt.Errorf("%w: %s", ErrTaskNotFound, id)
 	case 1:
 		return matches[0], nil
@@ -325,9 +397,16 @@ func (s *Store) Columns() (task.Columns, error) {
 	return cfg.Board(), nil
 }
 
-// UnreadableFile is a task file a scan had to skip, and why. The reason is the
+// UnreadableFile is a file a scan had to skip, and why. The reason is the
 // error's message without the file name it already carried, because every
 // caller prints the name itself.
+//
+// Two kinds of file end up here, and one channel carries both because a caller
+// does the same thing with either — names it and carries on. A file that will
+// not parse is one (TQ-0011). The other is a file claiming a task ID under a
+// name tq will not read, `.MD` for `.md` being the case at hand: it is not a
+// task file and never becomes one, and reporting it is all tq does about it
+// (TQ-0039).
 type UnreadableFile struct {
 	File   string `json:"file"`
 	Reason string `json:"reason"`
@@ -422,7 +501,9 @@ const listAttempts = 3
 //
 // A broken file does not move the directory, so it is reported once and never
 // retried — the retry is for a directory that changed, not for a file that
-// cannot be parsed.
+// cannot be parsed. Nor is a file whose name claims a task ID in a spelling tq
+// will not read: it is reported alongside the broken ones and otherwise left
+// exactly where it is (TQ-0039).
 func (s *Store) List() (Listing, error) {
 	// The ranking and the board are the project's, so sorting needs both. Read
 	// once, ahead of the scans: they do not change with an attempt, and a
@@ -438,9 +519,11 @@ func (s *Store) List() (Listing, error) {
 
 	var listing Listing
 	var doubled, previous []DuplicatedID
+	var before, foreign []string
 	confirmed := false
 	for attempt := 1; ; attempt++ {
-		before, err := s.taskFileNames()
+		var err error
+		before, foreign, err = s.readTaskDir()
 		if err != nil {
 			return Listing{}, err
 		}
@@ -486,6 +569,15 @@ func (s *Store) List() (Listing, error) {
 	}
 	listing.Tasks = withhold(listing.Tasks, doubled)
 
+	// A file claiming a task ID under a name tq will not read goes out the same
+	// way a file that will not parse does: it is a task the listing does not
+	// have, and staying quiet about it is what let a second file claim an ID
+	// with nothing said — the case duplicatedIDs cannot see, because it reads
+	// the task files and this is not one (TQ-0039).
+	for _, name := range foreign {
+		listing.Unreadable = append(listing.Unreadable, UnreadableFile{File: name, Reason: foreignReason(name, before)})
+	}
+
 	// A task filed under a value the project has since dropped keeps it and
 	// sorts last, rather than being refused by the listing that would show it.
 	for i := range listing.Tasks {
@@ -495,28 +587,41 @@ func (s *Store) List() (Listing, error) {
 	return listing, nil
 }
 
-// taskFileNames is the directory reading a scan starts from and is checked
-// against: the names of the files that hold tasks, in the sorted order
-// os.ReadDir returns them, with everything else left out — subdirectories, the
-// generated guide, and the temporary file an atomic write leaves beside the
-// tasks for an instant, which is not a task appearing and must not send a scan
-// round again.
-func (s *Store) taskFileNames() ([]string, error) {
+// readTaskDir is one reading of the task directory, split in two: the names of
+// the files that hold tasks, and the names that claim a task ID under a
+// spelling tq will not read. Both come back in the sorted order os.ReadDir
+// returns them, with everything else left out — subdirectories, the generated
+// guide, and the temporary file an atomic write leaves beside the tasks for an
+// instant, which is not a task appearing and must not send a scan round again.
+//
+// One reading rather than two, because a listing already reads the directory
+// twice on purpose and a third pass would be a third moment in time to
+// reconcile.
+func (s *Store) readTaskDir() (names, foreign []string, err error) {
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	names := make([]string, 0, len(entries))
+	names = make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if _, ok := taskFileID(entry.Name()); !ok {
-			continue
+		switch name := entry.Name(); {
+		case taskFilePattern.MatchString(name):
+			names = append(names, name)
+		case foreignClaim(name):
+			foreign = append(foreign, name)
 		}
-		names = append(names, entry.Name())
 	}
-	return names, nil
+	return names, foreign, nil
+}
+
+// taskFileNames is the directory reading a scan starts from and is checked
+// against.
+func (s *Store) taskFileNames() ([]string, error) {
+	names, _, err := s.readTaskDir()
+	return names, err
 }
 
 // duplicatedIDs reports the IDs the given file names claim more than once,
@@ -714,8 +819,19 @@ func (s *Store) Create(in CreateTaskInput) (task.Task, error) {
 		if err := t.ValidateForWrite(); err != nil {
 			return task.Task{}, err
 		}
+		name := TaskFileName(t)
 		if _, err := s.writeNew(t); err != nil {
 			if errors.Is(err, os.ErrExist) {
+				// The name is taken. By a task file, if another process got
+				// there first — the next scan sees it, NextID hands out a
+				// higher number, and the retry is the point. Or by a directory
+				// entry the store does not read, which no number of retries
+				// gets past, because NextID cannot see it either: the same
+				// number comes back every time and the loop runs out blaming
+				// task IDs for a file it never mentioned (TQ-0039).
+				if blocking, ok := s.entryInTheWay(name); ok && blocking != name {
+					return task.Task{}, fmt.Errorf("cannot create %s: %s", name, inTheWay(blocking))
+				}
 				continue
 			}
 			return task.Task{}, err
@@ -822,6 +938,18 @@ func (s *Store) update(t task.Task) (task.Task, error) {
 
 	if err := t.ValidateForWrite(); err != nil {
 		return task.Task{}, err
+	}
+
+	// A retitle moves the task to a new filename, and write replaces whatever
+	// is at it. On a case-insensitive filesystem that name can already be a
+	// directory entry the store does not read, and replacing it would be tq
+	// mutating a path it does not own, silently (TQ-0039). The file the task is
+	// in now is not in the way of itself: a hand-renamed one can be this very
+	// name under another spelling, which is what retireOldFile settles.
+	if name := TaskFileName(t); name != current {
+		if blocking, ok := s.entryInTheWay(name); ok && blocking != current {
+			return task.Task{}, fmt.Errorf("cannot save %s as %s: %s", t.ID, name, inTheWay(blocking))
+		}
 	}
 
 	written, err := s.write(t)
@@ -975,6 +1103,67 @@ func (s *Store) writeNew(t task.Task) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+// entryInTheWay names the directory entry occupying a filename. It is for
+// after a write has already been refused: a case-insensitive or normalizing
+// filesystem answers to a name it did not store, and there is no asking it what
+// it called the entry — so the entry is found by identity instead, matching
+// whatever the name resolved to against the directory.
+//
+// An exact spelling wins over an identical one, so a name the directory really
+// holds is reported as itself whatever order the entries come back in.
+//
+// Only an entry the store does not read is ever reported by identity. The
+// directory is read a moment after the name was resolved, and a task file can
+// be renamed into that moment — a concurrent retitle writes the new name before
+// retiring the old — so the match by identity can land on a perfectly good task
+// file. That one is in nobody's way: the caller's retry reads the directory
+// again and NextID has it by then, which is what the retry is for. Naming it
+// would fail the write hard, and say of a task file that it is not one.
+func (s *Store) entryInTheWay(name string) (string, bool) {
+	// Lstat, so a symlink is the entry it is rather than the file it points at:
+	// what is in the way is the directory entry.
+	info, err := os.Lstat(filepath.Join(s.Dir, name))
+	if err != nil {
+		return "", false
+	}
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if entry.Name() == name {
+			return name, true
+		}
+	}
+	for _, entry := range entries {
+		if taskFilePattern.MatchString(entry.Name()) {
+			continue
+		}
+		other, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if os.SameFile(info, other) {
+			return entry.Name(), true
+		}
+	}
+	return "", false
+}
+
+// inTheWay is the sentence a write refused by such an entry says. The rule when
+// the entry is a foreign claim, which is the case worth explaining; otherwise
+// just that it is not something tq will read.
+//
+// Either way the remedy is the reader's: tq reports a path it does not own and
+// stops there — it does not rename one (TQ-0039).
+func inTheWay(name string) string {
+	reason := "it is not a task file"
+	if foreignClaim(name) {
+		reason = foreignClaimRule
+	}
+	return fmt.Sprintf("%s is in the way (%s); rename it or remove it", name, reason)
 }
 
 func orDefault(value, fallback string) string {

@@ -448,6 +448,12 @@ Implement authentication using the existing OIDC provider.
 - Files are named `<id>-<title-slug>.md` (`TQ-0001-implement-oidc-authentication.md`),
   so the directory is browsable and greppable by name. The ID comes first, so
   files still sort and glob by ID.
+- The extension is a lowercase `.md`, and matching it is not case-folded — that
+  would make what tq sees in a directory depend on the filesystem. So a
+  `TQ-0001-implement-oidc-authentication.MD`, however it arrived, is not a task
+  file: tq does not read it, list it, claim its ID or rename it. It is named on
+  stderr and in the board's footer the way an unparseable file is, and renaming
+  it is yours to do.
 - The `id` in the frontmatter is authoritative: tasks are looked up by ID
   whatever the suffix says, files written before this naming existed keep
   working, and retitling a task renames its file on the next write (Git records

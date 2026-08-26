@@ -120,6 +120,21 @@ frontend`, `make typecheck` or `make dev` will run.
 - Task files are named `<id>-<title-slug>.md`, but the ID in the frontmatter is
   what identifies a task: look tasks up by ID (`Store.locate`), never by
   reconstructing a filename from a title.
+- `.md`, lowercase, is the only extension a task file may have, and the rule is
+  one-way: every path tq writes, renames, links or removes ends in a lowercase
+  `.md`, and every path it matches must too (TQ-0039). Folding case in
+  `taskFilePattern` was considered and declined — the store's view of a
+  directory would then depend on whether the filesystem folds case, which APFS,
+  ext4 and NTFS do not agree on. So a `TQ-0001-fix-bug.MD` arriving from
+  outside is foreign: never read, never adopted, never renamed. It is not
+  passed over in silence either, because on a case-insensitive filesystem it
+  also occupies the name a task file wants. It goes out in
+  `Listing.Unreadable`, the channel a file that will not parse already uses,
+  naming the task file holding that ID when there is one — which is the second
+  claim `duplicatedIDs` cannot see, since that reads the task files and this is
+  not one. A write refused by such an entry names it: the entry is found by
+  identity, not by name, because a filesystem that answers to a spelling it did
+  not store will not say what it called it.
 - A task file that will not parse is skipped and reported, never fatal to a
   listing: `Store.List` returns a `Listing` carrying the tasks it read and the
   files it could not (TQ-0011). `.tasks/` is committed, so a merge conflict in

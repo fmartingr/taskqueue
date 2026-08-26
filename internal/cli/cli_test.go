@@ -436,6 +436,65 @@ func TestCLIListAndReadyWithholdAnIDTwoFilesClaim(t *testing.T) {
 	})
 }
 
+// `.md`, lowercase, is the only extension a task file may have, and a file
+// spelled otherwise is not one — tq does not read it, adopt it or rename it.
+// What it does is say so: a queue that looked empty with nothing on stderr was
+// how a second file came to claim an ID in silence (TQ-0039).
+func TestCLIListNamesAFileSpelledMD(t *testing.T) {
+	const foreign = "TQ-0002-from-a-windows-checkout.MD"
+	newProject := func(t *testing.T) *testCLI {
+		t.Helper()
+		tc := newTestCLI(t)
+		tc.mustRun("add", "Healthy and ready", "--status", "todo")
+		content := "---\nid: TQ-0002\ntitle: from a windows checkout\nstatus: todo\npriority: normal\n" +
+			"created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n"
+		if err := os.WriteFile(filepath.Join(tc.root, config.TaskDirName, foreign), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return tc
+	}
+
+	t.Run("list", func(t *testing.T) {
+		tc := newProject(t)
+
+		out := tc.mustRun("list")
+		if strings.Contains(out, "TQ-0002") {
+			t.Errorf("list holds TQ-0002, which no task file claims:\n%s", out)
+		}
+		if warning := tc.stderr.String(); !strings.Contains(warning, foreign) || !strings.Contains(warning, ".md") {
+			t.Errorf("stderr should name %s and the rule it breaks, got %q", foreign, warning)
+		}
+	})
+
+	// A warning, not a failure: the tasks that did read are still the answer,
+	// and they go to stdout alone so an agent's parse is untouched.
+	t.Run("--json", func(t *testing.T) {
+		tc := newProject(t)
+
+		var tasks []task.Task
+		tc.mustRunJSON(&tasks, "list", "--json")
+		if len(tasks) != 1 || tasks[0].ID != "TQ-0001" {
+			t.Errorf("list --json returned %+v, want only TQ-0001", tasks)
+		}
+		if !strings.Contains(tc.stderr.String(), foreign) {
+			t.Errorf("stderr should name %s, got %q", foreign, tc.stderr)
+		}
+	})
+
+	// And a lookup of the ID it claims says where it went, rather than leaving
+	// the reader to wonder about a file that is plainly in the directory.
+	t.Run("show", func(t *testing.T) {
+		tc := newProject(t)
+
+		if code := tc.run("show", "TQ-0002"); code != exitTaskNotFound {
+			t.Fatalf("show TQ-0002 = exit %d, want %d", code, exitTaskNotFound)
+		}
+		if warning := tc.stderr.String(); !strings.Contains(warning, foreign) {
+			t.Errorf("show says %q, want it to name %s", warning, foreign)
+		}
+	})
+}
+
 // A listing the store could not square with the directory says so, and says it
 // on stderr: the listing itself is what an agent parses, and a warning on
 // stdout would break --json. It is a warning and not a failure — the tasks it

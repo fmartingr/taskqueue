@@ -79,6 +79,11 @@ whole string, so `tq list --label component/backend` takes the whole key.
 - A task is *ready* when it is neither done nor in-progress and every task in
   `depends_on` exists and is done. A missing dependency blocks it.
 - `--json` prints JSON to stdout and nothing else; errors go to stderr.
+- A task file's extension is a lowercase `.md`, and only that. A file named
+  `TQ-0001-fix-bug.MD` is not a task file: tq does not read it, list it,
+  adopt its ID or rename it. It is named on stderr like a file that will not
+  parse, and renaming it is yours to do — tq never touches a path it does not
+  own.
 - A file this directory holds that cannot be parsed — a merge conflict, a key
   the format does not have — is skipped rather than failing the listing.
   `tq list` and `tq ready` still exit 0 and print what they could

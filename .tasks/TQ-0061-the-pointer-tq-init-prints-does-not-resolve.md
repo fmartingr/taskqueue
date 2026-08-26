@@ -1,13 +1,13 @@
 ---
 id: TQ-0061
 title: The pointer tq init prints does not resolve from where it was run
-status: in-progress
+status: done
 priority: high
 labels:
   - bug
   - component/cli
 created: 2026-08-25T17:44:51+02:00
-updated: 2026-08-26T19:41:40+02:00
+updated: 2026-08-26T19:42:11+02:00
 ---
 
 ## Finding

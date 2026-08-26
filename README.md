@@ -61,16 +61,14 @@ repeat: besides the directory and the config it writes `.tasks/AGENTS.md` — a
 short CLI cheat sheet for coding agents, generated from the statuses, priorities
 and exit codes the binary actually implements.
 
-Point your agents at it yourself, by adding one line to your `AGENTS.md`,
-`CLAUDE.md` or whatever your tool reads:
+Point your agents at it yourself, by referencing that guide from your
+`AGENTS.md`, `CLAUDE.md` or whatever your tool reads — an `@.tasks/AGENTS.md`
+include, a Markdown link, whatever the tool understands.
 
-```md
-@.tasks/AGENTS.md
-```
-
-`tq init` prints that line every time, so you never have to remember the path.
-It does not edit those files: they are yours, they are committed, and a tool
-that rewrites a document it did not author eventually destroys something.
+`tq init` prints the guide's full path every time, so you never have to
+remember where it is; how you reference it, and from which file, is yours to
+decide. It does not edit those files: they are yours, they are committed, and a
+tool that rewrites a document it did not author eventually destroys something.
 
 Commit `.tasks/` with your code — task history lives in the same repository as
 the work it describes.

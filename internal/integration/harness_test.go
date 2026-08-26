@@ -85,6 +85,20 @@ func (p *project) path(elem ...string) string {
 	return filepath.Join(append([]string{p.dir}, elem...)...)
 }
 
+// realPath is the path the binary reports back for one inside a temporary
+// directory. A separate process resolves its own working directory through the
+// kernel, and on macOS t.TempDir() hands out a path under /var that really is
+// /private/var — so an exact comparison against what tq printed has to resolve
+// the fixture's side too. dir must exist; rest need not.
+func realPath(t *testing.T, dir string, rest ...string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", dir, err)
+	}
+	return filepath.Join(append([]string{resolved}, rest...)...)
+}
+
 // result is one run of the binary. The streams stay apart, which is the whole
 // point: the --json contract is a claim about which stream carries what.
 type result struct {

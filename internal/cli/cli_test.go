@@ -981,18 +981,24 @@ func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 			t.Errorf("init created %s; it must leave those files to the user", name)
 		}
 	}
-	if !strings.Contains(out, "@"+config.TaskDirName+"/"+guide.AgentsFileName) {
-		t.Errorf("init should print the line to add, got %q", out)
+	// It names the guide by its absolute path, so the line holds wherever the
+	// user pastes it and whatever directory they ran init from (TQ-0061).
+	pointer := "\nThe agent guide is at:\n\n    " + guidePath + "\n"
+	if !strings.Contains(out, pointer) {
+		t.Errorf("init should name the guide, got %q", out)
+	}
+	if !strings.Contains(out, "Include it in your preferred agent context file") {
+		t.Errorf("init should say what to do with the guide, got %q", out)
 	}
 
-	// Re-running refreshes without reporting spurious writes, but still says
-	// what to add — the file it names may not exist yet.
+	// Re-running refreshes without reporting spurious writes, but still names
+	// the guide — the file that references it may not exist yet.
 	out = tc.mustRun("init")
 	if strings.Contains(out, "Wrote ") {
 		t.Errorf("nothing should be rewritten on a second init, got %q", out)
 	}
-	if !strings.Contains(out, "@"+config.TaskDirName+"/"+guide.AgentsFileName) {
-		t.Errorf("the second init should still print the line to add, got %q", out)
+	if !strings.Contains(out, pointer) {
+		t.Errorf("the second init should still name the guide, got %q", out)
 	}
 }
 

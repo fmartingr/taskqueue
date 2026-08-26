@@ -179,3 +179,85 @@ func TestInitWritesTheMarkerAndTheGuide(t *testing.T) {
 		t.Errorf("init rewrote a config it did not author:\n%s", after)
 	}
 }
+
+// What `tq init` says about the guide has to hold from the directory it was run
+// in, and the only path that does is the guide's own absolute one. It used to
+// print a relative include resolved against a base tq guessed, which named the
+// wrong file from anywhere else (TQ-0061). Both surfaces are checked here: the
+// human line on stdout and the `pointer` key agents read.
+func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	// stdout carries the guide's path once, in a line a user can act on, and
+	// the invitation to reference it from a file of their choosing.
+	assertPrints := func(t *testing.T, r result, guide string) {
+		t.Helper()
+		if want := "\nThe agent guide is at:\n\n    " + guide + "\n"; !strings.Contains(r.Stdout, want) {
+			t.Errorf("stdout does not name the guide:\ngot:\n%s\nwant it to contain:\n%s", r.Stdout, want)
+		}
+		if !strings.Contains(r.Stdout, "Include it in your preferred agent context file") {
+			t.Errorf("stdout does not say what to do with it:\n%s", r.Stdout)
+		}
+	}
+
+	assertPointer := func(t *testing.T, r result, guide string) {
+		t.Helper()
+		var out struct {
+			TaskDir string `json:"task_dir"`
+			Pointer string `json:"pointer"`
+		}
+		r.JSON(t, &out)
+		if out.Pointer != guide {
+			t.Errorf("pointer = %q, want %q", out.Pointer, guide)
+		}
+		if out.TaskDir != filepath.Dir(guide) {
+			t.Errorf("task_dir = %q, want the directory holding %q", out.TaskDir, guide)
+		}
+	}
+
+	t.Run("inside a repository", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := &project{dir: dir}
+		guide := realPath(t, dir, ".tasks", "AGENTS.md")
+
+		assertPrints(t, p.mustRun(t, "init"), guide)
+		assertPointer(t, p.mustRun(t, "init", "--json"), guide)
+	})
+
+	t.Run("from a subdirectory", func(t *testing.T) {
+		t.Parallel()
+		p := newProject(t)
+		p.mustRun(t, "init")
+		deep := p.path("backend", "deep")
+		if err := os.MkdirAll(deep, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// The queue is two levels up, so a relative path was meaningless from
+		// here: it named backend/deep/.tasks, which does not exist.
+		guide := realPath(t, p.dir, ".tasks", "AGENTS.md")
+
+		assertPrints(t, p.runIn(t, deep, nil, "init"), guide)
+		assertPointer(t, p.runIn(t, deep, nil, "init", "--json"), guide)
+	})
+
+	t.Run("no repository root, with TQ_DIR outside the project", func(t *testing.T) {
+		t.Parallel()
+		base := t.TempDir()
+		dir := filepath.Join(base, "project")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := &project{dir: dir}
+		// Relative, the way a shell hands it over, and pointing sideways: the
+		// shape the ticket reproduced, where tq answered "@queue/AGENTS.md".
+		env := []string{"TQ_DIR=../elsewhere/queue"}
+		guide := realPath(t, base, "elsewhere", "queue", "AGENTS.md")
+
+		assertPrints(t, p.runIn(t, dir, env, "init"), guide)
+		assertPointer(t, p.runIn(t, dir, env, "init", "--json"), guide)
+	})
+}

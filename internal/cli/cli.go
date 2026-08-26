@@ -104,8 +104,8 @@ Usage:
 
 Commands:
   init                            Create the %s directory and write the agent
-                                  guide (%s); prints the line to add to your
-                                  own AGENTS.md/CLAUDE.md
+                                  guide (%s); prints where the guide is,
+                                  to reference from your own AGENTS.md/CLAUDE.md
   add <title> [flags]             Create a task
   list [flags]                    List tasks
   show <id> [--json]              Show one task
@@ -281,7 +281,7 @@ func (c *cli) runInit(args []string) int {
 			"task_dir": st.Dir,
 			"created":  st.Created,
 			"written":  written,
-			"pointer":  guide.GuidePointer(st),
+			"pointer":  guide.GuidePath(st),
 		})
 	}
 	if st.Created {
@@ -292,9 +292,13 @@ func (c *cli) runInit(args []string) int {
 	for _, path := range written {
 		fmt.Fprintf(c.stdout, "Wrote %s\n", path)
 	}
-	// tq does not edit the repository's own agent instructions, so say what to
-	// put there. One line, written once, and the guide comes with it.
-	fmt.Fprintf(c.stdout, "\nAdd this line to your AGENTS.md or CLAUDE.md so agents read the guide:\n\n    %s\n", guide.GuidePointer(st))
+	// tq does not edit the repository's own agent instructions, so it names the
+	// guide and leaves the choice of file to the person running it. The path is
+	// absolute because tq does not know which file they will reference it from,
+	// and a relative one would only resolve from the directory tq guessed.
+	fmt.Fprintf(c.stdout, "\nThe agent guide is at:\n\n    %s\n", guide.GuidePath(st))
+	fmt.Fprint(c.stdout, "\nInclude it in your preferred agent context file (AGENTS.md, CLAUDE.md, or\n"+
+		"whatever your tool reads) so agents pick up the task workflow.\n")
 	return exitOK
 }
 

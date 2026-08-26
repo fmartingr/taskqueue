@@ -107,9 +107,75 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 	if string(got) != instructions {
 		t.Errorf("AGENTS.md was touched:\ngot:\n%s\nwant:\n%s", got, instructions)
 	}
-	if pointer := GuidePointer(st); !strings.HasSuffix(pointer, "queue/AGENTS.md") {
-		t.Errorf("GuidePointer() = %q, want it to name the configured guide", pointer)
+	if got, want := GuidePath(st), filepath.Join(elsewhere, AgentsFileName); got != want {
+		t.Errorf("GuidePath() = %q, want %q", got, want)
 	}
+}
+
+// The path `tq init` prints is the guide's own, absolute, whatever shape the
+// project has. It used to be relative to a base this package guessed — the
+// repository root, or the parent of the task directory — which resolved from
+// one directory and misled from every other (TQ-0061). The assertions here are
+// exact for that reason: the loose strings.HasSuffix they replaced accepted the
+// wrong answer for as long as it ended in the right file name.
+func TestGuidePathNamesTheGuideAbsolutely(t *testing.T) {
+	t.Run("a project with no repository root", func(t *testing.T) {
+		root := tqtest.Root(t)
+		elsewhere := filepath.Join(root, "elsewhere", "queue")
+		t.Setenv(config.EnvTaskDir, elsewhere)
+
+		st, err := store.InitStore(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := GuidePath(st), filepath.Join(elsewhere, AgentsFileName); got != want {
+			t.Errorf("GuidePath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("run from a subdirectory of the project", func(t *testing.T) {
+		root := tqtest.Root(t)
+		if _, err := store.InitStore(root); err != nil {
+			t.Fatal(err)
+		}
+		deep := filepath.Join(root, "backend", "deep")
+		if err := os.MkdirAll(deep, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		st, err := store.OpenStore(deep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The queue is two levels up, and the answer is the same path it
+		// would be from the root: one that reaches the guide from anywhere.
+		if got, want := GuidePath(st), filepath.Join(root, ".tasks", AgentsFileName); got != want {
+			t.Errorf("GuidePath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("inside a repository", func(t *testing.T) {
+		root := tqtest.RootWithGit(t)
+		st, err := store.InitStore(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := GuidePath(st), filepath.Join(root, ".tasks", AgentsFileName); got != want {
+			t.Errorf("GuidePath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a store opened on a relative path", func(t *testing.T) {
+		root := tqtest.Root(t)
+		t.Chdir(root)
+
+		// Nothing hands the CLI a relative task directory today, but TQ_DIR is
+		// a user-supplied string and filepath.Join would carry it through.
+		st := &store.Store{Dir: filepath.Join(".", ".tasks")}
+		if got, want := GuidePath(st), filepath.Join(root, ".tasks", AgentsFileName); got != want {
+			t.Errorf("GuidePath() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {

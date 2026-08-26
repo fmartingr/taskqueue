@@ -7,7 +7,7 @@ labels:
   - bug
   - component/frontend
 created: 2026-08-26T13:12:58+02:00
-updated: 2026-08-26T18:01:38+02:00
+updated: 2026-08-26T23:58:34+02:00
 ---
 
 ## Finding
@@ -69,3 +69,10 @@ Found by the review of TQ-0076.
   With only the stale-close id guard added, the dialog would survive as a mounted element with no open attribute and the click would still be swallowed — silently, which is worse. A complete fix needs both: the id comparison on close, AND a path that re-shows the element. A :key on the task id handles the different-task case; the same-task case needs the element re-shown explicitly.
 
   The related shape is also still unguarded: busy reads openTaskID (state.ts:113-119) while TaskDialog only mounts when tasks still contains that id (App.vue:19), with no reconciliation between them.
+- 2026-08-26T23:58:34+02:00 — Correction from a review pass (2026-08-26): this task's premise that no trigger exists for a stranded openTaskID is WRONG. A reachable one was identified.
+
+  applySignals awaits fetchTasks(), and a card click during that await sets openTaskID synchronously. If the change that fired the event was the task's file going away, the resolving listing drops it, so `open` becomes undefined, TaskDialog unmounts WITHOUT firing @close, openTaskID stays set, busy stays true — and from then on stream signals queue forever and the fallback poll is dead for the life of the page.
+
+  TaskDialog.append()'s own `await refresh()` is a second path to the same state.
+
+  Reference: frontend/components/App.vue:19. Treat the guard as fixing a reachable bug, not as defensive polish.

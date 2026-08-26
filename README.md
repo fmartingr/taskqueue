@@ -43,6 +43,7 @@ only needed at build time.
 
 ```bash
 cd your-project
+tq init                                        # mandatory: .tasks/ and .taskqueue.yaml
 tq add "Implement REST API" --priority high --label backend
 tq add "Build Kanban board" --label frontend --depends-on TQ-0001
 tq ready                                       # what can be picked up right now
@@ -52,14 +53,13 @@ tq done TQ-0001
 tq serve                                       # board on http://127.0.0.1:7331
 ```
 
-There is no setup step: the first command that needs `.tasks/` creates it (at
-the root of the enclosing Git repository, so running `tq` from a subdirectory
-does not scatter task directories around the tree) and says so on stderr.
-
-`tq init` is still worth running once, and is harmless to repeat: besides
-creating the directory it writes `.tasks/AGENTS.md` — a short CLI cheat sheet
-for coding agents, generated from the statuses, priorities and exit codes the
-binary actually implements.
+`tq init` is **mandatory**. It creates `.tasks/` (at the root of the enclosing
+Git repository, so running `tq` from a subdirectory does not scatter task
+directories around the tree) and writes `.taskqueue.yaml` with the project
+configuration. Other commands need both of those to exist. It is harmless to
+repeat: besides the directory and the config it writes `.tasks/AGENTS.md` — a
+short CLI cheat sheet for coding agents, generated from the statuses, priorities
+and exit codes the binary actually implements.
 
 Point your agents at it yourself, by adding one line to your `AGENTS.md`,
 `CLAUDE.md` or whatever your tool reads:
@@ -140,9 +140,8 @@ and moving the queue is a one-line edit.
 The marker is the only thing `tq` looks for. A directory that happens to be
 called `.tasks`, with no marker above it, is not adopted: guessing at names on
 the way up is exactly what this replaces. You never have to write the file by
-hand, though — the first command that needs a queue creates it and the marker
-together, so a fresh repository still needs no setup step. `tq` never rewrites a
-config you wrote.
+hand — `tq init` creates the directory and the marker together, which is why
+it is mandatory. `tq` never rewrites a config you wrote.
 
 `version` only changes on a breaking change; anything else is additive, so a
 file written by a newer `tq` still reads here, and unknown keys are ignored. A
@@ -285,8 +284,7 @@ component/backend  Backend   #1d76db  11     config
 spike              spike     -        2      unconfigured
 ```
 
-The command that creates a project's queue writes the base set into the marker
-with it — `tq init`, or whichever command got there first — so a new project
+`tq init` writes the base set into the marker with the queue, so a new project
 starts with a vocabulary rather than an empty one; edit it, and the board
 follows. Hex colours **must be quoted** — unquoted, `#d73a4a` is a YAML comment
 and the value parses as null, which `tq` rejects rather than drawing. Removing
@@ -358,9 +356,9 @@ one. Removing the `priorities` key restores the built-in `urgent`, `high`,
 ## CLI reference
 
 ```text
-tq init                            Create .tasks/ and refresh the agent
-                                   instructions (optional: every command
-                                   creates the directory on demand)
+tq init                            Create .tasks/ and .taskqueue.yaml with
+                                   the project configuration, and refresh
+                                   the agent instructions. Mandatory.
 tq add <title> [flags]             --priority --assignee --label --depends-on --body --status --json
 tq list [flags]                    --status --priority --label --assignee --json
 tq show <id> [--json]              Frontmatter fields followed by the Markdown body

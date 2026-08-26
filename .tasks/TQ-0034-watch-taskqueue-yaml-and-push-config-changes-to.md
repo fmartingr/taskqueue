@@ -11,7 +11,7 @@ depends_on:
   - TQ-0029
   - TQ-0033
 created: 2026-08-25T12:07:30+02:00
-updated: 2026-08-26T17:38:37+02:00
+updated: 2026-08-26T17:44:50+02:00
 ---
 
 ## Proposal
@@ -107,3 +107,27 @@ board refetches `GET /api/config` and re-renders chips, selects and filters.
 
   Checked it can fail: with broadcastLocked mutated to tell only the first
   subscriber, it failed three runs out of three. Full browser suite 53 pass.
+- 2026-08-26T17:44:50+02:00 — Added integration coverage: internal/integration/events_test.go.
+
+  /api/events had none at all before this — the stream was tested through httptest
+  and in a browser, never against a real 'tq serve'. Four tests:
+
+  - the stream end to end through the real listener and the request logger the
+    binary wraps the router in. It is here because a frame only arrives before the
+    handler returns if the response is really flushed, and the handler never
+    returns: if flushing broke, every read would block. That has happened once,
+    behind the logger, which the package's own tests do not assemble the way the
+    binary does (TQ-0033).
+  - an edit to the marker pushes 'config' and NOT 'tasks' — the listing cannot
+    have changed, and a tasks frame would send the board to the wrong endpoint.
+  - a running server serves the marker as it is on disk now, with no restart, and
+    'tq label list --json' from a separate process reports the same vocabulary.
+  - a server survives a marker it cannot parse: the stream keeps running and
+    reports the change, GET /api/config gives 500 invalid_config in the standard
+    envelope, GET /api/version still answers 200 (it needs neither store nor
+    config), and after the file is fixed the same process serves the project again
+    with no memory of the failure.
+
+  Both directions mutation-checked: pushing the config change as a 'tasks' frame
+  (the pre-TQ-0034 behaviour) fails three of the four; dropping the ErrConfig case
+  from writeStoreError fails the fourth on 400 vs 500.

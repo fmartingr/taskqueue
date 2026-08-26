@@ -409,3 +409,53 @@ func TestAPIConfig(t *testing.T) {
 		t.Errorf("task_dir = %q, want %q", got.TaskDir, st.Dir)
 	}
 }
+
+// The board draws its chips from the config, so the vocabulary has to reach it.
+// A project that has not changed the set — the marker as `tq init` seeds it —
+// gets the base set.
+func TestAPIConfigCarriesTheLabelSet(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	resp, payload := do(t, srv, http.MethodGet, "/api/config", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	got := decode[struct {
+		Labels map[string]config.Label `json:"labels"`
+	}](t, payload)
+
+	if len(got.Labels) != len(config.DefaultLabels()) {
+		t.Fatalf("labels = %d entries, want the %d defaults", len(got.Labels), len(config.DefaultLabels()))
+	}
+	backend, ok := got.Labels["component/backend"]
+	if !ok {
+		t.Fatalf("component/backend missing from %+v", got.Labels)
+	}
+	if backend.DisplayName != "Backend" || backend.Color == "" {
+		t.Errorf("component/backend = %+v, want a display name and a colour", backend)
+	}
+}
+
+func TestAPIConfigCarriesTheProjectsOwnLabels(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: "+config.TaskDirName+
+		"\nlabels:\n  spicy:\n    color: \"#ff0000\"\n    display_name: Spicy\n")
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newAPIRouter(st, testVersion))
+	t.Cleanup(srv.Close)
+
+	resp, payload := do(t, srv, http.MethodGet, "/api/config", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	got := decode[struct {
+		Labels map[string]config.Label `json:"labels"`
+	}](t, payload)
+
+	if len(got.Labels) != 1 || got.Labels["spicy"].DisplayName != "Spicy" {
+		t.Errorf("labels = %+v, want only the project's own", got.Labels)
+	}
+}

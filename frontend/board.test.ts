@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CHIP_DARK_TEXT,
+  CHIP_LIGHT_TEXT,
+  groupLabels,
   indexTasks,
+  isConfigured,
   isReady,
+  labelChip,
+  labelDisplay,
+  labelsInUse,
   pendingDependencies,
   visibleTasks,
   type Filters,
+  type LabelSet,
   type Priority,
   type Status,
   type Task,
@@ -168,18 +176,20 @@ describe("visibleTasks", () => {
     expect(visibleTasks(tasks, filters({ assignee: "  agent-api  " })).map((t) => t.id)).toEqual(["TQ-0001"]);
   });
 
-  test("label matches a substring of any label, case-insensitively", () => {
-    expect(visibleTasks(tasks, filters({ label: "end" })).map((t) => t.id)).toEqual([
+  // The label filter is a list of the labels that exist, not a search box, so
+  // it matches a whole label: "backend" must not also select "component/backend".
+  test("label matches a whole label", () => {
+    expect(visibleTasks(tasks, filters({ label: "backend" })).map((t) => t.id)).toEqual([
       "TQ-0001",
       "TQ-0002",
-      "TQ-0004",
     ]);
+    expect(visibleTasks(tasks, filters({ label: "end" }))).toEqual([]);
     expect(visibleTasks(tasks, filters({ label: "auth" })).map((t) => t.id)).toEqual(["TQ-0002"]);
   });
 
   test("a task without an assignee or labels is dropped by those filters", () => {
     expect(visibleTasks(tasks, filters({ assignee: "a" })).map((t) => t.id)).not.toContain("TQ-0003");
-    expect(visibleTasks(tasks, filters({ label: "a" })).map((t) => t.id)).not.toContain("TQ-0003");
+    expect(visibleTasks(tasks, filters({ label: "backend" })).map((t) => t.id)).not.toContain("TQ-0003");
   });
 
   test("the ready filter keeps only unblocked, unclaimed tasks", () => {
@@ -204,5 +214,141 @@ describe("visibleTasks", () => {
 
   test("an empty list stays empty", () => {
     expect(visibleTasks([], filters({ ready: true }))).toEqual([]);
+  });
+});
+
+// ── Labels ──────────────────────────────────────────────────────
+
+const LABELS: LabelSet = {
+  bug: { color: "#d73a4a", display_name: "Bug" },
+  "component/backend": { color: "#1d76db", display_name: "Backend" },
+  "component/frontend": { color: "#c5def5", display_name: "Frontend" },
+  broken: { color: "not-a-colour", display_name: "Broken" },
+};
+
+describe("labelDisplay", () => {
+  test("a configured label shows its display name", () => {
+    expect(labelDisplay("component/backend", LABELS)).toBe("Backend");
+  });
+
+  test("an unconfigured label shows itself", () => {
+    expect(labelDisplay("whatever", LABELS)).toBe("whatever");
+  });
+
+  test("a configured label with no display name shows itself", () => {
+    expect(labelDisplay("x", { x: { color: "#ffffff", display_name: "" } })).toBe("x");
+  });
+});
+
+describe("labelChip", () => {
+  test("a light colour gets dark text, a dark one light text", () => {
+    // The chip carries its own background, which is what makes one set of
+    // colours readable against both themes.
+    expect(labelChip("component/frontend", LABELS)?.text).toBe(CHIP_DARK_TEXT);
+    expect(labelChip("component/backend", LABELS)?.text).toBe(CHIP_LIGHT_TEXT);
+  });
+
+  test("the background is the configured colour", () => {
+    expect(labelChip("bug", LABELS)?.background).toBe("#d73a4a");
+  });
+
+  test("three-digit hex works", () => {
+    expect(labelChip("x", { x: { color: "#FFF", display_name: "X" } })).toEqual({
+      background: "#FFF",
+      text: CHIP_DARK_TEXT,
+    });
+  });
+
+  test("an unconfigured label has no chip, so it renders neutral", () => {
+    expect(labelChip("whatever", LABELS)).toBeNull();
+  });
+
+  test("a colour the board cannot draw has no chip either", () => {
+    expect(labelChip("broken", LABELS)).toBeNull();
+    expect(labelChip("empty", { empty: { color: "", display_name: "Empty" } })).toBeNull();
+  });
+});
+
+describe("groupLabels", () => {
+  test("groups by the prefix before the first slash, ungrouped first", () => {
+    const groups = groupLabels(LABELS, []);
+    expect(groups.map((group) => group.prefix)).toEqual(["", "component"]);
+    expect(groups[0]!.labels.map((label) => label.name)).toEqual(["broken", "bug"]);
+    expect(groups[1]!.labels.map((label) => label.display)).toEqual(["Backend", "Frontend"]);
+  });
+
+  test("labels in use join their group even when unconfigured", () => {
+    const groups = groupLabels(LABELS, ["component/docs", "loose"]);
+    const component = groups.find((group) => group.prefix === "component")!;
+    expect(component.labels.map((label) => label.name)).toEqual([
+      "component/backend",
+      "component/docs",
+      "component/frontend",
+    ]);
+    expect(component.labels.find((label) => label.name === "component/docs")).toEqual({
+      name: "component/docs",
+      display: "component/docs",
+      configured: false,
+    });
+    expect(groups[0]!.labels.map((label) => label.name)).toEqual(["broken", "bug", "loose"]);
+  });
+
+  test("a label in use twice appears once", () => {
+    const groups = groupLabels({}, ["loose", "loose"]);
+    expect(groups).toEqual([{ prefix: "", labels: [{ name: "loose", display: "loose", configured: false }] }]);
+  });
+
+  test("only the first slash groups: the rest is part of the label", () => {
+    const groups = groupLabels({}, ["a/b/c"]);
+    expect(groups).toEqual([
+      { prefix: "a", labels: [{ name: "a/b/c", display: "a/b/c", configured: false }] },
+    ]);
+  });
+
+  test("nothing configured and nothing in use is no groups at all", () => {
+    expect(groupLabels({}, [])).toEqual([]);
+  });
+
+  test("groups come out in a stable order", () => {
+    const groups = groupLabels({ "z/one": { color: "#fff", display_name: "" } }, ["a/two", "m"]);
+    expect(groups.map((group) => group.prefix)).toEqual(["", "a", "z"]);
+  });
+});
+
+describe("labelsInUse", () => {
+  test("collects every label on every task, once", () => {
+    const tasks = [
+      { ...task("TQ-0001", "todo"), labels: ["bug", "component/cli"] },
+      { ...task("TQ-0002", "todo"), labels: ["bug"] },
+      task("TQ-0003", "todo"),
+    ];
+    expect(labelsInUse(tasks)).toEqual(["bug", "component/cli"]);
+  });
+});
+
+// A task may carry any string as a label, including the names on
+// Object.prototype. A plain `name in labels` answers yes for all of them.
+describe("labels that collide with Object.prototype", () => {
+  const inherited = ["constructor", "toString", "hasOwnProperty", "valueOf"];
+
+  test("are not reported as configured", () => {
+    for (const name of inherited) {
+      expect(isConfigured(name, LABELS)).toBe(false);
+      expect(groupLabels({}, [name])[0]!.labels[0]).toEqual({ name, display: name, configured: false });
+    }
+  });
+
+  test("render as themselves, with no chip", () => {
+    for (const name of inherited) {
+      expect(labelDisplay(name, LABELS)).toBe(name);
+      expect(labelChip(name, LABELS)).toBeNull();
+    }
+  });
+
+  test("are still configurable like any other label", () => {
+    const labels: LabelSet = { toString: { color: "#0e8a16", display_name: "Stringly" } };
+    expect(isConfigured("toString", labels)).toBe(true);
+    expect(labelDisplay("toString", labels)).toBe("Stringly");
+    expect(labelChip("toString", labels)?.background).toBe("#0e8a16");
   });
 });

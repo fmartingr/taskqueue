@@ -148,6 +148,51 @@ so, rather than a silent partial read.
 `TQ_WALK_FOREVER=true` lets the search continue past the repository root, for
 one queue shared above several repositories.
 
+### Labels
+
+Labels are freeform: `--label` takes any string, and always has. What
+`.taskqueue.yaml` adds is a *vocabulary* — the shared set a project agrees on —
+which is what gives a label a colour and a display name on the board:
+
+```yaml
+labels:
+  bug:
+    color: "#d73a4a"
+    display_name: Bug
+  component/backend:
+    color: "#1d76db"
+    display_name: Backend
+```
+
+The key is the label exactly as task frontmatter stores it, and exactly what
+`tq list --label component/backend` takes. A `/` groups labels **for display
+only**, the way GitLab groups scoped labels: the board puts them under a heading
+in the filter bar, and storage stays one flat string.
+
+The set is a reference, not a restriction. A label outside it is accepted by
+`tq add`, `tq update` and the API alike, and renders in a neutral colour rather
+than failing — otherwise adopting a config would break every task already filed.
+`tq label list` is where those turn up:
+
+```text
+LABEL              DISPLAY   COLOR    TASKS  SOURCE
+bug                Bug       #d73a4a  4      config
+component/backend  Backend   #1d76db  11     config
+spike              spike     -        2      unconfigured
+```
+
+The command that creates a project's queue writes the base set into the marker
+with it — `tq init`, or whichever command got there first — so a new project
+starts with a vocabulary rather than an empty one; edit it, and the board
+follows. Hex colours **must be quoted** — unquoted, `#d73a4a` is a YAML comment
+and the value parses as null, which `tq` rejects rather than drawing. Removing
+the `labels` key restores the base set; `labels: {}` means the project wants no
+vocabulary at all.
+
+Each chip carries its own background, with its text picked for contrast against
+that colour, so one set of colours stays readable in both the light and the dark
+theme.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -173,6 +218,9 @@ tq update <id> [flags]             --title --status --priority --assignee
                                    --add-dependency --remove-dependency
 tq note <id> <text>                Append a timestamped bullet to the notes
 tq ready [flags]                   --priority --label --assignee --json
+tq label list [--json]             The project's label vocabulary, with a count
+                                   of what each label is on and a flag for the
+                                   labels in use that the config does not declare
 tq serve [flags]                   --host --port
 tq version
 ```
@@ -246,6 +294,7 @@ difference between an agent moving a task and a human dragging a card.
 | `GET` | `/api/tasks/{id}` | one task |
 | `PATCH` | `/api/tasks/{id}` | partial update; the drag-and-drop endpoint |
 | `POST` | `/api/tasks/{id}/notes` | `{"text": "…"}` |
+| `GET` | `/api/config` | the resolved project config: `{"version", "path", "task_dir", "file", "labels"}` |
 | `GET` | `/api/status` | `{"ok", "task_count", "task_dir", "version"}` |
 | `GET` | `/api/version` | `{"version"}` |
 
@@ -287,7 +336,8 @@ Layout — a single `package main` at the repository root, as in
 ```text
 cmd/tq/               The binary
 internal/task/        Task model, validation, filtering, dependencies, notes
-internal/config/      .taskqueue.yaml: the project marker and its loader
+internal/config/      .taskqueue.yaml: the project marker, its loader and the
+                      label vocabulary
 internal/store/       Filesystem store: discovery, atomic writes, ID allocation
 internal/web/         net/http server, REST API, and the built frontend
 internal/cli/         Commands, flags, table/JSON output, exit codes

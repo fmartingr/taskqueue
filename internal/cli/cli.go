@@ -80,6 +80,8 @@ func runCLI(c *cli, args []string) int {
 		return c.runNote(args[1:])
 	case "ready":
 		return c.runReady(args[1:])
+	case "label":
+		return c.runLabel(args[1:])
 	case "serve":
 		return c.runServe(args[1:])
 	case "version", "--version":
@@ -111,12 +113,14 @@ Commands:
   update <id> [flags]             Change fields of a task
   note <id> <text>                Append a timestamped note to a task
   ready [flags]                   List tasks that are unblocked and unclaimed
+  label list [--json]             Print the project's label vocabulary and the
+                                  labels in use that it does not declare
   serve [flags]                   Serve the Kanban board and REST API
   version                         Print the version
   help                            Print this help
 
-task.Statuses:   %s
-task.Priorities: %s (highest first; default: %s)
+Statuses:   %s
+Priorities: %s (highest first; default: %s)
 
 Common flags:
   --json                          Print JSON to stdout and nothing else
@@ -125,7 +129,7 @@ Common flags:
                                   argument, even if it starts with "-"
 
 Environment:
-  %s      task.Task directory to use instead of discovering %s
+  %s      Task directory to use instead of discovering %s
   TQ_HOST, TQ_PORT   Defaults for tq serve
   DEV                Serve frontend assets from disk instead of the embedded copy
 
@@ -203,7 +207,7 @@ func (c *cli) runInit(args []string) int {
 	if st.Created {
 		fmt.Fprintf(c.stdout, "Initialized task queue in %s\n", st.Dir)
 	} else {
-		fmt.Fprintf(c.stdout, "task.Task queue already initialized in %s\n", st.Dir)
+		fmt.Fprintf(c.stdout, "Task queue already initialized in %s\n", st.Dir)
 	}
 	for _, path := range written {
 		fmt.Fprintf(c.stdout, "Wrote %s\n", path)

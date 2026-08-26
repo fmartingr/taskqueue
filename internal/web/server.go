@@ -208,6 +208,10 @@ func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		"path":     config.TaskDirName,
 		"task_dir": s.st.Dir,
 		"file":     "",
+		// The vocabulary is what lets the board colour and group its chips.
+		// LabelSet reads through a nil config, so this is the base set when the
+		// project has no file of its own.
+		"labels": cfg.LabelSet(),
 	}
 	if cfg != nil {
 		out["version"] = cfg.Version

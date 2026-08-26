@@ -41,6 +41,21 @@ Use `tq move <id> <status>` for any other transition.
 
 Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 
+## Labels
+
+Labels are freeform — `--label` takes any string — but the project declares a
+vocabulary in `.taskqueue.yaml`, and that is the shared one: it is what
+gives a label its colour and display name on the board, and what groups it
+under the part before a `/`. Prefer a label already in the set. A new one is
+accepted everywhere and simply renders neutral, and it shows up as
+unconfigured below, so it can be adopted into the set or cleaned up.
+
+    tq label list                   the vocabulary, and what each label is on
+    tq label list --json            the same, for an agent
+
+The `/` groups labels for display only. A label is stored and matched as the
+whole string, so `tq list --label component/backend` takes the whole key.
+
 ## Rules of the format
 
 - Statuses: backlog, todo, in-progress, done

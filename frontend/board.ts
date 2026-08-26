@@ -31,6 +31,15 @@ export interface Task {
   body: string;
 }
 
+/** One entry of the project's label vocabulary, as GET /api/config returns it. */
+export interface LabelDef {
+  color: string;
+  display_name: string;
+}
+
+/** The vocabulary, keyed by the label exactly as task frontmatter stores it. */
+export type LabelSet = Record<string, LabelDef>;
+
 export interface Filters {
   status: string;
   priority: string;
@@ -55,6 +64,133 @@ export function isReady(task: Task, index: Map<string, Task>): boolean {
   return pendingDependencies(task, index).length === 0;
 }
 
+// ── Labels ──────────────────────────────────────────────────────
+
+/**
+ * Labels stay freeform: the configured set supplies colours, display names and
+ * grouping, but a label outside it is legal everywhere and simply renders with
+ * nothing to draw it. That is why every function here falls back to the label
+ * itself rather than treating an unknown one as an error.
+ *
+ * The separator groups labels for display only, the way GitLab groups scoped
+ * labels. Storage stays one flat string, which is why filtering matches the
+ * whole label and never its prefix.
+ */
+export const LABEL_SEPARATOR = "/";
+
+/**
+ * Whether the project declares this label.
+ *
+ * Object.hasOwn rather than `in`: the set is a plain object parsed from JSON, so
+ * `in` also answers yes for "constructor", "toString" and everything else on
+ * Object.prototype — and a task may legitimately carry any of those as a label.
+ */
+export function isConfigured(name: string, labels: LabelSet): boolean {
+  return Object.hasOwn(labels, name);
+}
+
+function definitionOf(name: string, labels: LabelSet): LabelDef | undefined {
+  return isConfigured(name, labels) ? labels[name] : undefined;
+}
+
+/** What the board shows for a label: its display name, or the label itself. */
+export function labelDisplay(name: string, labels: LabelSet): string {
+  return definitionOf(name, labels)?.display_name || name;
+}
+
+/** Every label the tasks actually carry, deduplicated and sorted. */
+export function labelsInUse(tasks: Task[]): string[] {
+  const names = new Set<string>();
+  for (const task of tasks) for (const label of task.labels ?? []) names.add(label);
+  return [...names].sort();
+}
+
+export interface Chip {
+  background: string;
+  text: string;
+}
+
+/**
+ * Text colours for a chip. They are fixed rather than themed on purpose: the
+ * chip carries its own background, so what it needs to contrast with is the
+ * configured colour, not the page behind it. That is what lets one set of
+ * colours in .taskqueue.yaml stay readable in both themes.
+ */
+export const CHIP_DARK_TEXT = "#111418";
+export const CHIP_LIGHT_TEXT = "#ffffff";
+
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * How to draw a configured label, or null when there is nothing to draw it
+ * with — an unconfigured label, or a colour this board cannot parse. A null
+ * chip is not a failure: it is the neutral rendering the ticket asks for.
+ */
+export function labelChip(name: string, labels: LabelSet): Chip | null {
+  const color = definitionOf(name, labels)?.color ?? "";
+  if (!HEX_COLOR.test(color)) return null;
+  return { background: color, text: readableText(color) };
+}
+
+/** Black or white, whichever contrasts more with the background. */
+function readableText(color: string): string {
+  const background = luminance(color);
+  const onDark = contrast(background, luminance(CHIP_DARK_TEXT));
+  const onLight = contrast(background, luminance(CHIP_LIGHT_TEXT));
+  return onDark >= onLight ? CHIP_DARK_TEXT : CHIP_LIGHT_TEXT;
+}
+
+/** WCAG relative luminance, which is what a contrast ratio is computed from. */
+function luminance(color: string): number {
+  const digits = color.slice(1);
+  const full = digits.length === 3 ? [...digits].map((digit) => digit + digit).join("") : digits;
+  const [red, green, blue] = [0, 2, 4].map((at) => {
+    const value = parseInt(full.slice(at, at + 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+
+export interface GroupedLabel {
+  name: string;
+  display: string;
+  /** False for a label tasks carry that the project does not declare. */
+  configured: boolean;
+}
+
+export interface LabelGroup {
+  /** The prefix before the first separator, or "" for a label without one. */
+  prefix: string;
+  labels: GroupedLabel[];
+}
+
+/**
+ * The label list the filter bar offers: everything the project declares plus
+ * everything the tasks actually carry, grouped by prefix. Both are needed —
+ * a configured label nothing uses is still part of the vocabulary, and a label
+ * in use that nothing declares still has to be filterable.
+ */
+export function groupLabels(labels: LabelSet, inUse: string[]): LabelGroup[] {
+  const names = [...new Set([...Object.keys(labels), ...inUse])].filter((name) => name !== "").sort();
+
+  const groups = new Map<string, GroupedLabel[]>();
+  for (const name of names) {
+    const at = name.indexOf(LABEL_SEPARATOR);
+    const prefix = at > 0 ? name.slice(0, at) : "";
+    const group = groups.get(prefix) ?? [];
+    group.push({ name, display: labelDisplay(name, labels), configured: isConfigured(name, labels) });
+    groups.set(prefix, group);
+  }
+
+  // Ungrouped labels first — the flat types — then the groups by name, so the
+  // bar reads the same on every render.
+  return [...groups.entries()]
+    .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a < b ? -1 : 1))
+    .map(([prefix, group]) => ({ prefix, labels: group }));
+}
+
 // ── Filtering ───────────────────────────────────────────────────
 
 /**
@@ -65,8 +201,10 @@ export function visibleTasks(tasks: Task[], filters: Filters): Task[] {
   const { status, priority, assignee, label, ready } = filters;
   const index = indexTasks(tasks);
 
-  // The assignee and label boxes are search fields, so they match substrings:
-  // typing "agent" keeps agent-api and agent-ui.
+  // The assignee box is a search field, so it matches substrings: typing
+  // "agent" keeps agent-api and agent-ui. The label filter is not — it is a
+  // list of the labels that exist — so it matches a label whole, which also
+  // keeps "component/backend" from being selected by "backend".
   const matches = (haystack: string, needle: string) =>
     haystack.toLowerCase().includes(needle.trim().toLowerCase());
 
@@ -74,7 +212,7 @@ export function visibleTasks(tasks: Task[], filters: Filters): Task[] {
     if (status && task.status !== status) return false;
     if (priority && task.priority !== priority) return false;
     if (assignee && !matches(task.assignee ?? "", assignee)) return false;
-    if (label && !(task.labels ?? []).some((l) => matches(l, label))) return false;
+    if (label && !(task.labels ?? []).includes(label)) return false;
     if (ready && !isReady(task, index)) return false;
     return true;
   });

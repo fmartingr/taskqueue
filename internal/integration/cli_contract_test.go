@@ -69,6 +69,7 @@ func TestJSONPurityAcrossCommands(t *testing.T) {
 		{"note", []string{"note", "TQ-0001", "something happened", "--json"}},
 		{"move", []string{"move", "TQ-0001", "in-progress", "--json"}},
 		{"done", []string{"done", "TQ-0001", "--json"}},
+		{"label list", []string{"label", "list", "--json"}},
 		{"version", []string{"version", "--json"}},
 	} {
 		// Sequential on purpose: each builds on the last, which is also how an
@@ -98,6 +99,8 @@ func TestValidationFailuresExitOne(t *testing.T) {
 		{"self dependency", []string{"update", "TQ-0001", "--add-dependency", "TQ-0001"}},
 		{"update with no fields", []string{"update", "TQ-0001"}},
 		{"note with no text", []string{"note", "TQ-0001", "   "}},
+		{"label with no subcommand", []string{"label"}},
+		{"unknown label subcommand", []string{"label", "rename", "a", "b"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := p.run(t, tc.args...)

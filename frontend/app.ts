@@ -7,12 +7,17 @@
  */
 
 import {
+  groupLabels,
   indexTasks,
   isReady,
+  labelChip,
+  labelDisplay,
+  labelsInUse,
   pendingDependencies,
   visibleTasks,
   STATUSES,
   type Filters,
+  type LabelSet,
   type Status,
   type Task,
 } from "./board";
@@ -35,6 +40,15 @@ interface ServerStatus {
   version: string;
 }
 
+/** GET /api/config: the project marker as the server resolved it. */
+interface ProjectConfig {
+  version: number;
+  path: string;
+  task_dir: string;
+  file: string;
+  labels: LabelSet;
+}
+
 const POLL_INTERVAL_MS = 3000;
 
 const state = {
@@ -51,6 +65,11 @@ const state = {
   draft: "",
   taskDir: "",
   version: "",
+  /** The project's label vocabulary, from GET /api/config. */
+  labels: {} as LabelSet,
+  /** The option set the label filter was last built from, so a poll that
+   * changes nothing does not rebuild the list under an open dropdown. */
+  labelOptions: "",
 };
 
 // ── Elements ────────────────────────────────────────────────────
@@ -115,6 +134,8 @@ function render(): void {
   const tasks = visibleTasks(state.tasks, state.filters);
   const index = indexTasks(state.tasks);
 
+  renderLabelFilter();
+
   board.replaceChildren(
     ...STATUSES.map((status) => renderColumn(status, tasks.filter((task) => task.status === status), index)),
   );
@@ -125,6 +146,57 @@ function render(): void {
   statusLine.textContent = [counts, state.taskDir, state.version && `tq ${state.version}`]
     .filter(Boolean)
     .join(" · ");
+}
+
+/**
+ * Fills the label filter from the project's vocabulary plus whatever labels the
+ * tasks actually carry, grouped by prefix.
+ *
+ * The label currently filtered on is included even when nothing carries it any
+ * more: dropping it would silently leave the bar showing "any" while the board
+ * still hid everything.
+ *
+ * Nothing is rebuilt while the select has focus. The poll runs every few
+ * seconds, and an agent adding a task with a new label is the normal case here:
+ * replacing the options under an expanded dropdown collapses it mid-choice.
+ * The blur handler in wire() picks the rebuild back up.
+ */
+function renderLabelFilter(): void {
+  const select = byId<HTMLSelectElement>("filter-label");
+  if (document.activeElement === select) return;
+
+  const inUse = labelsInUse(state.tasks);
+  if (state.filters.label) inUse.push(state.filters.label);
+
+  const groups = groupLabels(state.labels, inUse);
+  const signature = JSON.stringify(groups);
+  if (signature === state.labelOptions) return;
+  state.labelOptions = signature;
+
+  const selected = select.value;
+  const any = element("option", undefined, "any");
+  any.value = "";
+
+  const nodes: HTMLElement[] = [any];
+  for (const group of groups) {
+    const options = group.labels.map((label) => {
+      const option = element("option", undefined, label.display);
+      option.value = label.name;
+      option.title = label.configured ? label.name : `${label.name} — not in the project's label set`;
+      return option;
+    });
+    if (group.prefix === "") {
+      nodes.push(...options);
+      continue;
+    }
+    const optgroup = element("optgroup");
+    optgroup.label = group.prefix;
+    optgroup.append(...options);
+    nodes.push(optgroup);
+  }
+
+  select.replaceChildren(...nodes);
+  select.value = selected;
 }
 
 function renderColumn(status: Status, tasks: Task[], index: Map<string, Task>): HTMLElement {
@@ -273,7 +345,7 @@ function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
 
   const meta = element("div", "card-meta");
   if (task.assignee) meta.append(element("span", "assignee", task.assignee));
-  for (const label of task.labels ?? []) meta.append(element("span", "label", label));
+  for (const label of task.labels ?? []) meta.append(labelChipNode(label));
 
   const noteCount = splitBody(task.body ?? "").notes.length;
   if (noteCount > 0) meta.append(noteBadge(noteCount));
@@ -304,6 +376,25 @@ function renderCard(task: Task, index: Map<string, Task>): HTMLElement {
   });
 
   return card;
+}
+
+/**
+ * A label chip: the configured colour behind text picked to contrast with it,
+ * or the neutral pill when the project does not declare this label. The raw
+ * label is always the tooltip, because that is what the CLI and the filters
+ * take — the display name is only what the board shows.
+ */
+function labelChipNode(name: string): HTMLElement {
+  const chip = element("span", "label", labelDisplay(name, state.labels));
+  chip.title = name;
+
+  const colors = labelChip(name, state.labels);
+  if (colors) {
+    chip.classList.add("tinted");
+    chip.style.background = colors.background;
+    chip.style.color = colors.text;
+  }
+  return chip;
 }
 
 const SPEECH_BUBBLE =
@@ -563,24 +654,24 @@ function readFilters(): void {
     status: byId<HTMLSelectElement>("filter-status").value,
     priority: byId<HTMLSelectElement>("filter-priority").value,
     assignee: byId<HTMLInputElement>("filter-assignee").value,
-    label: byId<HTMLInputElement>("filter-label").value,
+    label: byId<HTMLSelectElement>("filter-label").value,
     ready: byId<HTMLInputElement>("filter-ready").checked,
   };
   render();
 }
 
 function wire(): void {
-  for (const id of ["filter-status", "filter-priority", "filter-ready"]) {
+  for (const id of ["filter-status", "filter-priority", "filter-label", "filter-ready"]) {
     byId<HTMLElement>(id).addEventListener("change", readFilters);
   }
-  for (const id of ["filter-assignee", "filter-label"]) {
-    byId<HTMLElement>(id).addEventListener("input", readFilters);
-  }
+  byId<HTMLElement>("filter-assignee").addEventListener("input", readFilters);
+  // A rebuild skipped while the dropdown was open happens now instead.
+  byId<HTMLElement>("filter-label").addEventListener("blur", renderLabelFilter);
   byId<HTMLButtonElement>("filter-reset").addEventListener("click", () => {
     byId<HTMLSelectElement>("filter-status").value = "";
     byId<HTMLSelectElement>("filter-priority").value = "";
     byId<HTMLInputElement>("filter-assignee").value = "";
-    byId<HTMLInputElement>("filter-label").value = "";
+    byId<HTMLSelectElement>("filter-label").value = "";
     byId<HTMLInputElement>("filter-ready").checked = false;
     readFilters();
   });
@@ -620,9 +711,23 @@ async function loadServerStatus(): Promise<void> {
   }
 }
 
+/**
+ * Reads the project's label vocabulary once at start-up. It is read from the
+ * config rather than hard-coded here so a project's own colours and names are
+ * what the board draws. Failing is survivable: every label then renders the way
+ * an unconfigured one does.
+ */
+async function loadProjectConfig(): Promise<void> {
+  try {
+    state.labels = (await api<ProjectConfig>("/api/config")).labels ?? {};
+  } catch (error) {
+    console.error("config failed", error);
+  }
+}
+
 async function start(): Promise<void> {
   wire();
-  await loadServerStatus();
+  await Promise.all([loadServerStatus(), loadProjectConfig()]);
 
   try {
     await refresh();

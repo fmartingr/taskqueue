@@ -343,6 +343,14 @@ button.ghost {
   border-color: transparent;
 }
 
+/* A label the project configured carries its own colours, set inline from
+   .taskqueue.yaml, so it reads the same in both themes. One the project does
+   not declare keeps the neutral pill above. */
+.label.tinted {
+  border-color: transparent;
+  font-weight: 600;
+}
+
 .blocked-note {
   margin: 0;
   font-size: 12px;

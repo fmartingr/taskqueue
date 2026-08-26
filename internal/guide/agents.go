@@ -77,7 +77,7 @@ func writeIfChanged(path string, content []byte) (bool, error) {
 func taskGuide(taskDir string) []byte {
 	return fmt.Appendf(nil, `%s
 
-# task.Task queue
+# Task queue
 
 This directory is a `+"`tq`"+` task queue: one Markdown file per task, named
 `+"`<id>-<title-slug>.md`"+`, with YAML frontmatter. The files are the source of
@@ -118,10 +118,25 @@ Use `+"`tq move <id> <status>`"+` for any other transition.
 
 Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 
+## Labels
+
+Labels are freeform — `+"`--label`"+` takes any string — but the project declares a
+vocabulary in `+"`%s`"+`, and that is the shared one: it is what
+gives a label its colour and display name on the board, and what groups it
+under the part before a `+"`/`"+`. Prefer a label already in the set. A new one is
+accepted everywhere and simply renders neutral, and it shows up as
+unconfigured below, so it can be adopted into the set or cleaned up.
+
+    tq label list                   the vocabulary, and what each label is on
+    tq label list --json            the same, for an agent
+
+The `+"`/`"+` groups labels for display only. A label is stored and matched as the
+whole string, so `+"`tq list --label component/backend`"+` takes the whole key.
+
 ## Rules of the format
 
-- task.Statuses: %s
-- task.Priorities: %s (default: %s)
+- Statuses: %s
+- Priorities: %s (default: %s)
 - Notes are the last section of a body, introduced by a `+"`---`"+` rule with a blank
   line above it. A `+"`## Notes`"+` heading anywhere else is ordinary content, so a
   body can document notes without `+"`tq note`"+` mistaking prose for notes.
@@ -154,6 +169,7 @@ repository root.
 `,
 		generatedNotice,
 		filepath.Base(taskDir), filepath.Base(taskDir),
+		config.ConfigFileName,
 		strings.Join(task.Statuses, ", "),
 		strings.Join(task.Priorities, ", "), task.PriorityNormal,
 		taskDir,

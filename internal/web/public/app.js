@@ -11,6 +11,60 @@ function isReady(task, index) {
     return false;
   return pendingDependencies(task, index).length === 0;
 }
+var LABEL_SEPARATOR = "/";
+function isConfigured(name, labels) {
+  return Object.hasOwn(labels, name);
+}
+function definitionOf(name, labels) {
+  return isConfigured(name, labels) ? labels[name] : undefined;
+}
+function labelDisplay(name, labels) {
+  return definitionOf(name, labels)?.display_name || name;
+}
+function labelsInUse(tasks) {
+  const names = new Set;
+  for (const task of tasks)
+    for (const label of task.labels ?? [])
+      names.add(label);
+  return [...names].sort();
+}
+var CHIP_DARK_TEXT = "#111418";
+var CHIP_LIGHT_TEXT = "#ffffff";
+var HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+function labelChip(name, labels) {
+  const color = definitionOf(name, labels)?.color ?? "";
+  if (!HEX_COLOR.test(color))
+    return null;
+  return { background: color, text: readableText(color) };
+}
+function readableText(color) {
+  const background = luminance(color);
+  const onDark = contrast(background, luminance(CHIP_DARK_TEXT));
+  const onLight = contrast(background, luminance(CHIP_LIGHT_TEXT));
+  return onDark >= onLight ? CHIP_DARK_TEXT : CHIP_LIGHT_TEXT;
+}
+function luminance(color) {
+  const digits = color.slice(1);
+  const full = digits.length === 3 ? [...digits].map((digit) => digit + digit).join("") : digits;
+  const [red, green, blue] = [0, 2, 4].map((at) => {
+    const value = parseInt(full.slice(at, at + 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+var contrast = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+function groupLabels(labels, inUse) {
+  const names = [...new Set([...Object.keys(labels), ...inUse])].filter((name) => name !== "").sort();
+  const groups = new Map;
+  for (const name of names) {
+    const at = name.indexOf(LABEL_SEPARATOR);
+    const prefix = at > 0 ? name.slice(0, at) : "";
+    const group = groups.get(prefix) ?? [];
+    group.push({ name, display: labelDisplay(name, labels), configured: isConfigured(name, labels) });
+    groups.set(prefix, group);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a === "" ? -1 : b === "" ? 1 : a < b ? -1 : 1).map(([prefix, group]) => ({ prefix, labels: group }));
+}
 function visibleTasks(tasks, filters) {
   const { status, priority, assignee, label, ready } = filters;
   const index = indexTasks(tasks);
@@ -22,7 +76,7 @@ function visibleTasks(tasks, filters) {
       return false;
     if (assignee && !matches(task.assignee ?? "", assignee))
       return false;
-    if (label && !(task.labels ?? []).some((l) => matches(l, label)))
+    if (label && !(task.labels ?? []).includes(label))
       return false;
     if (ready && !isReady(task, index))
       return false;
@@ -146,7 +200,9 @@ var state = {
   composing: null,
   draft: "",
   taskDir: "",
-  version: ""
+  version: "",
+  labels: {},
+  labelOptions: ""
 };
 function byId(id) {
   const element = document.getElementById(id);
@@ -194,11 +250,47 @@ function element(tag, className, text) {
 function render() {
   const tasks = visibleTasks(state.tasks, state.filters);
   const index = indexTasks(state.tasks);
+  renderLabelFilter();
   board.replaceChildren(...STATUSES.map((status) => renderColumn(status, tasks.filter((task) => task.status === status), index)));
   const total = state.tasks.length;
   const shown = tasks.length;
   const counts = shown === total ? `${total} tasks` : `${shown} of ${total} tasks`;
   statusLine.textContent = [counts, state.taskDir, state.version && `tq ${state.version}`].filter(Boolean).join(" · ");
+}
+function renderLabelFilter() {
+  const select = byId("filter-label");
+  if (document.activeElement === select)
+    return;
+  const inUse = labelsInUse(state.tasks);
+  if (state.filters.label)
+    inUse.push(state.filters.label);
+  const groups = groupLabels(state.labels, inUse);
+  const signature = JSON.stringify(groups);
+  if (signature === state.labelOptions)
+    return;
+  state.labelOptions = signature;
+  const selected = select.value;
+  const any = element("option", undefined, "any");
+  any.value = "";
+  const nodes = [any];
+  for (const group of groups) {
+    const options = group.labels.map((label) => {
+      const option = element("option", undefined, label.display);
+      option.value = label.name;
+      option.title = label.configured ? label.name : `${label.name} — not in the project's label set`;
+      return option;
+    });
+    if (group.prefix === "") {
+      nodes.push(...options);
+      continue;
+    }
+    const optgroup = element("optgroup");
+    optgroup.label = group.prefix;
+    optgroup.append(...options);
+    nodes.push(optgroup);
+  }
+  select.replaceChildren(...nodes);
+  select.value = selected;
 }
 function renderColumn(status, tasks, index) {
   const column = element("section", "column");
@@ -319,7 +411,7 @@ function renderCard(task, index) {
   if (task.assignee)
     meta.append(element("span", "assignee", task.assignee));
   for (const label of task.labels ?? [])
-    meta.append(element("span", "label", label));
+    meta.append(labelChipNode(label));
   const noteCount = splitBody(task.body ?? "").notes.length;
   if (noteCount > 0)
     meta.append(noteBadge(noteCount));
@@ -349,6 +441,17 @@ function renderCard(task, index) {
     }
   });
   return card;
+}
+function labelChipNode(name) {
+  const chip = element("span", "label", labelDisplay(name, state.labels));
+  chip.title = name;
+  const colors = labelChip(name, state.labels);
+  if (colors) {
+    chip.classList.add("tinted");
+    chip.style.background = colors.background;
+    chip.style.color = colors.text;
+  }
+  return chip;
 }
 var SPEECH_BUBBLE = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' + '<path fill="currentColor" d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H6.6L3.7 13.7A.5.5 0 0 1 3 13.3V11h-.5A1.5 1.5 0 0 1 1 9.5v-6z"/>' + "</svg>";
 function noteBadge(count) {
@@ -562,12 +665,11 @@ function readFilters() {
   render();
 }
 function wire() {
-  for (const id of ["filter-status", "filter-priority", "filter-ready"]) {
+  for (const id of ["filter-status", "filter-priority", "filter-label", "filter-ready"]) {
     byId(id).addEventListener("change", readFilters);
   }
-  for (const id of ["filter-assignee", "filter-label"]) {
-    byId(id).addEventListener("input", readFilters);
-  }
+  byId("filter-assignee").addEventListener("input", readFilters);
+  byId("filter-label").addEventListener("blur", renderLabelFilter);
   byId("filter-reset").addEventListener("click", () => {
     byId("filter-status").value = "";
     byId("filter-priority").value = "";
@@ -606,9 +708,16 @@ async function loadServerStatus() {
     console.error("status failed", error);
   }
 }
+async function loadProjectConfig() {
+  try {
+    state.labels = (await api("/api/config")).labels ?? {};
+  } catch (error) {
+    console.error("config failed", error);
+  }
+}
 async function start() {
   wire();
-  await loadServerStatus();
+  await Promise.all([loadServerStatus(), loadProjectConfig()]);
   try {
     await refresh();
   } catch (error) {

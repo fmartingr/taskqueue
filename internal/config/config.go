@@ -38,6 +38,11 @@ type Config struct {
 	Version int    `yaml:"version" json:"version"`
 	Path    string `yaml:"path" json:"path"`
 
+	// Labels is the project's label vocabulary, keyed by the label as it
+	// appears in task frontmatter. Read it through LabelSet, which supplies
+	// the base set when the key is absent.
+	Labels map[string]Label `yaml:"labels" json:"labels"`
+
 	// File is where this config was read from, and dir is the directory
 	// holding it. Path resolves against dir, never against the working
 	// directory, so the same committed file means the same thing wherever a
@@ -116,6 +121,9 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Path == "" {
 		cfg.Path = TaskDirName
 	}
+	if err := validateLabels(cfg.Labels); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+	}
 	return &cfg, nil
 }
 
@@ -153,7 +161,11 @@ func WriteConfigIfMissing(startDir, taskDir string) (string, error) {
 	if err != nil {
 		rel = taskDir
 	}
-	body := fmt.Appendf(nil, "version: %d\npath: %s\n", ConfigVersion, filepath.ToSlash(rel))
+	// The base set is seeded with the marker rather than left to `tq init`
+	// alone: any command can be the one that creates a queue, and a config the
+	// user never sees written would silently never get a vocabulary.
+	body := fmt.Appendf(nil, "version: %d\npath: %s\n%s",
+		ConfigVersion, filepath.ToSlash(rel), labelsYAML(DefaultLabels()))
 	if err := fsx.WriteAtomic(path, body); err != nil {
 		return "", err
 	}

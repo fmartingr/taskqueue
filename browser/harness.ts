@@ -20,16 +20,14 @@ import { afterAll, afterEach, beforeAll, setDefaultTimeout } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright-core";
 import {
   closeSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -65,71 +63,31 @@ function cleanEnv(): Record<string, string> {
 
 // ── Chromium ────────────────────────────────────────────────────
 
-/** Where Playwright caches browsers when PLAYWRIGHT_BROWSERS_PATH is unset. */
-function defaultBrowsersPath(): string {
-  switch (process.platform) {
-    case "darwin":
-      return join(homedir(), "Library", "Caches", "ms-playwright");
-    case "win32":
-      return join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "ms-playwright");
-    default:
-      return join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "ms-playwright");
-  }
-}
-
-function browsersRoot(): string {
-  const configured = process.env.PLAYWRIGHT_BROWSERS_PATH;
-  // "0" is Playwright's own spelling of "keep the browsers inside the package".
-  if (configured === "0") return join(REPO_ROOT, "node_modules", "playwright-core", ".local-browsers");
-  if (configured) return configured;
-  return defaultBrowsersPath();
-}
-
-/**
- * Relative paths to the executable inside a chromium-<revision> directory.
- * On macOS it lives in "Google Chrome for Testing.app", not "Chromium.app" —
- * the single most expensive detail in this file.
- */
-const EXECUTABLES = [
-  join("chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
-  join("chrome-mac", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
-  join("chrome-linux", "chrome"),
-  join("chrome-win", "chrome.exe"),
-];
-
 const INSTALL_HINT =
   "Install it with:  make browser-install   (bunx playwright-core install chromium)\n" +
   "  or point PLAYWRIGHT_BROWSERS_PATH at a cache that already has one.";
 
 /**
- * Finds a Chromium that playwright-core can drive. playwright-core ships no
- * browser binary at all, so this is a hard requirement of the suite and gets a
- * message naming the install command rather than a stack trace.
+ * Launches the Chromium playwright-core installed.
+ *
+ * Deliberately no `executablePath`: playwright-core resolves the browser from
+ * the same registry that downloaded it, so the layout inside a
+ * `chromium-<revision>` directory stays its business. This file used to spell
+ * those paths out and got them wrong — the macOS entries were migrated to
+ * Chrome for Testing and the Linux one was left as `chrome-linux/chrome`, which
+ * passes on a Mac and cannot pass on Linux (TQ-0077). Letting the library
+ * answer also lets it pick the headless shell when it prefers one.
+ *
+ * The only thing worth adding is the error: Playwright's own says
+ * `npx playwright install`, which is not how this repository installs it.
  */
-export function findChromium(): string {
-  const root = browsersRoot();
-  if (!existsSync(root)) {
-    throw new Error(`No Playwright browser cache at ${root}.\n  ${INSTALL_HINT}`);
+export async function launchChromium(): Promise<Browser> {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not launch Chromium.\n  ${INSTALL_HINT}\n\n${message}`);
   }
-
-  // Newest revision first, so a cache with several installs picks the latest.
-  const revisions = readdirSync(root)
-    .filter((name) => name.startsWith("chromium-"))
-    .sort((a, b) => (Number(b.slice("chromium-".length)) || 0) - (Number(a.slice("chromium-".length)) || 0));
-
-  if (revisions.length === 0) {
-    throw new Error(`No chromium-* build in the Playwright cache at ${root}.\n  ${INSTALL_HINT}`);
-  }
-
-  for (const revision of revisions) {
-    for (const relative of EXECUTABLES) {
-      const candidate = join(root, revision, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  throw new Error(
-    `Found ${revisions.join(", ")} in ${root} but no executable inside them.\n  ${INSTALL_HINT}`,
-  );
 }
 
 // ── The binary ──────────────────────────────────────────────────
@@ -377,7 +335,7 @@ export function useBoard(): (seed?: Seed) => Promise<Board> {
   const opened: Board[] = [];
 
   beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: findChromium(), headless: true });
+    browser = await launchChromium();
   });
 
   afterEach(async () => {

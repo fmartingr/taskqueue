@@ -1,14 +1,14 @@
 ---
 id: TQ-0077
 title: CI browser job cannot find Chromium on Linux
-status: todo
+status: in-progress
 priority: urgent
 labels:
   - bug
   - tests
   - component/ci
 created: 2026-08-26T10:18:43+02:00
-updated: 2026-08-26T10:18:43+02:00
+updated: 2026-08-26T10:24:00+02:00
 ---
 
 ## Symptom
@@ -99,3 +99,9 @@ resolves, or let the library decide (see above).
 The run also warns that `actions/checkout@v4`, `actions/setup-go@v5` and
 `actions/cache@v4` target Node 20 and are being forced onto Node 24. Worth a
 follow-up bump; it is not what broke this.
+
+---
+
+## Notes
+
+- 2026-08-26T10:24:00+02:00 — Fixed by deleting findChromium/browsersRoot/EXECUTABLES and launching without executablePath, so playwright-core resolves the browser from the registry that downloaded it. Confirmed the cause offline first: playwright-core 1.62.1 builds the Linux path as chrome-linux64/chrome, while the list said chrome-linux/chrome. Verified locally: full browser suite 31/31, and a cold cache (PLAYWRIGHT_BROWSERS_PATH at an empty directory) still fails with the make browser-install hint rather than Playwright's npx advice. The one criterion left is CI itself: ubuntu-latest from a cold cache, which only a push can prove.

@@ -3,12 +3,15 @@ package store_test
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/fmartingr/taskqueue/internal/config"
 	"github.com/fmartingr/taskqueue/internal/store"
@@ -993,18 +996,18 @@ func TestListReadsAFileWithAByteOrderMark(t *testing.T) {
 	}
 }
 
+// A retitle ends with the task under its new name and nothing else in the
+// directory: no staging file, no leftover under the old name. What the content
+// itself arrives by is TestUpdateLandsTheNewContentInOneStep, and the timestamp
+// the save stamps is TestUpdateRefreshesTheUpdatedTimestamp.
 func TestUpdateRewritesFileAtomically(t *testing.T) {
 	st := tqtest.NewStore(t)
 	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Original", Body: "Body."})
 
 	created.Title = "Renamed"
 	created.Status = task.StatusInProgress
-	updated, err := st.Update(created)
-	if err != nil {
+	if _, err := st.Update(created); err != nil {
 		t.Fatalf("Update: %v", err)
-	}
-	if updated.Updated.Before(updated.Created) {
-		t.Error("Update should refresh the updated timestamp")
 	}
 
 	reloaded, err := st.Get(created.ID)
@@ -1027,6 +1030,171 @@ func TestUpdateRewritesFileAtomically(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("directory contains %v, want only TQ-0001-renamed.md", names)
+	}
+}
+
+// wantReadableByAll checks the mode a save chmods its staging file to, which is
+// what keeps a task readable by more than the account that wrote it whatever
+// umask that account runs under. Windows has no POSIX mode bits and Go reports
+// 0666 for anything writable there, so there is nothing to check.
+func wantReadableByAll(t *testing.T, info os.FileInfo) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("mode = %v, want -rw-r--r--", perm)
+	}
+}
+
+// The guarantee README states about a save: the new content arrives in one
+// step, so nothing ever reads half of it. Three things say so here, and each
+// fails on a different way of losing it — the task's name holds a different
+// file afterwards (a write into the old one would keep it), that file is the
+// one the content was written into elsewhere (a copy would not be), and a
+// reader holding the old file across the save still reads the whole of the old
+// content.
+//
+// What is not covered is the fsync in Store.stage. Whether the bytes reached
+// the platter before the rename made them the task only shows up in a crash,
+// and no assertion inside the test process can see it, so it is left untested
+// on purpose rather than faked (TQ-0022).
+func TestUpdateLandsTheNewContentInOneStep(t *testing.T) {
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Stable title", Body: "The body as it was."})
+	path := filepath.Join(st.Dir, store.TaskFileName(created))
+
+	was, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var staged os.FileInfo
+	st.DuringStage(func(tmpName string) {
+		info, err := os.Stat(tmpName)
+		if err != nil {
+			t.Errorf("staged file: %v", err)
+			return
+		}
+		staged = info
+		if got, err := os.ReadFile(path); err != nil || string(got) != string(was) {
+			t.Errorf("the task's file holds %q (err %v) while the new content is being written, want the old content whole", got, err)
+		}
+	})
+
+	created.Body = "The body as it is now, which is longer than it was."
+	if _, err := st.Update(created); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Error("the task's name still holds the file it held: the content was written into it rather than moved onto it")
+	}
+	wantReadableByAll(t, after)
+	if staged == nil {
+		t.Fatal("nothing was staged: the new content went into the task's own file, where a reader can catch it half-written")
+	}
+	if !os.SameFile(staged, after) {
+		t.Error("the file under the task's name is not the one the content was written into")
+	}
+
+	held, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(held) != string(was) {
+		t.Errorf("a reader holding the file across the save read %q, want the old content %q", held, was)
+	}
+}
+
+// The same guarantee for a create, which places its file by linking rather than
+// renaming: the name a task is about to take never holds a partial file, and
+// what appears under it is the file the content was written into.
+func TestCreateLandsTheWholeFileAtOnce(t *testing.T) {
+	st := tqtest.NewStore(t)
+	const name = "TQ-0001-first-task.md"
+	path := filepath.Join(st.Dir, name)
+
+	var staged os.FileInfo
+	st.DuringStage(func(tmpName string) {
+		info, err := os.Stat(tmpName)
+		if err != nil {
+			t.Errorf("staged file: %v", err)
+			return
+		}
+		staged = info
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("os.Stat(%s) = %v while the content is still being written, want it not to exist yet", name, err)
+		}
+	})
+
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "First task", Body: "Body."})
+	if got := store.TaskFileName(created); got != name {
+		t.Fatalf("TaskFileName = %q, want %q", got, name)
+	}
+	landed, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReadableByAll(t, landed)
+	if staged == nil {
+		t.Fatal("nothing was staged: the task was written into its own name, where a reader can catch it half-written")
+	}
+	if !os.SameFile(staged, landed) {
+		t.Error("the file at the task's name is not the one the content was written into: it was copied there rather than placed")
+	}
+
+	entries, err := os.ReadDir(st.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != name {
+		t.Errorf("directory contains %v, want only %s", names(entries), name)
+	}
+}
+
+// A caller reads a task, edits it and hands it back, so the Updated a save
+// receives is whatever was on disk — here a value from long ago, which is what
+// makes the refresh visible without waiting for a second to pass. The save is
+// what replaces it with now; Created is not its to touch.
+func TestUpdateRefreshesTheUpdatedTimestamp(t *testing.T) {
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Original", Body: "Body."})
+
+	stale := time.Date(2001, time.January, 1, 0, 0, 0, 0, time.UTC)
+	edit := created
+	edit.Updated = stale
+	edit.Body = "Rewritten."
+
+	floor := time.Now().Truncate(time.Second)
+	if _, err := st.Update(edit); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	reloaded, err := st.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if reloaded.Updated.Before(floor) {
+		t.Errorf("Updated = %s, want the time of the save (%s or later): the save carried the caller's value through instead of stamping now",
+			reloaded.Updated.Format(time.RFC3339), floor.Format(time.RFC3339))
+	}
+	if !reloaded.Created.Equal(created.Created) {
+		t.Errorf("Created = %s, want it left at %s",
+			reloaded.Created.Format(time.RFC3339), created.Created.Format(time.RFC3339))
 	}
 }
 

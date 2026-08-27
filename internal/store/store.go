@@ -75,6 +75,14 @@ type Store struct {
 	// moments, and a test that hopes to land another process in there is a test
 	// that passes or fails by timing.
 	duringUpdate func()
+
+	// duringStage runs once a save's content is complete in its staging file,
+	// before the caller puts it at the task's name — and is nil everywhere but
+	// a test. It is the only moment at which both files exist, and so the only
+	// way a test can say the content was written somewhere else and moved,
+	// rather than into the task's own file: the name still holds what it held,
+	// and the file that lands under it afterwards is this one.
+	duringStage func(staged string)
 }
 
 // InitStore creates the project in dir and returns a store for its task
@@ -1165,6 +1173,9 @@ func (s *Store) stage(t task.Task) (path string, err error) {
 		return "", err
 	}
 
+	if s.duringStage != nil {
+		s.duringStage(tmpName)
+	}
 	return tmpName, nil
 }
 

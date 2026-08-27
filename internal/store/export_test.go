@@ -26,3 +26,10 @@ const UpdateAttempts = updateAttempts
 // the only way to drive the race update retries for without depending on
 // timing.
 func (s *Store) DuringUpdate(fn func()) { s.duringUpdate = fn }
+
+// DuringStage installs a hook that runs once a save's content is complete in
+// its staging file, before it is put at the task's name. It is handed that
+// file's path, and it is how a test says a save places its content rather than
+// writing it: while the hook runs the task's name still holds what it held, and
+// the file found under it afterwards is the same file this one names.
+func (s *Store) DuringStage(fn func(staged string)) { s.duringStage = fn }

@@ -1,7 +1,7 @@
 ---
 id: TQ-0066
 title: README and tq help describe an init that no longer exists
-status: todo
+status: rejected
 priority: normal
 labels:
   - docs
@@ -9,7 +9,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T17:45:33+02:00
-updated: 2026-08-25T18:48:34+02:00
+updated: 2026-08-27T23:28:20+02:00
 ---
 
 ## Finding
@@ -47,3 +47,11 @@ Found by `/code-review` over 20b06d2.
 - 2026-08-25T17:47:31+02:00 — Sharpened by rejecting TQ-0057: adoption in a project without a repository root is now accepted behaviour, not a bug awaiting a fix. The README sentence claiming a parent queue cannot capture such a project is therefore permanently false and must be rewritten to describe what tq actually does.
 - 2026-08-25T18:42:55+02:00 — Write this after TQ-0029 or it documents an init that changes again: the marker, path:, and what init writes are one story.
 - 2026-08-25T18:48:34+02:00 — Dependency on TQ-0029 recorded formally, matching the note left on this ticket. TQ-0029 changes what tq init writes, adds .taskqueue.yaml as the marker discovery stops at, and reorders discovery itself — so most of what this ticket would write down changes with it.
+- 2026-08-27T23:28:20+02:00 — Closed by TQ-0085 (cae237f) and TQ-0087 (d007202), verified on HEAD 268a9b0. Every item this ticket lists is already resolved, and mostly by removal rather than documentation.
+
+  - The false sentence is GONE. README no longer claims the search 'stops at that same repository root, so a queue in a parent directory cannot capture a project that has none of its own' — grep finds neither phrase. TQ-0085 replaced the repository bound with a home-folder bound and rewrote that section.
+  - 'Add TQ_WALK_FOREVER to the Environment section' is moot: TQ-0085 DELETED the variable. tq help's Environment section now lists TQ_CONFIG_PATH (which TQ-0087 introduced in place of TQ_DIR) and DEV.
+  - The init description is accurate and current: README says 'tq init is mandatory, and it creates the queue in the directory you run it in', 'It never searches, never adopts', and tq help says 'Create the queue in the current directory: .taskqueue.yaml, the .tasks directory, and the agent guide'.
+  - Adoption is no longer a behaviour to document — TQ-0085 removed it. init does not discover anything, so TQ-0047's and TQ-0056's shapes, which this ticket was written to describe, no longer exist either.
+
+  Nothing left to write. Rejecting rather than marking done, since the work was never performed as specified: the documentation this ticket asked for describes an init that was subsequently deleted.

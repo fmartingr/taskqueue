@@ -162,8 +162,22 @@ file written by a newer `tq` still reads here, and unknown keys are ignored. A
 file declaring a version this binary does not understand is an error that says
 so, rather than a silent partial read.
 
-`TQ_DIR=/path/to/.tasks` overrides the search and `path` alike, for every
-command including `tq init`.
+Once a command has found the marker, that file is the whole answer: what the
+project is, and where its tasks are. Nothing goes the other way — the task
+directory is what the marker declares, never a way to find it — so a `path`
+pointing outside the marker's own directory keeps the project's configuration
+like any other.
+
+`TQ_CONFIG_PATH=/path/to/.taskqueue.yaml` hands a command its marker instead of
+walking for one, for every command including `tq init`. It names a
+`.taskqueue.yaml` file, not a directory, and the tasks are wherever that
+marker's `path` says — so a command run under it works on that whole project,
+from any directory at all. A file it names that is missing, is a directory, or
+will not parse is an error: pointing `tq` at a marker and having it quietly use
+a different one is the failure this replaces.
+
+So there are two ways to get a marker and no others — walk up for it, or be
+handed one — and every command has one.
 
 ### Where the server binds
 

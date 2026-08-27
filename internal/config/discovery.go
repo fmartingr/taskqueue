@@ -11,9 +11,15 @@ import (
 // committed to Git.
 const TaskDirName = ".tasks"
 
-// EnvTaskDir names the task directory outright, which is useful for automation
-// and tests: TQ_DIR=/repo/.tasks tq list. It overrides the marker.
-const EnvTaskDir = "TQ_DIR"
+// EnvConfigPath names the project marker outright, which is useful for
+// automation and tests: TQ_CONFIG_PATH=/repo/.taskqueue.yaml tq list. It stands
+// in for the walk, and what it names is a marker like any other — so the tasks
+// are still wherever its `path` says, resolved against the directory holding it.
+//
+// A file, not a directory. Handing a command the marker rather than the queue
+// is what makes the rule total: every command has a marker, and nothing has to
+// decide what a project with no configuration would even mean (TQ-0087).
+const EnvConfigPath = "TQ_CONFIG_PATH"
 
 // WalkBoundary is where a search up the tree stops: the home directory, which
 // the walk checks and then goes no further. A marker at ~/.taskqueue.yaml is

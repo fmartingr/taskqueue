@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,8 +146,8 @@ func TestConfigIn(t *testing.T) {
 	}
 
 	cfg, err := config.ConfigIn(nested)
-	if err != nil {
-		t.Fatalf("config.ConfigIn: %v", err)
+	if !errors.Is(err, config.ErrNoConfig) {
+		t.Fatalf("config.ConfigIn() = %v, want config.ErrNoConfig: the marker above is not this directory's", err)
 	}
 	if cfg != nil {
 		t.Errorf("ConfigIn = %+v, want nil: the marker above is not this directory's", cfg)

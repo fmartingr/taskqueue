@@ -50,9 +50,10 @@ const TEST_TIMEOUT_MS = 30_000;
  */
 export const POLL_INTERVAL_MS = 3000;
 
-/** Environment that must not reach a spawned `tq`: a developer with TQ_DIR
- * exported must never have the suite operate on their own queue (TQ-0021). */
-const NEUTRALISED = ["TQ_DIR", "TQ_HOST", "TQ_PORT", "DEV"];
+/** Environment that must not reach a spawned `tq`: a developer with
+ * TQ_CONFIG_PATH exported must never have the suite operate on their own queue
+ * (TQ-0021). */
+const NEUTRALISED = ["TQ_CONFIG_PATH", "TQ_HOST", "TQ_PORT", "DEV"];
 
 function cleanEnv(): Record<string, string> {
   const env: Record<string, string> = {};

@@ -126,5 +126,12 @@ Two rules, and nothing else:
   it exits 3 and says to run `tq init`. No command creates a queue on its
   own.
 
-Set `TQ_DIR` to point tq at a different task directory, which overrides
-the marker for every command, `tq init` included.
+Once a command has found the marker, that file is the whole answer: the board,
+the priorities, the labels, and where the tasks are. Nothing goes the other way,
+so a `path` pointing outside the marker's own directory keeps all of it.
+
+Set `TQ_CONFIG_PATH` to hand tq its marker instead of having it walk for one, for
+every command, `tq init` included. It names a `.taskqueue.yaml` file, not
+a directory, and the tasks are wherever that marker's `path` says — so a
+command run under it works on that whole project, from any directory. A file it
+names that is missing, is a directory, or will not parse is an error.

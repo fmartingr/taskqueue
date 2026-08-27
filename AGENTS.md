@@ -200,7 +200,8 @@ frontend`, `make typecheck` or `make dev` will run.
   queue", and "no project at or above here" is now the ordinary way to get
   there rather than the edge case. A fourth code would have broken every script
   already treating 3 as "no queue". Every message behind it names `tq init`.
-- Discovery is two rules and nothing else (TQ-0085). `tq init` creates the
+- Discovery is two rules and nothing else (TQ-0085), with `TQ_CONFIG_PATH`
+  standing in for the walk when it is set (see below). `tq init` creates the
   queue in the directory it is run in — the marker, the task directory and the
   guide — and never searches, never adopts a project above, never relocates to
   a repository root. Every other command walks up from the working directory
@@ -216,7 +217,37 @@ frontend`, `make typecheck` or `make dev` will run.
   No command creates a queue implicitly — not even one whose marker is there
   and whose task directory is missing, which is reported rather than silently
   made. A `.git` bounds nothing, so a submodule reads the superproject's queue
-  (TQ-0059), and `TQ_DIR` still overrides everything, `tq init` included.
+  (TQ-0059).
+- **The marker is the source of truth, and the task directory is an output of
+  it.** Once discovery has found `.taskqueue.yaml` it knows everything: the
+  board, the priorities, the labels, and where the task files live. Nothing
+  walks the other way. `Store` keeps the marker it was resolved through
+  (`Store.Marker`) and every consumer reads the config through `Store.Config`;
+  a second walk, up from `Store.Dir`, finds another project's marker or none
+  whenever `path:` points outside the marker's own directory — and either
+  answer silently replaced the board a write is validated against, so
+  `tq update --assignee` rewrote the status of the task it touched (TQ-0087).
+  The path is carried, never the parsed file: the config is read from disk on
+  every call, so a CLI edit to the marker reaches a running server the way a
+  task edit does. A test at the repository root refuses the shape in the
+  source, and `tqtest.EscapedQueue` is the fixture that catches it by
+  behaviour: a decoy marker above a task directory that sits outside its own
+  project.
+- Nothing in `internal/config` answers with a nil `*Config` and a nil error.
+  An absent marker is `config.ErrNoConfig`, and a caller for which that is
+  genuinely fine folds it with `config.Optional`; that is what stops "no marker
+  found" being mistaken for "this project has no configuration".
+- A command gets its marker one of two ways and no others: `TQ_CONFIG_PATH`
+  hands it one, or it walks up from the working directory for one. So every
+  queue has a marker, `Store.Marker` is never empty, and there is no third
+  state in which a project has no configuration and something has to guess what
+  its board is. `TQ_CONFIG_PATH` names a `.taskqueue.yaml` file rather than a
+  task directory, and one that is missing, is a directory, or will not parse is
+  an error — never an absence. It replaced the task-directory variable outright
+  in TQ-0087, with no alias, the way TQ-0085 removed `TQ_WALK_FOREVER`: naming
+  the queue instead of the project is what left a command holding tasks it had
+  no configuration to validate, and silently rewriting their status against the
+  built-in board.
 - Prefer the Go standard library where practical.
 - Keep the layering: `internal/task` imports nothing of ours, and nothing
   imports back up the list above. Everything except `cmd/tq` stays under
@@ -242,7 +273,7 @@ separate implementations of one rule, and `adopt.test.ts` drives `adoptBody` and
 save-time merge are proved to agree on one snapshot.
 
 A bare `t.TempDir()` is not an isolation barrier: discovery walks up out of it,
-and `TQ_DIR` in a developer's shell points the whole suite at their real queue
+and `TQ_CONFIG_PATH` in a developer's shell points the whole suite at their real queue
 (TQ-0021, TQ-0053, TQ-0063). So every test package that can reach the store has a
 `TestMain` calling `tqtest.Isolate` and a `TestTheSuiteIsIsolated` calling
 `tqtest.RequireIsolated`, which fails if that call is ever dropped. Fixtures come

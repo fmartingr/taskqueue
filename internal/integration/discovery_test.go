@@ -58,7 +58,8 @@ func TestRunsFromASubdirectory(t *testing.T) {
 	}
 }
 
-// The marker decides where the tasks live, and TQ_DIR overrides even that.
+// The marker decides where the tasks live, and TQ_CONFIG_PATH decides which
+// marker.
 func TestMarkerAndOverride(t *testing.T) {
 	t.Parallel()
 
@@ -81,23 +82,53 @@ func TestMarkerAndOverride(t *testing.T) {
 		}
 	})
 
-	t.Run("TQ_DIR beats the marker", func(t *testing.T) {
+	t.Run("TQ_CONFIG_PATH beats the walk", func(t *testing.T) {
 		t.Parallel()
-		p := &project{dir: bareDir(t)}
-		if err := writeFile(p.path(".taskqueue.yaml"), "version: 1\npath: .tasks\n"); err != nil {
+		// Two projects side by side, and the command runs in the first while
+		// the variable names the second's marker.
+		base := bareDir(t)
+		here := filepath.Join(base, "here")
+		named := filepath.Join(base, "named")
+		for _, dir := range []string{here, named} {
+			if err := mkdirAll(dir); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writeFile(filepath.Join(here, ".taskqueue.yaml"), "version: 1\npath: .tasks\n"); err != nil {
 			t.Fatal(err)
 		}
-		elsewhere := p.path("elsewhere")
-		env := []string{"TQ_DIR=" + elsewhere}
-		p.runIn(t, p.dir, env, "init")
-		p.runIn(t, p.dir, env, "add", "via the environment")
-
-		entries, err := os.ReadDir(elsewhere)
-		if err != nil || len(entries) != 2 {
-			t.Errorf("TQ_DIR holds %d entries, %v; want the task and the guide", len(entries), err)
+		if err := writeFile(filepath.Join(named, ".taskqueue.yaml"), "version: 1\npath: queue\n"); err != nil {
+			t.Fatal(err)
 		}
-		if _, err := os.Stat(p.path(".tasks")); !os.IsNotExist(err) {
-			t.Error("the marker's path should have been ignored")
+
+		p := &project{dir: here}
+		env := []string{"TQ_CONFIG_PATH=" + filepath.Join(named, ".taskqueue.yaml")}
+		p.runIn(t, here, env, "init")
+		p.runIn(t, here, env, "add", "via the environment")
+
+		entries, err := os.ReadDir(filepath.Join(named, "queue"))
+		if err != nil || len(entries) != 2 {
+			t.Errorf("the named project's queue holds %d entries, %v; want the task and the guide", len(entries), err)
+		}
+		if _, err := os.Stat(filepath.Join(here, ".tasks")); !os.IsNotExist(err) {
+			t.Error("the marker in the working directory should not have been read at all")
+		}
+	})
+
+	t.Run("TQ_CONFIG_PATH naming what tq cannot read", func(t *testing.T) {
+		t.Parallel()
+		p := newProject(t)
+		for _, override := range []string{
+			filepath.Join(p.dir, "nowhere.yaml"), // missing
+			p.dir,                                // a directory
+		} {
+			r := p.runIn(t, p.dir, []string{"TQ_CONFIG_PATH=" + override}, "list")
+			if r.Code == 0 {
+				t.Errorf("TQ_CONFIG_PATH=%s = exit 0, want a failure", override)
+			}
+			if !strings.Contains(r.Stderr, "TQ_CONFIG_PATH") {
+				t.Errorf("stderr = %q, want it to name the variable", r.Stderr)
+			}
 		}
 	})
 
@@ -254,7 +285,7 @@ func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 		assertPointer(t, p.runIn(t, deep, nil, "init", "--json"), guide)
 	})
 
-	t.Run("with TQ_DIR outside the project", func(t *testing.T) {
+	t.Run("with a queue outside the marker's directory", func(t *testing.T) {
 		t.Parallel()
 		base := bareDir(t)
 		dir := filepath.Join(base, "project")
@@ -262,13 +293,15 @@ func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := &project{dir: dir}
-		// Relative, the way a shell hands it over, and pointing sideways: the
-		// shape the ticket reproduced, where tq answered "@queue/AGENTS.md".
-		env := []string{"TQ_DIR=../elsewhere/queue"}
+		// Relative, and pointing sideways: the shape the ticket reproduced,
+		// where tq answered "@queue/AGENTS.md".
+		if err := writeFile(filepath.Join(dir, ".taskqueue.yaml"), "version: 1\npath: ../elsewhere/queue\n"); err != nil {
+			t.Fatal(err)
+		}
 		guide := realPath(t, base, "elsewhere", "queue", "AGENTS.md")
 
-		assertPrints(t, p.runIn(t, dir, env, "init"), guide)
-		assertPointer(t, p.runIn(t, dir, env, "init", "--json"), guide)
+		assertPrints(t, p.runIn(t, dir, nil, "init"), guide)
+		assertPointer(t, p.runIn(t, dir, nil, "init", "--json"), guide)
 	})
 }
 
@@ -484,4 +517,102 @@ func snapshot(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return b.String()
+}
+
+// A marker whose `path` leaves its own directory, driven through the real
+// binary — and reached both ways a command can get a marker: by walking up from
+// the project, and by being handed one through TQ_CONFIG_PATH from a directory
+// that belongs to no project at all (TQ-0087).
+func TestTheMarkerIsTheProjectWhereverItsQueueLives(t *testing.T) {
+	t.Parallel()
+	base := bareDir(t)
+	dir := filepath.Join(base, "project")
+	neutral := filepath.Join(base, "neutral")
+	for _, d := range []string{dir, neutral} {
+		if err := mkdirAll(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A board of the project's own, and a queue that is not under the marker.
+	marker := filepath.Join(dir, ".taskqueue.yaml")
+	if err := writeFile(marker, "version: 1\npath: ../queue\n"+
+		"columns:\n"+
+		"  - name: backlog\n    default: true\n"+
+		"  - name: doing\n    consider_ready: true\n"+
+		"  - name: shipped\n    consider_done: true\n"+
+		"priorities:\n"+
+		"  - {name: blocker, color: \"#b42318\"}\n"+
+		"  - {name: routine, color: \"#4b5563\", default: true}\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &project{dir: dir}
+	p.mustRun(t, "init")
+	if _, err := os.Stat(filepath.Join(base, "queue")); err != nil {
+		t.Fatalf("init did not create the queue the marker declares: %v", err)
+	}
+
+	var created taskJSON
+	p.mustRun(t, "add", "Real work", "--json").JSON(t, &created)
+	if created.Status != "backlog" || created.Priority != "routine" {
+		t.Fatalf("created = %+v, want the project's defaults", created)
+	}
+
+	// The project's own column, which the built-in board does not have.
+	p.mustRun(t, "move", created.ID, "doing")
+
+	// The same project, reached from a directory that is not one, by handing
+	// the command its marker. Both edits say nothing about status, and this is
+	// the data-loss case: the status was silently rewritten, with exit 0.
+	env := []string{"TQ_CONFIG_PATH=" + marker}
+	outside := &project{dir: neutral}
+	for _, args := range [][]string{
+		{"update", created.ID, "--assignee", "alice"},
+		{"note", created.ID, "something happened"},
+	} {
+		if r := outside.runIn(t, neutral, env, args...); r.Code != 0 {
+			t.Fatalf("tq %s = %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), r.Code, r.Stdout, r.Stderr)
+		}
+	}
+	// And a column only the project declares is accepted from out here too.
+	if r := outside.runIn(t, neutral, env, "move", created.ID, "shipped"); r.Code != 0 {
+		t.Fatalf("tq move = %d\nstderr: %s", r.Code, r.Stderr)
+	}
+	if r := outside.runIn(t, neutral, env, "move", created.ID, "doing"); r.Code != 0 {
+		t.Fatalf("tq move = %d\nstderr: %s", r.Code, r.Stderr)
+	}
+
+	var shown taskJSON
+	p.mustRun(t, "show", created.ID, "--json").JSON(t, &shown)
+	if shown.Status != "doing" || shown.Assignee != "alice" {
+		t.Errorf("task = %+v, want doing and alice: the edits must not have moved it", shown)
+	}
+
+	// And the board sees the same project, over HTTP.
+	srv := p.serve(t)
+	srv.waitReady(t)
+	var cfg struct {
+		File    string `json:"file"`
+		Columns []struct {
+			Name string `json:"name"`
+		} `json:"columns"`
+	}
+	srv.get(t, "/api/config", &cfg)
+	if cfg.File != realPath(t, dir, ".taskqueue.yaml") {
+		t.Errorf("file = %q, want the project's marker", cfg.File)
+	}
+	var columns []string
+	for _, column := range cfg.Columns {
+		columns = append(columns, column.Name)
+	}
+	if want := "backlog,doing,shipped"; strings.Join(columns, ",") != want {
+		t.Errorf("columns = %v, want the project's board %q", columns, want)
+	}
+
+	var listed []taskJSON
+	srv.get(t, "/api/tasks", &listed)
+	if len(listed) != 1 || listed[0].Status != "doing" {
+		t.Errorf("listing = %+v, want one task in doing", listed)
+	}
 }

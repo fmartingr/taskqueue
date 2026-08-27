@@ -7,6 +7,7 @@ package tqtest
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fmartingr/taskqueue/internal/config"
@@ -15,9 +16,9 @@ import (
 )
 
 // isolationEnv is the configuration that can send a test outside its own
-// temporary directory: TQ_DIR overrides every other answer discovery has, so
-// an exported one points the whole suite at whatever queue it names.
-var isolationEnv = []string{config.EnvTaskDir}
+// temporary directory: TQ_CONFIG_PATH stands in for the walk entirely, so an
+// exported one points the whole suite at whatever project it names.
+var isolationEnv = []string{config.EnvConfigPath}
 
 // ambient is what those variables held when the test binary started, taken
 // before Isolate clears them. It is what lets RequireIsolated tell a suite that
@@ -36,9 +37,9 @@ func init() {
 }
 
 // Isolate removes the configuration that could send a test outside its own
-// temporary directory. Call it from TestMain: TQ_DIR is the documented way to
-// point tq at a queue, so a developer may well have it exported, and without
-// this every test would operate on their real one.
+// temporary directory. Call it from TestMain: TQ_CONFIG_PATH is the documented
+// way to point tq at a project, so a developer may well have it exported, and
+// without this every test would operate on their real one.
 func Isolate() {
 	for _, name := range isolationEnv {
 		_ = os.Unsetenv(name)
@@ -50,12 +51,12 @@ func Isolate() {
 // ambient configuration is gone. It is the pin on Isolate itself: every other
 // fixture clears the variables again on the way past, so without this guard the
 // call in TestMain could be deleted and nothing would notice — while a suite run
-// with TQ_DIR exported wrote into a developer's real queue.
+// with TQ_CONFIG_PATH exported wrote into a developer's real queue.
 func RequireIsolated(t *testing.T) {
 	t.Helper()
 	if !isolated {
 		t.Fatalf("this package's TestMain must call tqtest.Isolate(): without it an exported %s points the whole suite at a real queue",
-			config.EnvTaskDir)
+			config.EnvConfigPath)
 	}
 	for _, name := range isolationEnv {
 		got := os.Getenv(name)
@@ -158,6 +159,72 @@ func AboveFixtures(t *testing.T) string {
 		t.Fatalf("t.TempDir() no longer nests inside a per-test parent: %s is the shared temporary directory, and this test must not write a queue into it", above)
 	}
 	return above
+}
+
+// DecoyName is the column, the priority and the label the decoy marker in
+// EscapedQueue declares. Nothing in tq produces it, so a value seen anywhere
+// says the configuration was re-derived from the task directory.
+const DecoyName = "decoy"
+
+// decoyConfig is the project the escaped queue's task directory happens to sit
+// in. Its board, its vocabulary and its label set share not one name with the
+// built-in sets or with anything a test declares, so whichever of the three a
+// caller ends up with is unmistakable.
+const decoyConfig = `version: 1
+path: queue
+columns:
+  - name: ` + DecoyName + `
+    display_name: Decoy
+    default: true
+priorities:
+  - name: ` + DecoyName + `
+    color: "#000000"
+    default: true
+labels:
+  ` + DecoyName + `:
+    color: "#000000"
+    display_name: Decoy
+`
+
+// EscapedQueue plants the project shape TQ-0087 is about and returns its root
+// and the task directory that root declares. The queue is created, so the
+// caller opens it with InitStore or OpenStore — or runs the CLI in root — as it
+// needs.
+//
+// The shape is a marker whose `path` names a task directory *outside* the
+// marker's own directory, with a second, decoy marker sitting directly above
+// that directory. It is documented and ordinary — `path` is resolved against
+// the marker, so it may point anywhere — and it is what TQ_CONFIG_PATH makes
+// routine, since the marker it hands over need be nowhere near the tasks.
+// Reading the
+// marker the queue was resolved through gives the project's own configuration;
+// walking up from the task directory instead lands on the decoy, and every
+// value that comes back is then visibly the wrong one.
+//
+// extra is appended to the project's marker: its columns, its priorities, its
+// labels, whatever the test is about.
+func EscapedQueue(t *testing.T, extra string) (root, queue string) {
+	t.Helper()
+	above := AboveFixtures(t)
+	root = Root(t)
+	queue = filepath.Join(above, "queue")
+	if err := os.MkdirAll(queue, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := filepath.Rel(root, queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The premise of the fixture: the path leaves the marker's own directory.
+	// Without it the two markers below would be the same file.
+	if !strings.HasPrefix(rel, "..") {
+		t.Fatalf("path %q does not leave %s, so this fixture is not the shape it is for", rel, root)
+	}
+
+	WriteConfig(t, above, decoyConfig)
+	WriteConfig(t, root, "version: 1\npath: "+filepath.ToSlash(rel)+"\n"+extra)
+	return root, queue
 }
 
 // WriteConfig plants a project marker in dir and returns its path.

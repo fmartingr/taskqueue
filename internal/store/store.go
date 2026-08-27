@@ -46,6 +46,28 @@ const initHint = `run "tq init" to create one`
 type Store struct {
 	Dir string
 
+	// Marker is the .taskqueue.yaml this queue was resolved through, absolute.
+	// It is what says what the project is: its board, its two vocabularies, and
+	// where Dir itself is.
+	//
+	// Carried rather than looked up again, because a task directory has no way
+	// back to it. A marker's `path` may point outside the marker's own
+	// directory, and walking up from Dir then reaches another project's marker
+	// or none at all; either answer silently replaced the board a write is
+	// validated against, and `tq update --assignee` rewrote the status of every
+	// task it touched (TQ-0087).
+	//
+	// The path, never the parsed file. Config reads it from the disk on every
+	// call, so an edit to the marker reaches a running server exactly as an
+	// edit to a task file does.
+	//
+	// Never empty on a store from InitStore or OpenStore: there are two ways to
+	// get a marker, TQ_CONFIG_PATH and the walk, and a queue that reached
+	// neither is not a project. Only a Store assembled by hand — a test — can
+	// have none, and Config says so with config.ErrNoConfig rather than by
+	// answering nothing.
+	Marker string
+
 	// mu serialises ID allocation. The HTTP server shares one Store across
 	// handlers, so without it two requests scan the directory, see the same
 	// highest number, and both claim it.
@@ -91,16 +113,16 @@ type Store struct {
 //
 // It never looks above dir: the folder init is run in is the answer, so a
 // project above cannot capture it and a repository root cannot relocate it.
-// The task directory is TQ_DIR when that is set, otherwise the one a marker
-// already in dir declares, otherwise dir/.tasks. Running it twice is harmless
-// — an existing directory is left alone and an existing marker is never
-// rewritten.
+// The marker is the one TQ_CONFIG_PATH names when that is set, otherwise the
+// one in dir — written there if it is not already. Either way the task
+// directory is what that marker declares. Running it twice is harmless: an
+// existing directory is left alone and an existing marker is never rewritten.
 func InitStore(dir string) (*Store, error) {
 	root, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
-	taskDir, err := initTaskDir(root)
+	marker, taskDir, err := initProject(root)
 	if err != nil {
 		return nil, err
 	}
@@ -120,13 +142,18 @@ func InitStore(dir string) (*Store, error) {
 		created = true
 	}
 
-	// A queue without its marker is the ambiguity the marker exists to remove,
-	// so making one writes both.
-	marker, err := config.WriteConfigIfMissing(root, taskDir)
-	if err != nil {
-		return nil, err
+	written := ""
+	if marker == "" {
+		// A queue without its marker is the ambiguity the marker exists to
+		// remove, so making one writes both. Whether this call writes it or
+		// finds it already there, the project's marker is the one in the
+		// directory init was run in.
+		if written, err = config.WriteConfigIfMissing(root, taskDir); err != nil {
+			return nil, err
+		}
+		marker = filepath.Join(root, config.ConfigFileName)
 	}
-	return &Store{Dir: taskDir, Created: created, ConfigWritten: marker}, nil
+	return &Store{Dir: taskDir, Marker: marker, Created: created, ConfigWritten: written}, nil
 }
 
 // OpenStore returns the store for the project startDir belongs to, and fails
@@ -134,92 +161,123 @@ func InitStore(dir string) (*Store, error) {
 // command that makes a queue, so a directory with no project at or above it
 // gets an error naming that command rather than a queue it did not ask for.
 func OpenStore(startDir string) (*Store, error) {
-	dir, err := DiscoverTaskDir(startDir)
+	dir, marker, err := discover(startDir)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{Dir: dir}, nil
+	return &Store{Dir: dir, Marker: marker}, nil
 }
 
-// initTaskDir is where `tq init` puts the queue: TQ_DIR when set, otherwise
-// what a marker already in dir declares, otherwise dir/.tasks. It reads the
-// marker in dir alone — init creates the project where it is run, and a marker
-// further up belongs to another project.
-func initTaskDir(dir string) (string, error) {
-	if override := os.Getenv(config.EnvTaskDir); override != "" {
-		return filepath.Abs(override)
+// Config is the project's configuration, read from the marker this queue was
+// resolved through — and from nowhere else. It hits the disk on every call, so
+// an edit to the file reaches a running server on its next request, exactly as
+// an edit to a task does.
+//
+// It reports config.ErrNoConfig for a store with no marker, which InitStore and
+// OpenStore never produce — see Marker. Nothing here folds that into the
+// built-in sets: a queue whose project cannot be named is one nothing should be
+// validated against, and quietly supplying a board tq made up is the whole of
+// TQ-0087.
+func (s *Store) Config() (*config.Config, error) {
+	if s.Marker == "" {
+		return nil, fmt.Errorf("%w: %s was reached without one", config.ErrNoConfig, s.Dir)
 	}
-	cfg, err := config.ConfigIn(dir)
+	return config.Load(s.Marker)
+}
+
+// initProject is the marker `tq init` works under and the queue that marker
+// declares. The marker comes back empty when there is none yet and InitStore
+// must write one, which is the ordinary case — a fresh project.
+//
+// TQ_CONFIG_PATH hands over a marker that already exists, so init has nothing
+// to write and nowhere else to put the queue: it creates what that marker
+// declares. Otherwise it reads the marker in dir alone, because init creates
+// the project where it is run and a marker further up belongs to another
+// project.
+func initProject(dir string) (marker, taskDir string, err error) {
+	marker, err = config.MarkerOverride()
 	if err != nil {
-		return "", err
+		return "", "", err
+	}
+	if marker != "" {
+		cfg, err := config.Load(marker)
+		if err != nil {
+			return "", "", err
+		}
+		return marker, cfg.TaskDir(), nil
+	}
+
+	cfg, err := config.Optional(config.ConfigIn(dir))
+	if err != nil {
+		return "", "", err
 	}
 	if cfg != nil {
-		return cfg.TaskDir(), nil
+		return "", cfg.TaskDir(), nil
 	}
-	return filepath.Join(dir, config.TaskDirName), nil
+	return "", filepath.Join(dir, config.TaskDirName), nil
 }
 
-// DiscoverTaskDir returns the existing task directory to use: the TQ_DIR
-// override when set, otherwise the one named by the nearest .taskqueue.yaml at
-// or above startDir. Walking up lets an agent run tq from any subdirectory of a
+// DiscoverTaskDir returns the existing task directory to use: the one named by
+// the marker TQ_CONFIG_PATH hands over, or by the nearest .taskqueue.yaml at or
+// above startDir. Walking up lets an agent run tq from any subdirectory of a
 // project; the walk stops at the home directory (see config.WalkBoundary).
 //
 // It reports ErrProjectNotFound when there is nothing to find, and that is the
 // end of it — no caller creates a queue on the strength of it.
 func DiscoverTaskDir(startDir string) (string, error) {
-	if override := os.Getenv(config.EnvTaskDir); override != "" {
-		abs, err := filepath.Abs(override)
-		if err != nil {
-			return "", err
-		}
-		info, err := os.Stat(abs)
-		switch {
-		case errors.Is(err, os.ErrNotExist):
-			return "", fmt.Errorf("%w: %s=%s does not exist; %s", ErrProjectNotFound, config.EnvTaskDir, override, initHint)
-		case err != nil:
-			return "", fmt.Errorf("%s=%s: %w", config.EnvTaskDir, override, err)
-		case !info.IsDir():
-			return "", fmt.Errorf("%s=%s is not a directory", config.EnvTaskDir, override)
-		}
-		return abs, nil
-	}
+	dir, _, err := discover(startDir)
+	return dir, err
+}
 
-	// The marker decides, when there is one: one file to find, and it says
-	// where the tasks live.
-	cfg, err := config.FindConfig(startDir)
+// discover is DiscoverTaskDir with the marker it resolved through, which is
+// what OpenStore keeps. The two answers come out of one resolution because they
+// are one act: the marker is the project, and the task directory is what it
+// declares.
+//
+// There are two ways to get the marker and no others — handed over by
+// TQ_CONFIG_PATH, or found by walking up from the directory the command was run
+// in — so every queue has one and nothing has to decide what a project with no
+// configuration would mean (TQ-0087).
+func discover(startDir string) (string, string, error) {
+	marker, err := config.MarkerPath(startDir)
 	if err != nil {
-		return "", err
-	}
-	if cfg != nil {
-		declared := cfg.TaskDir()
-		if info, err := os.Stat(declared); err == nil && info.IsDir() {
-			return declared, nil
-		}
-		// The project is declared but its queue is not on disk — a marker
-		// committed without the directory, or one deleted since. Init puts it
-		// back, but only when it is run in the marker's own directory: init
-		// creates the queue where it stands, so following a bare "run tq init"
-		// from a subdirectory would fork a second project rather than repair
-		// this one. So this is the case where the hint names the directory.
-		return "", fmt.Errorf("%w: %s says the task directory is %s, which does not exist; run \"tq init\" in %s to create it",
-			ErrProjectNotFound, cfg.File, declared, filepath.Dir(cfg.File))
+		return "", "", err
 	}
 
 	// No marker, so there is no project here. tq does not go looking for a
 	// directory that happens to be called .tasks: guessing at names on the way
 	// up is what the marker replaces.
-	abs, err := filepath.Abs(startDir)
+	if marker == "" {
+		abs, err := filepath.Abs(startDir)
+		if err != nil {
+			return "", "", err
+		}
+		if stopAt := config.WalkBoundary(abs); stopAt != "" {
+			// Say where the search stopped, so a caller whose project sits
+			// above their home directory can see why it was not reached.
+			return "", "", fmt.Errorf("%w: no %s in %s or any parent directory up to %s; %s",
+				ErrProjectNotFound, config.ConfigFileName, abs, stopAt, initHint)
+		}
+		return "", "", fmt.Errorf("%w: no %s in %s or any parent directory; %s",
+			ErrProjectNotFound, config.ConfigFileName, abs, initHint)
+	}
+
+	cfg, err := config.Load(marker)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if stopAt := config.WalkBoundary(abs); stopAt != "" {
-		// Say where the search stopped, so a caller whose project sits above
-		// their home directory can see why it was not reached.
-		return "", fmt.Errorf("%w: no %s in %s or any parent directory up to %s; %s",
-			ErrProjectNotFound, config.ConfigFileName, abs, stopAt, initHint)
+	declared := cfg.TaskDir()
+	if info, err := os.Stat(declared); err == nil && info.IsDir() {
+		return declared, marker, nil
 	}
-	return "", fmt.Errorf("%w: no %s in %s or any parent directory; %s",
-		ErrProjectNotFound, config.ConfigFileName, abs, initHint)
+	// The project is declared but its queue is not on disk — a marker committed
+	// without the directory, or one deleted since. Init puts it back, but only
+	// when it is run in the marker's own directory: init creates the queue where
+	// it stands, so following a bare "run tq init" from a subdirectory would
+	// fork a second project rather than repair this one. So this is the case
+	// where the hint names the directory.
+	return "", "", fmt.Errorf("%w: %s says the task directory is %s, which does not exist; run \"tq init\" in %s to create it",
+		ErrProjectNotFound, cfg.File, declared, filepath.Dir(cfg.File))
 }
 
 // CreateTaskInput carries the fields a caller may set when creating a task.
@@ -371,12 +429,13 @@ func duplicateClaim(id string, files []string) string {
 // Priorities is the vocabulary this queue is filed under: the values a write
 // may use, their ranking, and the default.
 //
-// It is read from the project's config on every call rather than held on the
-// Store. The config sits beside the tasks and is a source of truth the same way
-// they are, so an edit to it reaches a running server on its next request —
-// exactly as an edit to a task file does, and for the same reason.
+// It is read through Config on every call rather than held on the Store. The
+// marker is a source of truth the same way the tasks are, so an edit to it
+// reaches a running server on its next request — exactly as an edit to a task
+// file does, and for the same reason. A store with no marker fails here rather
+// than answering with the built-in set.
 func (s *Store) Priorities() (task.Priorities, error) {
-	cfg, err := config.FindConfig(s.Dir)
+	cfg, err := s.Config()
 	if err != nil {
 		return task.Priorities{}, err
 	}
@@ -385,9 +444,10 @@ func (s *Store) Priorities() (task.Priorities, error) {
 
 // Columns is the board this queue is filed on: the statuses a write may use,
 // their order, which of them offer work, and which count a dependency as met.
-// Read from the config on every call, for the same reason Priorities is.
+// Read through Config on every call, and failing the same way, for the same
+// reasons Priorities is.
 func (s *Store) Columns() (task.Columns, error) {
-	cfg, err := config.FindConfig(s.Dir)
+	cfg, err := s.Config()
 	if err != nil {
 		return task.Columns{}, err
 	}

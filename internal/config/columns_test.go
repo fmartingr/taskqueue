@@ -26,9 +26,12 @@ columns:
 `
 
 func TestBoardDefaultsWithoutAConfig(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.RootWithoutMarker(t))
+	cfg, err := config.Optional(config.FindConfig(tqtest.RootWithoutMarker(t)))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
+	}
+	if cfg != nil {
+		t.Fatalf("config.Optional(FindConfig()) = %+v, want nil where there is no marker", cfg)
 	}
 	if got, want := strings.Join(cfg.Board().Names(), ","), "inbox,todo,in-progress,done,rejected"; got != want {
 		t.Errorf("Board() = %q, want %q", got, want)

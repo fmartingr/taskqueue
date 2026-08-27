@@ -199,9 +199,14 @@ Where the queue lives:
   at, so the walk runs to the filesystem root. With no marker at all it exits 3
   and says to run tq init; it never creates a queue itself.
 
+  Once a command has the marker, that file is the whole answer: the board, both
+  vocabularies, and where the tasks are. Nothing goes the other way, so its
+  path may point outside the marker's own directory.
+
 Environment:
-  %s             Task directory to use instead of discovering %s; it
-                     overrides the marker for every command, tq init included
+  %s     The marker to use instead of walking for one, for every
+                     command, tq init included. It names a %s
+                     file, not a directory; the tasks are wherever its path says
   DEV                Serve frontend assets from disk instead of the embedded copy
 
 Exit codes:
@@ -217,13 +222,12 @@ func (c *cli) usage(w io.Writer) {
 		strings.Join(priorities.Names(), ", "), priorities.Default(),
 		config.ConfigFileName, defaultHost+", "+defaultPort,
 		config.ConfigFileName, config.ConfigFileName,
-		config.EnvTaskDir, config.TaskDirName)
+		config.EnvConfigPath, config.ConfigFileName)
 }
 
 // priorities is the vocabulary for help text and for the filters, which are
-// both needed before a command has opened a store. It resolves from the queue
-// the command will work on, not from the working directory, so TQ_DIR pointing
-// at another project's queue does not have the CLI offer this project's set.
+// both needed before a command has opened a store. It comes from the project's
+// marker, which is the same file the store validates a write against.
 //
 // A config that cannot be read falls back to the built-in set rather than
 // failing: help must print, and a filter against a broken config is reported by
@@ -239,19 +243,22 @@ func (c *cli) board() task.Columns {
 	return c.config().Board()
 }
 
-// config is the project's config, resolved from the queue the command will
-// work on rather than from the working directory, so TQ_DIR pointing at another
-// project's queue reads that project's config.
+// config is the project's config: the nearest marker at or above the directory
+// the command was run in. That is the same file a store opened here resolves
+// through, so the CLI's help and filters cannot disagree with the writes that
+// follow them — and it holds before a store exists, which is the case this is
+// for, a project whose task directory has not been created yet.
+//
+// TQ_CONFIG_PATH is honoured here as everywhere, because what it hands over is
+// a marker: the same file a store opened here would resolve through, so the
+// variable cannot put the help and the writes on two different projects
+// (TQ-0087).
 //
 // A config that cannot be read reads as none. Every caller here wants a default
 // rather than a failure — help must print, and a command that goes on to touch
 // the store reports the broken config itself, with the file named.
 func (c *cli) config() *config.Config {
-	dir := c.dir
-	if taskDir, err := store.DiscoverTaskDir(c.dir); err == nil {
-		dir = taskDir
-	}
-	cfg, err := config.FindConfig(dir)
+	cfg, err := config.Optional(config.FindConfig(c.dir))
 	if err != nil {
 		return nil
 	}
@@ -298,11 +305,13 @@ func (c *cli) runInit(args []string) int {
 		return code
 	}
 
-	// Not through c.st(): init is the one command that does not discover. It
+	// Not through c.st(): init is the one command that does not walk. It
 	// creates the project in the directory it was run in, so a marker above
 	// cannot adopt this directory and a repository root cannot relocate it —
 	// where the queue lives is the caller's decision, expressed by where they
-	// stood when they ran this (TQ-0085).
+	// stood when they ran this (TQ-0085). TQ_CONFIG_PATH is the one thing that
+	// answers instead, because it is the caller saying it outright: init then
+	// creates what that marker declares and writes no marker of its own.
 	st, err := store.InitStore(c.dir)
 	if err != nil {
 		return c.fail(err)
@@ -536,8 +545,18 @@ func (c *cli) runDone(args []string) int {
 	if !ok {
 		return code
 	}
-	// Whichever column claims finished work; none or several is an error.
-	target, err := c.board().SatisfyingColumn()
+	// Whichever column claims finished work; none or several is an error. Read
+	// through the store, so it is the marker the queue was resolved through
+	// that answers rather than a second look at the project.
+	st, err := c.st()
+	if err != nil {
+		return c.fail(err)
+	}
+	board, err := st.Columns()
+	if err != nil {
+		return c.fail(err)
+	}
+	target, err := board.SatisfyingColumn()
 	if err != nil {
 		return c.fail(err)
 	}
@@ -545,17 +564,26 @@ func (c *cli) runDone(args []string) int {
 }
 
 // moveTask is the shared status transition behind `tq move` and `tq done`.
+//
+// The board comes from the store, which is to say from the marker this queue
+// was resolved through — the same board the write is validated against a moment
+// later. Checking against a separately resolved one told a project whose marker
+// tq could not read that its own columns did not exist, while `tq list` in the
+// same directory named the broken file (TQ-0087).
 func (c *cli) moveTask(id, status string, jsonOut bool) int {
-	board := c.board()
+	st, err := c.st()
+	if err != nil {
+		return c.fail(err)
+	}
+	board, err := st.Columns()
+	if err != nil {
+		return c.fail(err)
+	}
 	if err := board.Check(status); err != nil {
 		return c.fail(err)
 	}
 	status = board.Normalize(status)
 
-	st, err := c.st()
-	if err != nil {
-		return c.fail(err)
-	}
 	t, err := st.Get(id)
 	if err != nil {
 		return c.fail(err)

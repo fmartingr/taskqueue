@@ -234,11 +234,12 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
-// handleConfig reports the project configuration the board is looking at. The
+// handleConfig reports the project configuration the board is looking at: the
+// marker the queue was resolved through, read from disk on this request. The
 // effective values are returned whether or not a config file exists, so the
 // board never has to know the defaults; file is empty when there is none.
 func (s *server) handleConfig(w http.ResponseWriter, _ *http.Request) {
-	cfg, err := config.FindConfig(s.st.Dir)
+	cfg, err := config.Optional(s.st.Config())
 	if err != nil {
 		writeStoreError(w, err)
 		return

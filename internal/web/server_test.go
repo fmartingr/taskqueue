@@ -676,3 +676,137 @@ func TestAPIRejectsAPriorityOutsideTheVocabulary(t *testing.T) {
 		t.Errorf("GET ?priority=p0 status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
+
+// ── The marker is the source of truth (TQ-0087) ─────────────────
+
+// escapedProject is the board and vocabularies the server tests below run
+// against. No default and no decoy shares a name with any of them.
+const escapedProject = `columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: doing
+    display_name: Doing
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+priorities:
+  - name: blocker
+    color: "#b42318"
+  - name: routine
+    color: "#4b5563"
+    default: true
+labels:
+  billing:
+    color: "#00ff00"
+    display_name: Billing
+`
+
+// newEscapedServer serves a project whose `path:` leaves the marker's own
+// directory, with a decoy marker above the queue for anything that walks up
+// from it to find.
+func newEscapedServer(t *testing.T) (*httptest.Server, *store.Store) {
+	t.Helper()
+	root, _ := tqtest.EscapedQueue(t, escapedProject)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := newAPIRouter(st, testVersion, eventInterval)
+	srv := httptest.NewServer(router)
+	t.Cleanup(func() { _ = router.Close() })
+	t.Cleanup(srv.Close)
+	return srv, st
+}
+
+// The board's columns, chips and selects all come from GET /api/config, which
+// reads the marker the queue was resolved through rather than walking up from
+// the task directory (TQ-0087).
+func TestAPIConfigReadsTheMarkerTheQueueWasResolvedThrough(t *testing.T) {
+	srv, st := newEscapedServer(t)
+
+	resp, payload := do(t, srv, http.MethodGet, "/api/config", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	got := decode[struct {
+		Path       string                  `json:"path"`
+		TaskDir    string                  `json:"task_dir"`
+		File       string                  `json:"file"`
+		Labels     map[string]config.Label `json:"labels"`
+		Priorities []config.Priority       `json:"priorities"`
+		Columns    []config.BoardColumn    `json:"columns"`
+	}](t, payload)
+
+	if got.File != st.Marker {
+		t.Errorf("file = %q, want the marker the queue was resolved through, %q", got.File, st.Marker)
+	}
+	if got.TaskDir != st.Dir {
+		t.Errorf("task_dir = %q, want %q", got.TaskDir, st.Dir)
+	}
+	var columns []string
+	for _, column := range got.Columns {
+		columns = append(columns, column.Name)
+	}
+	if want := "backlog,doing,shipped"; strings.Join(columns, ",") != want {
+		t.Errorf("columns = %v, want the project's board %q", columns, want)
+	}
+	if len(got.Priorities) != 2 || got.Priorities[0].Name != "blocker" {
+		t.Errorf("priorities = %+v, want the project's vocabulary", got.Priorities)
+	}
+	if len(got.Labels) != 1 || got.Labels["billing"].DisplayName != "Billing" {
+		t.Errorf("labels = %+v, want the project's own", got.Labels)
+	}
+}
+
+// The write path over HTTP is the same store the CLI uses, so it keeps the same
+// board — a column the project declares is accepted, and an edit that says
+// nothing about status leaves it alone.
+func TestAPIKeepsTheProjectsBoardWhenThePathLeavesTheMarkersDirectory(t *testing.T) {
+	srv, st := newEscapedServer(t)
+
+	resp, payload := do(t, srv, http.MethodPost, "/api/tasks", `{"title": "Real work"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /api/tasks = %d: %s", resp.StatusCode, payload)
+	}
+	created := decode[task.Task](t, payload)
+	if created.Status != "backlog" || created.Priority != "routine" {
+		t.Fatalf("created = %+v, want the project's defaults", created)
+	}
+
+	resp, payload = do(t, srv, http.MethodPatch, "/api/tasks/"+created.ID, `{"status": "doing"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("moving to a column the project declares = %d: %s", resp.StatusCode, payload)
+	}
+
+	resp, payload = do(t, srv, http.MethodPatch, "/api/tasks/"+created.ID, `{"assignee": "alice"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH assignee = %d: %s", resp.StatusCode, payload)
+	}
+	if patched := decode[task.Task](t, payload); patched.Status != "doing" {
+		t.Errorf("status = %q after an edit that says nothing about it, want doing", patched.Status)
+	}
+
+	resp, payload = do(t, srv, http.MethodGet, "/api/tasks", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d: %s", resp.StatusCode, payload)
+	}
+	listed := decode[[]task.Task](t, payload)
+	if len(listed) != 1 || listed[0].Status != "doing" {
+		t.Errorf("listing = %+v, want one task in doing", listed)
+	}
+
+	resp, payload = do(t, srv, http.MethodGet, "/api/status", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/status = %d: %s", resp.StatusCode, payload)
+	}
+	status := decode[struct {
+		OK        bool   `json:"ok"`
+		TaskCount int    `json:"task_count"`
+		TaskDir   string `json:"task_dir"`
+	}](t, payload)
+	if !status.OK || status.TaskCount != 1 || status.TaskDir != st.Dir {
+		t.Errorf("status = %+v, want one task in %s", status, st.Dir)
+	}
+}

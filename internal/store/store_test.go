@@ -1409,7 +1409,9 @@ func TestDiscoverTaskDirOutsideTheHomeDirectoryRunsOutOfTree(t *testing.T) {
 	}
 }
 
-func TestDiscoverTaskDirEnvOverride(t *testing.T) {
+// TQ_CONFIG_PATH hands a command its marker instead of the walk finding one, so
+// the queue is whatever that marker declares, from wherever the command runs.
+func TestDiscoverTaskDirConfigPathOverride(t *testing.T) {
 	root := tqtest.Root(t)
 	st, err := store.InitStore(root)
 	if err != nil {
@@ -1417,20 +1419,62 @@ func TestDiscoverTaskDirEnvOverride(t *testing.T) {
 	}
 	elsewhere := tqtest.Root(t)
 
-	t.Setenv(config.EnvTaskDir, st.Dir)
+	t.Setenv(config.EnvConfigPath, filepath.Join(root, config.ConfigFileName))
 	dir, err := store.DiscoverTaskDir(elsewhere)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
 	if dir != st.Dir {
-		t.Errorf("dir = %q, want the %s override %q", dir, config.EnvTaskDir, st.Dir)
+		t.Errorf("dir = %q, want the queue the %s marker declares, %q", dir, config.EnvConfigPath, st.Dir)
 	}
+}
 
-	// A missing override is "not there yet", which is what lets OpenStore
-	// create it.
-	t.Setenv(config.EnvTaskDir, filepath.Join(elsewhere, "missing"))
-	if _, err := store.DiscoverTaskDir(elsewhere); !errors.Is(err, store.ErrProjectNotFound) {
-		t.Errorf("DiscoverTaskDir with a missing %s = %v, want ErrProjectNotFound", config.EnvTaskDir, err)
+// A marker the variable names but tq cannot use is an error, never an absence:
+// someone who pointed tq at a file meant that file, and walking somewhere else
+// instead would put the command on a queue they did not ask for.
+func TestConfigPathOverrideRefusesWhatItCannotRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(t *testing.T, root string) string
+	}{
+		{"missing", func(t *testing.T, root string) string {
+			return filepath.Join(root, "nowhere", config.ConfigFileName)
+		}},
+		{"a directory", func(t *testing.T, root string) string {
+			dir := filepath.Join(root, "adir")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+		{"unparsable", func(t *testing.T, root string) string {
+			return tqtest.WriteConfig(t, root, "version: [1,\n")
+		}},
+		{"a version this tq cannot read", func(t *testing.T, root string) string {
+			return tqtest.WriteConfig(t, root, "version: 99\n")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := tqtest.RootWithoutMarker(t)
+			from := tqtest.RootWithoutMarker(t)
+			t.Setenv(config.EnvConfigPath, tc.set(t, root))
+
+			_, err := store.OpenStore(from)
+			if !errors.Is(err, config.ErrConfig) {
+				t.Fatalf("OpenStore = %v, want it to wrap config.ErrConfig", err)
+			}
+			if errors.Is(err, store.ErrProjectNotFound) {
+				t.Errorf("err = %v, must not read as a queue that is simply not there", err)
+			}
+
+			// And init must not have made anything out of it either.
+			if _, err := store.InitStore(from); !errors.Is(err, config.ErrConfig) {
+				t.Errorf("InitStore = %v, want it to wrap config.ErrConfig", err)
+			}
+			if entries, err := os.ReadDir(from); err != nil || len(entries) != 0 {
+				t.Errorf("%s holds %d entries, %v; want nothing created", from, len(entries), err)
+			}
+		})
 	}
 }
 
@@ -1746,19 +1790,20 @@ func TestDiscoverTaskDirStopsAtTheHomeDirectory(t *testing.T) {
 	}
 }
 
-// A developer with TQ_DIR exported — which the README and the guide both tell
-// them to use — must still get an isolated suite. Without this the whole suite
-// operates on their real queue, and one test deletes it.
-func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
-	outside := filepath.Join(tqtest.Root(t), "real", config.TaskDirName)
+// A developer with TQ_CONFIG_PATH exported — which the README and the guide
+// both tell them to use — must still get an isolated suite. Without this the
+// whole suite operates on their real queue, and one test deletes it.
+func TestFixturesIgnoreAnAmbientConfigPathOverride(t *testing.T) {
+	real := tqtest.Root(t)
+	outside := filepath.Join(real, config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(config.EnvTaskDir, outside)
+	t.Setenv(config.EnvConfigPath, filepath.Join(real, config.ConfigFileName))
 
 	st := tqtest.NewStore(t)
 	if st.Dir == outside {
-		t.Fatalf("the fixture used the ambient %s: %s", config.EnvTaskDir, st.Dir)
+		t.Fatalf("the fixture used the ambient %s: %s", config.EnvConfigPath, st.Dir)
 	}
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "fixture task"})
 
@@ -1767,7 +1812,7 @@ func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Errorf("the fixture wrote into the directory %s names: %d entries", config.EnvTaskDir, len(entries))
+		t.Errorf("the fixture wrote into the queue %s names: %d entries", config.EnvConfigPath, len(entries))
 	}
 }
 
@@ -1787,9 +1832,9 @@ func TestFixturesNeutraliseAmbientConfiguration(t *testing.T) {
 	}
 	tqtest.WriteConfig(t, above, "version: 1\npath: "+config.TaskDirName+"\n")
 
-	// TQ_DIR names it outright, and the fixture's own marker is what has to
-	// stop the walk reaching it in spite of that.
-	t.Setenv(config.EnvTaskDir, outside)
+	// TQ_CONFIG_PATH names its marker outright, which is the strongest thing
+	// the environment can say, and the fixture has to land inside itself anyway.
+	t.Setenv(config.EnvConfigPath, filepath.Join(above, config.ConfigFileName))
 
 	st := tqtest.NewStore(t)
 	if st.Dir == outside {
@@ -2014,38 +2059,27 @@ func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
 	}
 }
 
-// The near-miss spelling stops init whichever way the task directory was
-// decided. TQ_DIR answers that without a marker being read at all, so the guard
-// has to sit on the write as well as on the read: init would otherwise put
-// .taskqueue.yaml beside the .taskqueue.yml its author wrote, and nothing would
-// ever read theirs again.
+// The near-miss spelling stops init: it would otherwise put .taskqueue.yaml
+// beside the .taskqueue.yml its author wrote, and nothing would ever read
+// theirs again. The guard sits on the write as well as on the read, because
+// WriteConfigIfMissing is exported and a caller can reach it without having
+// asked ConfigIn anything.
 func TestInitStoreRefusesToWriteBesideANearMiss(t *testing.T) {
-	for _, override := range []string{"", "elsewhere"} {
-		name := "without " + config.EnvTaskDir
-		if override != "" {
-			name = "with " + config.EnvTaskDir
-		}
-		t.Run(name, func(t *testing.T) {
-			root := tqtest.RootWithoutMarker(t)
-			nearMiss := filepath.Join(root, ".taskqueue.yml")
-			if err := os.WriteFile(nearMiss, []byte("version: 1\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if override != "" {
-				t.Setenv(config.EnvTaskDir, filepath.Join(root, override))
-			}
+	root := tqtest.RootWithoutMarker(t)
+	nearMiss := filepath.Join(root, ".taskqueue.yml")
+	if err := os.WriteFile(nearMiss, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-			_, err := store.InitStore(root)
-			if err == nil {
-				t.Fatal("InitStore() = nil error, want one naming the file tq reads")
-			}
-			if !errors.Is(err, config.ErrConfig) {
-				t.Errorf("err = %v, want it to wrap config.ErrConfig", err)
-			}
-			if _, err := os.Stat(filepath.Join(root, config.ConfigFileName)); !os.IsNotExist(err) {
-				t.Errorf("init wrote a marker beside %s: %v", nearMiss, err)
-			}
-		})
+	_, err := store.InitStore(root)
+	if err == nil {
+		t.Fatal("InitStore() = nil error, want one naming the file tq reads")
+	}
+	if !errors.Is(err, config.ErrConfig) {
+		t.Errorf("err = %v, want it to wrap config.ErrConfig", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.ConfigFileName)); !os.IsNotExist(err) {
+		t.Errorf("init wrote a marker beside %s: %v", nearMiss, err)
 	}
 }
 
@@ -2072,22 +2106,32 @@ func TestInitStoreIgnoresTheConfigAbove(t *testing.T) {
 	}
 }
 
-// TQ_DIR is the task directory, full stop — the config's path is ignored.
-func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
+// TQ_CONFIG_PATH stands in for the walk entirely: a marker in the working
+// directory itself does not get a look in.
+func TestConfigPathOverrideBeatsTheWalk(t *testing.T) {
 	root := tqtest.Root(t)
-	tqtest.WriteConfig(t, root, "version: 1\npath: from-config\n")
-	override := filepath.Join(root, "from-env")
-	if err := os.MkdirAll(override, 0o755); err != nil {
+	tqtest.WriteConfig(t, root, "version: 1\npath: from-the-walk\n")
+	if err := os.MkdirAll(filepath.Join(root, "from-the-walk"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(config.EnvTaskDir, override)
 
-	dir, err := store.DiscoverTaskDir(root)
-	if err != nil {
-		t.Fatalf("DiscoverTaskDir: %v", err)
+	named := tqtest.Root(t)
+	marker := tqtest.WriteConfig(t, named, "version: 1\npath: from-the-variable\n")
+	queue := filepath.Join(named, "from-the-variable")
+	if err := os.MkdirAll(queue, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if dir != override {
-		t.Errorf("dir = %q, want the override %q", dir, override)
+	t.Setenv(config.EnvConfigPath, marker)
+
+	st, err := store.OpenStore(root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	if st.Dir != queue {
+		t.Errorf("Dir = %q, want the queue the named marker declares, %q", st.Dir, queue)
+	}
+	if st.Marker != marker {
+		t.Errorf("Marker = %q, want the one %s names, %q", st.Marker, config.EnvConfigPath, marker)
 	}
 }
 
@@ -2628,5 +2672,298 @@ func TestCreateStopsOnlyForAnEntryTheStoreDoesNotRead(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), decoy) {
 		t.Errorf("Create says %q; %s is a task file, and saying it is not one of a file the store reads perfectly well is worse than the retry it replaced", err, decoy)
+	}
+}
+
+// ── The marker is the source of truth (TQ-0087) ─────────────────
+
+// projectConfig is a board and two vocabularies no default and no decoy shares
+// a name with, so the values a store reads say exactly which file it read.
+const projectConfig = `columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: doing
+    display_name: Doing
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+priorities:
+  - name: blocker
+    color: "#b42318"
+  - name: routine
+    color: "#4b5563"
+    default: true
+labels:
+  billing:
+    color: "#00ff00"
+    display_name: Billing
+`
+
+// A `path:` that leaves the marker's own directory is documented and ordinary.
+// The project's board, vocabulary and labels have to survive it: walking up
+// from the task directory reaches another project's marker, or none, and either
+// answer silently replaced all three (TQ-0087).
+func TestStoreReadsTheConfigOfTheMarkerItWasResolvedThrough(t *testing.T) {
+	root, queue := tqtest.EscapedQueue(t, projectConfig)
+
+	for _, tc := range []struct {
+		name string
+		open func() (*store.Store, error)
+	}{
+		{"init", func() (*store.Store, error) { return store.InitStore(root) }},
+		{"open", func() (*store.Store, error) { return store.OpenStore(root) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := tc.open()
+			if err != nil {
+				t.Fatalf("opening the store: %v", err)
+			}
+			if st.Dir != queue {
+				t.Fatalf("Dir = %q, want the queue the marker declares, %q", st.Dir, queue)
+			}
+			if want := filepath.Join(root, config.ConfigFileName); st.Marker != want {
+				t.Fatalf("Marker = %q, want %q", st.Marker, want)
+			}
+
+			columns, err := st.Columns()
+			if err != nil {
+				t.Fatalf("Columns: %v", err)
+			}
+			if got, want := strings.Join(columns.Names(), ","), "backlog,doing,shipped"; got != want {
+				t.Errorf("Columns() = %q, want the project's board %q", got, want)
+			}
+			priorities, err := st.Priorities()
+			if err != nil {
+				t.Fatalf("Priorities: %v", err)
+			}
+			if got, want := strings.Join(priorities.Names(), ","), "blocker,routine"; got != want {
+				t.Errorf("Priorities() = %q, want the project's vocabulary %q", got, want)
+			}
+			cfg, err := st.Config()
+			if err != nil {
+				t.Fatalf("Config: %v", err)
+			}
+			if _, ok := cfg.LabelSet()["billing"]; !ok {
+				t.Errorf("LabelSet() = %v, want the project's labels", cfg.LabelSet())
+			}
+		})
+	}
+}
+
+// The write path is where losing the board costs data: a status outside the
+// columns a store validates against is normalised away, so an edit that has
+// nothing to do with status rewrites it (TQ-0087).
+func TestStoreKeepsTheStatusOfATaskAnUnrelatedEditTouches(t *testing.T) {
+	root, _ := tqtest.EscapedQueue(t, projectConfig)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Real work"})
+	if created.Status != "backlog" {
+		t.Fatalf("Status = %q, want the project's default column", created.Status)
+	}
+	if created.Priority != "routine" {
+		t.Fatalf("Priority = %q, want the project's default priority", created.Priority)
+	}
+
+	// A column the project declares, which the built-in board does not.
+	moved, err := st.Patch(created.ID, task.TaskPatch{Status: ptr("doing")})
+	if err != nil {
+		t.Fatalf("moving to a column the project declares: %v", err)
+	}
+	if moved.Status != "doing" {
+		t.Fatalf("Status = %q, want doing", moved.Status)
+	}
+
+	for _, tc := range []struct {
+		name string
+		edit func() (task.Task, error)
+	}{
+		{"assignee", func() (task.Task, error) {
+			return st.Patch(created.ID, task.TaskPatch{Assignee: ptr("alice")})
+		}},
+		{"title", func() (task.Task, error) {
+			return st.Patch(created.ID, task.TaskPatch{Title: ptr("Renamed")})
+		}},
+		{"note", func() (task.Task, error) { return st.Note(created.ID, "something happened") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			edited, err := tc.edit()
+			if err != nil {
+				t.Fatalf("editing the %s: %v", tc.name, err)
+			}
+			if edited.Status != "doing" {
+				t.Errorf("Status = %q after editing the %s, want doing left alone", edited.Status, tc.name)
+			}
+			// And on disk, which is what a next command reads.
+			reread, err := st.Get(created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reread.Status != "doing" {
+				t.Errorf("status on disk = %q after editing the %s, want doing", reread.Status, tc.name)
+			}
+		})
+	}
+}
+
+// The marker is carried as a path, not as a parsed file: an edit to it has to
+// reach a running server on its next read, exactly as an edit to a task does.
+func TestStoreConfigIsReadFromDiskOnEveryCall(t *testing.T) {
+	root, _ := tqtest.EscapedQueue(t, "")
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	columns, err := st.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(columns.Names(), ","), strings.Join(task.Columns{}.Names(), ","); got != want {
+		t.Fatalf("Columns() = %q, want the built-in board %q before the project declares one", got, want)
+	}
+
+	tqtest.WriteConfig(t, root, "version: 1\npath: ../queue\n"+projectConfig)
+
+	columns, err = st.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(columns.Names(), ","), "backlog,doing,shipped"; got != want {
+		t.Errorf("Columns() = %q after the marker was edited, want %q", got, want)
+	}
+}
+
+// TQ_CONFIG_PATH hands over a marker, so the project comes with it: the board,
+// both vocabularies and the queue, from any working directory at all —
+// including one that belongs to no project, which is the case that used to have
+// a command fall back to the built-in board and rewrite the status of every
+// task it touched (TQ-0087).
+func TestStoreUnderConfigPathOverrideUsesThatProject(t *testing.T) {
+	root, queue := tqtest.EscapedQueue(t, projectConfig)
+	marker := filepath.Join(root, config.ConfigFileName)
+	outer, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := tqtest.MustCreate(t, outer, store.CreateTaskInput{Title: "Real work"})
+	if _, err := outer.Patch(created.ID, task.TaskPatch{Status: ptr("doing")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A subtest for its own temporary parent: the decoy EscapedQueue plants
+	// sits above everything this test's t.TempDir hands out, and the premise
+	// here is a working directory with no marker above it at all.
+	t.Run("from a directory that belongs to no project", func(t *testing.T) {
+		from := tqtest.RootWithoutMarker(t)
+		t.Setenv(config.EnvConfigPath, marker)
+
+		st, err := store.OpenStore(from)
+		if err != nil {
+			t.Fatalf("OpenStore: %v", err)
+		}
+		if st.Dir != queue || st.Marker != marker {
+			t.Fatalf("store = %s through %s, want %s through %s", st.Dir, st.Marker, queue, marker)
+		}
+
+		columns, err := st.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := strings.Join(columns.Names(), ","), "backlog,doing,shipped"; got != want {
+			t.Errorf("Columns() = %q, want the project's board %q", got, want)
+		}
+		priorities, err := st.Priorities()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := strings.Join(priorities.Names(), ","), "blocker,routine"; got != want {
+			t.Errorf("Priorities() = %q, want the project's vocabulary %q", got, want)
+		}
+		cfg, err := st.Config()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := cfg.LabelSet()["billing"]; !ok {
+			t.Errorf("LabelSet() = %v, want the project's labels", cfg.LabelSet())
+		}
+
+		// The data-loss case, pinned: an edit that says nothing about status
+		// must leave the task exactly where it was.
+		for _, tc := range []struct {
+			name string
+			edit func() (task.Task, error)
+		}{
+			{"assignee", func() (task.Task, error) {
+				return st.Patch(created.ID, task.TaskPatch{Assignee: ptr("alice")})
+			}},
+			{"title", func() (task.Task, error) {
+				return st.Patch(created.ID, task.TaskPatch{Title: ptr("Renamed")})
+			}},
+			{"note", func() (task.Task, error) { return st.Note(created.ID, "something happened") }},
+		} {
+			edited, err := tc.edit()
+			if err != nil {
+				t.Fatalf("editing the %s: %v", tc.name, err)
+			}
+			if edited.Status != "doing" {
+				t.Errorf("Status = %q after editing the %s, want doing left alone", edited.Status, tc.name)
+			}
+			reread, err := st.Get(created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reread.Status != "doing" {
+				t.Errorf("status on disk = %q after editing the %s, want doing", reread.Status, tc.name)
+			}
+		}
+	})
+}
+
+// A Store with no marker is the one thing left that has no configuration, and
+// only a test can build one: InitStore and OpenStore both resolve through a
+// marker or fail. Nothing supplies a board for it. Answering with the built-in
+// one would be the silence TQ-0087 removed, reachable again through whatever
+// future code assembled the store — and a grep over the source cannot see that
+// coming, so the store refuses instead.
+func TestStoreAssembledWithoutAMarkerReportsIt(t *testing.T) {
+	bare := &store.Store{Dir: tqtest.NewStore(t).Dir}
+
+	if _, err := bare.Config(); !errors.Is(err, config.ErrNoConfig) {
+		t.Errorf("Config() = %v, want config.ErrNoConfig", err)
+	}
+	if _, err := bare.Columns(); !errors.Is(err, config.ErrNoConfig) {
+		t.Errorf("Columns() = %v, want config.ErrNoConfig rather than the built-in board", err)
+	}
+	if _, err := bare.Priorities(); !errors.Is(err, config.ErrNoConfig) {
+		t.Errorf("Priorities() = %v, want config.ErrNoConfig rather than the built-in set", err)
+	}
+}
+
+// A marker that has gone missing since the queue was resolved through it is a
+// failure, not an absence. Reading it as "no config" is what put the built-in
+// board under a project that declared its own.
+func TestStoreConfigFailsWhenTheMarkerIsGone(t *testing.T) {
+	root, _ := tqtest.EscapedQueue(t, projectConfig)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(st.Marker); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.Config(); !errors.Is(err, config.ErrConfig) {
+		t.Errorf("Config() = %v, want it to wrap config.ErrConfig", err)
+	}
+	// And the store refuses the write rather than validating it against a board
+	// the project never declared — the decoy above the queue included.
+	if _, err := st.Columns(); err == nil {
+		t.Error("Columns() = nil error with the marker gone, want the failure reported")
 	}
 }

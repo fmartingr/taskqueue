@@ -31,7 +31,7 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 		"tq ready --json", "tq show <id> --json", "tq move <id> in-progress",
 		"tq note <id>", "tq done <id>", "tq add \"Title\"", "tq list --json",
 		"inbox, todo, in-progress, done, rejected", "urgent, high, normal, low",
-		st.Dir, config.EnvTaskDir, generatedNotice,
+		st.Dir, config.EnvConfigPath, generatedNotice,
 	} {
 		if !strings.Contains(string(guide), want) {
 			t.Errorf("guide is missing %q", want)
@@ -78,8 +78,8 @@ func TestSyncAgentsDocsRefreshesAStaleGuide(t *testing.T) {
 
 func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
 	elsewhere := filepath.Join(root, "docs", "queue")
-	t.Setenv(config.EnvTaskDir, elsewhere)
 
 	st, err := store.InitStore(root)
 	if err != nil {
@@ -121,8 +121,8 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 func TestGuidePathNamesTheGuideAbsolutely(t *testing.T) {
 	t.Run("a project with no repository root", func(t *testing.T) {
 		root := tqtest.Root(t)
+		tqtest.WriteConfig(t, root, "version: 1\npath: elsewhere/queue\n")
 		elsewhere := filepath.Join(root, "elsewhere", "queue")
-		t.Setenv(config.EnvTaskDir, elsewhere)
 
 		st, err := store.InitStore(root)
 		if err != nil {
@@ -169,8 +169,9 @@ func TestGuidePathNamesTheGuideAbsolutely(t *testing.T) {
 		root := tqtest.Root(t)
 		t.Chdir(root)
 
-		// Nothing hands the CLI a relative task directory today, but TQ_DIR is
-		// a user-supplied string and filepath.Join would carry it through.
+		// Nothing hands the CLI a relative task directory today, but a marker's
+		// `path` is a user-supplied string and filepath.Join would carry it
+		// through.
 		st := &store.Store{Dir: filepath.Join(".", ".tasks")}
 		if got, want := GuidePath(st), filepath.Join(root, ".tasks", AgentsFileName); got != want {
 			t.Errorf("GuidePath() = %q, want %q", got, want)

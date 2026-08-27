@@ -54,15 +54,46 @@ func TestFindConfigStopsAtTheNearestFile(t *testing.T) {
 	}
 }
 
-func TestFindConfigReturnsNothingWhenThereIsNone(t *testing.T) {
+// An absent marker is an answer of its own, not a nil config with nothing said
+// about it: that shape is what let a caller conclude a project had no
+// configuration when what it really had was a marker it had failed to look for
+// in the right place (TQ-0087).
+func TestFindConfigReportsThereIsNoMarker(t *testing.T) {
 	// An absent marker is the case under test, so the fixture asserts that
 	// none sits above the walk either.
-	cfg, err := config.FindConfig(tqtest.RootWithoutMarker(t))
-	if err != nil {
-		t.Fatalf("config.FindConfig: %v", err)
+	root := tqtest.RootWithoutMarker(t)
+	cfg, err := config.FindConfig(root)
+	if !errors.Is(err, config.ErrNoConfig) {
+		t.Fatalf("config.FindConfig() = %v, want config.ErrNoConfig", err)
 	}
 	if cfg != nil {
 		t.Errorf("config.FindConfig() = %+v, want nil when no config exists", cfg)
+	}
+	if !strings.Contains(err.Error(), config.ConfigFileName) {
+		t.Errorf("err = %q, want it to name the file tq looks for", err)
+	}
+
+	// And a caller for which that is fine says so in one word, rather than by
+	// not checking.
+	cfg, err = config.Optional(config.FindConfig(root))
+	if cfg != nil || err != nil {
+		t.Errorf("config.Optional(FindConfig()) = %+v, %v; want nil, nil", cfg, err)
+	}
+}
+
+// Optional folds the absence and nothing else: a marker that cannot be parsed
+// still has to reach the caller, or the built-in sets quietly stand in for a
+// board the project declared.
+func TestOptionalKeepsABrokenMarker(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: [1,\n")
+
+	cfg, err := config.Optional(config.FindConfig(root))
+	if err == nil {
+		t.Fatalf("config.Optional(FindConfig()) = %+v, nil; want the parse error", cfg)
+	}
+	if !errors.Is(err, config.ErrConfig) {
+		t.Errorf("err = %v, want it to wrap config.ErrConfig", err)
 	}
 }
 

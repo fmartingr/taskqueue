@@ -34,12 +34,12 @@ func TestLabelSetDefaultsWhenTheKeyIsAbsent(t *testing.T) {
 // No config file at all is the same case: the defaults apply, and a nil
 // *Config is what FindConfig hands back for it.
 func TestLabelSetDefaultsWithoutAConfigFile(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.RootWithoutMarker(t))
+	cfg, err := config.Optional(config.FindConfig(tqtest.RootWithoutMarker(t)))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}
 	if cfg != nil {
-		t.Fatalf("config.FindConfig() = %+v, want nil", cfg)
+		t.Fatalf("config.Optional(FindConfig()) = %+v, want nil", cfg)
 	}
 	if len(cfg.LabelSet()) != len(config.DefaultLabels()) {
 		t.Errorf("LabelSet() on a nil config = %d labels, want the defaults", len(cfg.LabelSet()))

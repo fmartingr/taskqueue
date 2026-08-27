@@ -45,12 +45,12 @@ func TestPrioritySetDefaultsWhenTheKeyIsAbsent(t *testing.T) {
 
 // No config file at all is the same case, and a nil *Config answers it.
 func TestPrioritySetDefaultsWithoutAConfigFile(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.RootWithoutMarker(t))
+	cfg, err := config.Optional(config.FindConfig(tqtest.RootWithoutMarker(t)))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}
 	if cfg != nil {
-		t.Fatalf("config.FindConfig() = %+v, want nil", cfg)
+		t.Fatalf("config.Optional(FindConfig()) = %+v, want nil", cfg)
 	}
 	if got, want := len(cfg.PrioritySet()), len(config.DefaultPriorities()); got != want {
 		t.Errorf("PrioritySet() on a nil config = %d entries, want the %d built-in", got, want)

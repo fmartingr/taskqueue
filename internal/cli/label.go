@@ -53,12 +53,13 @@ func (c *cli) runLabelList(args []string) int {
 		return c.fail(err)
 	}
 	c.warnListing(listing)
-	// The vocabulary is resolved from the queue being listed, not from the
-	// working directory: TQ_DIR can point at a queue in another project, and
-	// reading that project's tasks against this one's config would have the CLI
-	// and the board (which resolves from the store too) disagree about which
-	// labels are configured.
-	cfg, err := config.FindConfig(st.Dir)
+	// The vocabulary comes from the marker the queue was resolved through, the
+	// one the store kept. It is the same read the board makes through
+	// GET /api/config, so the two cannot disagree about which labels are
+	// configured — and it is not a second walk from the task directory, which
+	// is what lost the vocabulary whenever `path:` pointed outside the marker's
+	// own directory (TQ-0087).
+	cfg, err := config.Optional(st.Config())
 	if err != nil {
 		return c.fail(err)
 	}

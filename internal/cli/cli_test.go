@@ -814,17 +814,45 @@ func TestCLIHelpFlagStopsCleanly(t *testing.T) {
 	}
 }
 
-func TestCLIEnvTaskDirOverride(t *testing.T) {
+// TQ_CONFIG_PATH hands the command a marker, so it works on that project from
+// a directory that is not one.
+func TestCLIEnvConfigPathOverride(t *testing.T) {
 	tc := newTestCLI(t)
 	tc.mustRun("add", "task.Task in the project")
 
 	elsewhere := newBareCLI(t)
-	elsewhere.t.Setenv(config.EnvTaskDir, filepath.Join(tc.root, config.TaskDirName))
+	elsewhere.t.Setenv(config.EnvConfigPath, filepath.Join(tc.root, config.ConfigFileName))
 
 	var tasks []task.Task
 	elsewhere.mustRunJSON(&tasks, "list", "--json")
 	if len(tasks) != 1 || tasks[0].Title != "task.Task in the project" {
-		t.Errorf("%s override ignored, got %+v", config.EnvTaskDir, tasks)
+		t.Errorf("%s override ignored, got %+v", config.EnvConfigPath, tasks)
+	}
+}
+
+// A marker the variable names but tq cannot use stops the command rather than
+// sending it to whatever the walk would have found.
+func TestCLIEnvConfigPathRefusesWhatItCannotRead(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "task.Task in the project")
+
+	for _, tc2 := range []struct {
+		name string
+		path func(root string) string
+	}{
+		{"missing", func(root string) string { return filepath.Join(root, "nowhere.yaml") }},
+		{"a directory", func(root string) string { return root }},
+	} {
+		t.Run(tc2.name, func(t *testing.T) {
+			elsewhere := newBareCLI(t)
+			elsewhere.t.Setenv(config.EnvConfigPath, tc2.path(tc.root))
+			if code := elsewhere.run("list"); code == exitOK {
+				t.Errorf("exit = 0, want a failure for a %s the variable names", tc2.name)
+			}
+			if !strings.Contains(elsewhere.stderr.String(), config.EnvConfigPath) {
+				t.Errorf("stderr = %q, want it to name %s", elsewhere.stderr, config.EnvConfigPath)
+			}
+		})
 	}
 }
 
@@ -1014,12 +1042,13 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 
 // The CLI fixtures build their own store, so they need the same isolation the
 // store fixtures have.
-func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
-	outside := filepath.Join(tqtest.Root(t), "real", config.TaskDirName)
+func TestCLIFixturesIgnoreAnAmbientConfigPathOverride(t *testing.T) {
+	real := tqtest.Root(t)
+	outside := filepath.Join(real, config.TaskDirName)
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(config.EnvTaskDir, outside)
+	t.Setenv(config.EnvConfigPath, filepath.Join(real, config.ConfigFileName))
 
 	tc := newTestCLI(t)
 	tc.mustRun("add", "fixture task")
@@ -1029,7 +1058,7 @@ func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Errorf("the CLI fixture wrote into the directory %s names: %d entries", config.EnvTaskDir, len(entries))
+		t.Errorf("the CLI fixture wrote into the queue %s names: %d entries", config.EnvConfigPath, len(entries))
 	}
 }
 
@@ -1534,5 +1563,146 @@ func TestHoldSignalsPassesTheCommandThrough(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Errorf("holdSignals wrote %q with no signal to report", stderr.String())
+	}
+}
+
+// ── The marker is the source of truth (TQ-0087) ─────────────────
+
+// escapedProject is the board and vocabularies of the project the CLI tests
+// below run in. No default and no decoy shares a name with any of them.
+const escapedProject = `columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: doing
+    display_name: Doing
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+priorities:
+  - name: blocker
+    color: "#b42318"
+  - name: routine
+    color: "#4b5563"
+    default: true
+labels:
+  billing:
+    color: "#00ff00"
+    display_name: Billing
+`
+
+// newEscapedCLI runs the CLI in a project whose `path:` leaves the marker's own
+// directory, with a decoy marker above the queue for anything that walks up
+// from it to find.
+func newEscapedCLI(t *testing.T) *testCLI {
+	t.Helper()
+	root, _ := tqtest.EscapedQueue(t, escapedProject)
+	tc := newCLIIn(t, root)
+	tc.mustRun("init")
+	tc.reset()
+	return tc
+}
+
+// Every command has to keep the project's board, vocabulary and labels, not
+// just the one that reads them last (TQ-0087).
+func TestCLIKeepsTheProjectsConfigWhenThePathLeavesTheMarkersDirectory(t *testing.T) {
+	tc := newEscapedCLI(t)
+
+	var created task.Task
+	tc.mustRunJSON(&created, "add", "Real work", "--json")
+	if created.Status != "backlog" {
+		t.Errorf("status = %q, want the project's default column backlog", created.Status)
+	}
+	if created.Priority != "routine" {
+		t.Errorf("priority = %q, want the project's default priority routine", created.Priority)
+	}
+
+	// A column the project declares, which the built-in board does not.
+	if out := tc.mustRun("move", created.ID, "doing"); !strings.Contains(out, "doing") {
+		t.Errorf("move said %q, want it to name the column", out)
+	}
+
+	// A priority the project declares.
+	tc.mustRun("update", created.ID, "--priority", "blocker")
+
+	var listed []labelRow
+	tc.mustRunJSON(&listed, "label", "list", "--json")
+	if len(listed) != 1 || listed[0].Name != "billing" || !listed[0].Configured {
+		t.Errorf("label list = %+v, want the project's own vocabulary", listed)
+	}
+
+	var shown task.Task
+	tc.mustRunJSON(&shown, "show", created.ID, "--json")
+	if shown.Status != "doing" || shown.Priority != "blocker" {
+		t.Errorf("task = %+v, want status doing and priority blocker", shown)
+	}
+}
+
+// The data-loss case: an edit that says nothing about status must not move the
+// task. It did, silently and with exit 0, whenever the board a write was
+// validated against was not the project's (TQ-0087).
+func TestCLIUnrelatedEditsLeaveTheStatusAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"assignee", []string{"update", "TQ-0001", "--assignee", "alice"}},
+		{"title", []string{"update", "TQ-0001", "--title", "Renamed"}},
+		{"label", []string{"update", "TQ-0001", "--add-label", "billing"}},
+		{"note", []string{"note", "TQ-0001", "something happened"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := newEscapedCLI(t)
+			cli.mustRun("add", "Real work")
+			cli.mustRun("move", "TQ-0001", "doing")
+			cli.mustRun(tc.args...)
+
+			var shown task.Task
+			cli.mustRunJSON(&shown, "show", "TQ-0001", "--json")
+			if shown.Status != "doing" {
+				t.Errorf("status = %q after `tq %s`, want doing left alone", shown.Status, strings.Join(tc.args, " "))
+			}
+		})
+	}
+}
+
+// Help and the filters read the same marker the writes are validated against,
+// so a project whose queue sits outside the marker's directory sees its own
+// vocabulary offered rather than the built-in one.
+func TestCLIHelpOffersTheProjectsVocabulary(t *testing.T) {
+	tc := newEscapedCLI(t)
+	out := tc.mustRun("--help")
+	for _, want := range []string{"blocker", "routine"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help does not offer %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, tqtest.DecoyName) {
+		t.Errorf("help offers the decoy's vocabulary, so the config was re-derived from the task directory:\n%s", out)
+	}
+}
+
+// A marker tq cannot read must not have a command tell the project its own
+// columns do not exist. `tq move` validates against the board the store
+// resolved, so it reports the broken file the way every other command does
+// (TQ-0087).
+func TestCLIMoveReportsABrokenMarkerRatherThanTheBuiltInBoard(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Real work")
+	tqtest.WriteConfig(t, tc.root, "version: 99\n")
+
+	for _, args := range [][]string{
+		{"move", "TQ-0001", "doing"},
+		{"done", "TQ-0001"},
+	} {
+		tc.reset()
+		if code := tc.run(args...); code == exitOK {
+			t.Errorf("tq %s = 0, want a failure for a config tq cannot use", strings.Join(args, " "))
+		}
+		if !strings.Contains(tc.stderr.String(), "newer tq") {
+			t.Errorf("tq %s said %q, want it to name the broken file rather than the built-in board",
+				strings.Join(args, " "), tc.stderr)
+		}
 	}
 }

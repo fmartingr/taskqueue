@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net/http"
@@ -8,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/fmartingr/taskqueue/internal/config"
 
 	"github.com/fmartingr/taskqueue/internal/store"
 )
@@ -66,33 +65,40 @@ func taskFingerprint(taskDir string) (string, error) {
 // task does — but as its own value, because it means something different: the
 // board refetches GET /api/config for it rather than the listing (TQ-0034).
 //
-// It never fails. Every state the marker can be in is a fingerprint: absent,
-// present, unreachable behind a permission error, or misspelled `.yml`. A board
-// wants to hear about all four, and the transitions between them are exactly
-// the changes worth pushing.
+// It reads the marker the queue was resolved through, by path. It does not go
+// looking for one from the task directory: that walk finds another project's
+// marker, or none, whenever `path:` puts the tasks outside the marker's own
+// directory (TQ-0087).
+//
+// It never fails. Every state that marker can be in is a fingerprint: present,
+// gone, or unreachable behind a permission error. A board wants to hear about
+// all three, and the transitions between them are exactly the changes worth
+// pushing — a marker deleted and put back included, since the path is what is
+// watched rather than the file.
+//
+// A store with no marker at all fingerprints as one constant. `tq serve` cannot
+// produce one — every queue is resolved through a marker — so this is the hand
+// assembled Store a test builds, and there is nothing on disk to watch.
 //
 // It also deliberately does not parse. A file being saved is briefly invalid,
 // and that half-second is the case the whole feature exists for: parsing here
 // would make every mid-save state look identical, and the board would not be
 // told when the file settled.
-func configFingerprint(taskDir string) string {
-	path, err := config.ConfigPath(taskDir)
+func configFingerprint(marker string) string {
+	if marker == "" {
+		return "no-marker"
+	}
+	info, err := os.Stat(marker)
 	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// Deleted, or caught mid-write by a saver that unlinks first.
+		return "missing\x00" + marker
 	case err != nil:
 		// Not a fingerprint of the file but of the complaint, which is what
 		// changes when the situation does.
 		return "unreadable\x00" + err.Error()
-	case path == "":
-		return "missing"
 	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		// Found by the walk and gone by the stat: a write in progress, which
-		// the next tick sees settled.
-		return "missing\x00" + path
-	}
-	return fmt.Sprintf("%s\x00%d\x00%d", path, info.Size(), info.ModTime().UnixNano())
+	return fmt.Sprintf("%s\x00%d\x00%d", marker, info.Size(), info.ModTime().UnixNano())
 }
 
 // event is what a subscriber is handed: the name SSE puts on the frame, and
@@ -221,7 +227,7 @@ func (h *hub) tick() {
 	}
 
 	tasks, err := h.scan()
-	cfg := configFingerprint(h.st.Dir)
+	cfg := configFingerprint(h.st.Marker)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -286,7 +292,7 @@ func (h *hub) subscribe() (*subscriber, func()) {
 	// two boards connecting at once would otherwise race to assign, and the
 	// later assignment could install the older reading.
 	freshTasks, err := taskFingerprint(h.st.Dir)
-	freshConfig := configFingerprint(h.st.Dir)
+	freshConfig := configFingerprint(h.st.Marker)
 
 	h.mu.Lock()
 	if len(h.subscribers) == 0 {

@@ -241,8 +241,15 @@ Two rules, and nothing else:
   it exits 3 and says to run `+"`tq init`"+`. No command creates a queue on its
   own.
 
-Set `+"`%s`"+` to point tq at a different task directory, which overrides
-the marker for every command, `+"`tq init`"+` included.
+Once a command has found the marker, that file is the whole answer: the board,
+the priorities, the labels, and where the tasks are. Nothing goes the other way,
+so a `+"`path`"+` pointing outside the marker's own directory keeps all of it.
+
+Set `+"`%s`"+` to hand tq its marker instead of having it walk for one, for
+every command, `+"`tq init`"+` included. It names a `+"`%s`"+` file, not
+a directory, and the tasks are wherever that marker's `+"`path`"+` says — so a
+command run under it works on that whole project, from any directory. A file it
+names that is missing, is a directory, or will not parse is an error.
 `,
 		generatedNotice,
 		example,
@@ -254,6 +261,6 @@ the marker for every command, `+"`tq init`"+` included.
 		strings.Join(offering(columns), " and "), satisfying(columns),
 		strings.Join(priorities.Names(), ", "), priorities.Default(), config.ConfigFileName,
 		taskDir,
-		config.ConfigFileName, config.EnvTaskDir,
+		config.ConfigFileName, config.EnvConfigPath, config.ConfigFileName,
 	)
 }

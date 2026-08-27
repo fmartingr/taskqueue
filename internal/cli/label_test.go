@@ -217,11 +217,12 @@ func TestCLILabelListFallsBackToTheDefaults(t *testing.T) {
 	}
 }
 
-// The vocabulary has to come from the queue being listed. TQ_DIR can point at
-// another project's queue, and resolving the config from the working directory
-// instead would have `tq label list` call a label unconfigured while the board
-// — which resolves from the store — draws it in its configured colour.
-func TestCLILabelListReadsTheConfigOfTheQueueItLists(t *testing.T) {
+// The vocabulary comes from the marker the queue was resolved through, and the
+// tasks counted come from the queue that marker declares. Under TQ_CONFIG_PATH
+// both are the project the variable names, so `tq label list` and the board —
+// which reads the same store's marker over GET /api/config — cannot disagree
+// about which labels are configured (TQ-0087).
+func TestCLILabelListReadsTheConfigOfTheMarkerItRanUnder(t *testing.T) {
 	tc := newBareCLI(t)
 	tqtest.WriteConfig(t, tc.root, "version: 1\npath: "+config.TaskDirName+
 		"\nlabels:\n  here:\n    color: \"#ff0000\"\n    display_name: Here\n")
@@ -232,16 +233,16 @@ func TestCLILabelListReadsTheConfigOfTheQueueItLists(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(elsewhere, config.TaskDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(config.EnvTaskDir, filepath.Join(elsewhere, config.TaskDirName))
+	t.Setenv(config.EnvConfigPath, filepath.Join(elsewhere, config.ConfigFileName))
 	tc.mustRun("add", "Over there", "--label", "there")
 
 	var rows []labelRow
 	tc.mustRunJSON(&rows, "label", "list", "--json")
 	if len(rows) != 1 {
-		t.Fatalf("got %+v, want only the other project's vocabulary", rows)
+		t.Fatalf("got %+v, want only the vocabulary of the project the variable names", rows)
 	}
-	if rows[0].Name != "there" || !rows[0].Configured || rows[0].DisplayName != "There" {
-		t.Errorf("rows[0] = %+v, want the label configured where the queue lives", rows[0])
+	if rows[0].Name != "there" || !rows[0].Configured || rows[0].DisplayName != "There" || rows[0].Count != 1 {
+		t.Errorf("rows[0] = %+v, want the label configured where the marker says", rows[0])
 	}
 }
 

@@ -10,12 +10,12 @@ import (
 )
 
 func TestServerBindIsAbsentWithoutAConfigFile(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.RootWithoutMarker(t))
+	cfg, err := config.Optional(config.FindConfig(tqtest.RootWithoutMarker(t)))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}
 	if cfg != nil {
-		t.Fatalf("config.FindConfig() = %+v, want nil", cfg)
+		t.Fatalf("config.Optional(FindConfig()) = %+v, want nil", cfg)
 	}
 	// A nil config answers both, so callers never check before asking.
 	if host := cfg.ServerHost(); host != "" {

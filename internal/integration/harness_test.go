@@ -34,9 +34,9 @@ const stampedVersion = "0.0.0-integration"
 func TestMain(m *testing.M) {
 	// The environment is neutralised here rather than per test: these are
 	// separate processes, so t.Setenv would not reach them, and a developer
-	// with TQ_DIR exported must not have the suite operate on their own queue.
-	// TQ-0021 and TQ-0023 are this mistake made in the unit tests.
-	for _, name := range []string{"TQ_DIR", "TQ_HOST", "TQ_PORT", "DEV"} {
+	// with TQ_CONFIG_PATH exported must not have the suite operate on their own
+	// queue. TQ-0021 and TQ-0023 are this mistake made in the unit tests.
+	for _, name := range []string{"TQ_CONFIG_PATH", "TQ_HOST", "TQ_PORT", "DEV"} {
 		_ = os.Unsetenv(name)
 	}
 

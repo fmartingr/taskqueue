@@ -65,7 +65,7 @@ func TestConfigFingerprintFollowsTheMarkerAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before := configFingerprint(st.Dir)
+	before := configFingerprint(st.Marker)
 	tasksBefore, err := taskFingerprint(st.Dir)
 	if err != nil {
 		t.Fatalf("taskFingerprint: %v", err)
@@ -73,7 +73,7 @@ func TestConfigFingerprintFollowsTheMarkerAlone(t *testing.T) {
 
 	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\nserver:\n  port: 7412\n")
 
-	if after := configFingerprint(st.Dir); after == before {
+	if after := configFingerprint(st.Marker); after == before {
 		t.Errorf("config fingerprint did not change when %s was edited", config.ConfigFileName)
 	}
 	tasksAfter, err := taskFingerprint(st.Dir)
@@ -86,7 +86,7 @@ func TestConfigFingerprintFollowsTheMarkerAlone(t *testing.T) {
 
 	// And a task must not move the config's reading either.
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Something"})
-	if configFingerprint(st.Dir) == before {
+	if configFingerprint(st.Marker) == before {
 		t.Error("the config fingerprint is expected to still differ from before the edit")
 	}
 }
@@ -102,36 +102,49 @@ func TestConfigFingerprintMovesForAFileItCannotParse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	good := configFingerprint(st.Dir)
+	good := configFingerprint(st.Marker)
 	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\nlabels: [not, a, mapping]\n")
-	broken := configFingerprint(st.Dir)
+	broken := configFingerprint(st.Marker)
 	if broken == good {
 		t.Fatal("a half-saved marker looks unchanged, so the board would never be told")
 	}
-	if _, err := config.FindConfig(st.Dir); err == nil {
+	if _, err := st.Config(); err == nil {
 		t.Fatal("the fixture is supposed to be unparsable")
 	}
 
 	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\n")
-	if configFingerprint(st.Dir) == broken {
+	if configFingerprint(st.Marker) == broken {
 		t.Error("the marker settling is a change the board has to hear about")
 	}
 }
 
-// The absence of a marker is a state too: writing one is worth pushing.
-func TestConfigFingerprintDistinguishesNoMarkerAtAll(t *testing.T) {
-	// Starting without a marker is the premise, so the fixture asserts that
-	// none sits above it either.
-	root := tqtest.RootWithoutMarker(t)
-	taskDir := filepath.Join(root, ".tasks")
-	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+// The absence of a marker is a state too: a project whose marker is deleted
+// under a running board, and put back, has to register as two changes.
+func TestConfigFingerprintDistinguishesAMarkerThatIsNotThere(t *testing.T) {
+	root := tqtest.Root(t)
+	st, err := store.InitStore(root)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	missing := configFingerprint(taskDir)
+	present := configFingerprint(st.Marker)
+	if err := os.Remove(st.Marker); err != nil {
+		t.Fatal(err)
+	}
+	missing := configFingerprint(st.Marker)
+	if missing == present {
+		t.Error("deleting the marker did not register")
+	}
+
 	tqtest.WriteConfig(t, root, "version: 1\npath: .tasks\n")
-	if configFingerprint(taskDir) == missing {
-		t.Error("writing a marker where there was none did not register")
+	if configFingerprint(st.Marker) == missing {
+		t.Error("writing the marker back where there was none did not register")
+	}
+
+	// A Store with no marker at all — only a test builds one — is a state of
+	// its own, and not the same as one whose marker has gone.
+	if none := configFingerprint(""); none == missing {
+		t.Errorf("a queue with no marker fingerprints as %q, the same as one whose marker was deleted", none)
 	}
 }
 

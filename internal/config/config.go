@@ -32,6 +32,17 @@ const nearMissConfigName = ".taskqueue.yml"
 // distinguish it from a missing task directory, which is not an error at all.
 var ErrConfig = errors.New("invalid config")
 
+// ErrNoConfig reports that there is no marker to read: a walk that reached its
+// boundary without finding one, which is a directory belonging to no project.
+//
+// It exists so that nothing in this package answers with a nil *Config and a
+// nil error. That shape is what let a caller resolve a queue through a marker,
+// fail to find one on a second look, and quietly conclude the project had no
+// configuration — which silently replaced its board and both its vocabularies
+// with the built-in sets (TQ-0087). A caller for which an absent marker really
+// is fine says so, in one word, through Optional.
+var ErrNoConfig = errors.New("no project marker")
+
 // Config is the project configuration. Only the keys tq understands appear
 // here; unknown keys are ignored on purpose, so a file written by a newer
 // version stays readable.
@@ -67,35 +78,112 @@ type Config struct {
 	dir  string
 }
 
-// TaskDir is the task directory this config declares, as an absolute path.
+// TaskDir is the task directory this config declares, as an absolute path. It
+// is "" for a nil *Config, which is the one accessor here with no built-in
+// answer to give: `path` defaults to .tasks, but with no marker there is no
+// directory for it to be relative to.
 func (c *Config) TaskDir() string {
+	if c == nil {
+		return ""
+	}
 	if filepath.IsAbs(c.Path) {
 		return filepath.Clean(c.Path)
 	}
 	return filepath.Join(c.dir, c.Path)
 }
 
-// FindConfig reads the nearest config at or above startDir. It returns nil
-// without an error when there is none, which is how a caller learns that
+// MarkerPath is the marker a command run in startDir works under: the file
+// TQ_CONFIG_PATH names when it is set, and otherwise the nearest
+// .taskqueue.yaml at or above startDir. It returns "" without an error only for
+// the second case finding nothing.
+//
+// These are the only two ways to get a marker, and startDir is a directory a
+// command was run in — never a task directory. The marker says where the tasks
+// live; the tasks say nothing about the marker (TQ-0087).
+//
+// A TQ_CONFIG_PATH naming something that is not a readable file is an error
+// rather than an absence. Someone who pointed tq at a marker meant that marker,
+// and quietly walking somewhere else instead would put the command on a queue
+// they did not ask for.
+func MarkerPath(startDir string) (string, error) {
+	override, err := MarkerOverride()
+	if err != nil || override != "" {
+		return override, err
+	}
+	return ConfigPath(startDir)
+}
+
+// MarkerOverride is the marker TQ_CONFIG_PATH names, absolute, or "" when the
+// variable is not set. It never walks.
+//
+// Separate from MarkerPath because `tq init` is explicitly not discovery: it
+// takes the variable when there is one and looks in the directory it was run in
+// otherwise, and a marker further up belongs to another project.
+func MarkerOverride() (string, error) {
+	override := os.Getenv(EnvConfigPath)
+	if override == "" {
+		return "", nil
+	}
+
+	abs, err := filepath.Abs(override)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s=%s: %v", ErrConfig, EnvConfigPath, override, err)
+	}
+	info, err := os.Stat(abs)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("%w: %s=%s: %v", ErrConfig, EnvConfigPath, override, err)
+	case info.IsDir():
+		// The likeliest mistake, since the variable it replaced named one.
+		return "", fmt.Errorf("%w: %s=%s is a directory; it names a %s file",
+			ErrConfig, EnvConfigPath, override, ConfigFileName)
+	}
+	return abs, nil
+}
+
+// FindConfig reads the marker a command run in startDir works under: the one
+// TQ_CONFIG_PATH names, or the nearest at or above startDir. It reports
+// ErrNoConfig when the walk found none, which is how a caller learns that
 // startDir belongs to no project at all.
 //
 // The walk stops at the first config found, and at the home directory when it
 // has found none by then (see WalkBoundary).
 func FindConfig(startDir string) (*Config, error) {
-	path, err := ConfigPath(startDir)
-	if err != nil || path == "" {
+	path, err := MarkerPath(startDir)
+	if err != nil {
 		return nil, err
 	}
-	return loadConfig(path)
+	if path == "" {
+		return nil, fmt.Errorf("%w: no %s at or above %s", ErrNoConfig, ConfigFileName, startDir)
+	}
+	return Load(path)
 }
 
-// ConfigPath is the walk on its own: where the nearest config is, without
-// reading it. It returns "" without an error when there is none.
+// Optional folds the one absence that is not a failure: a directory that
+// belongs to no project. The accessors that have a built-in answer — the board,
+// both vocabularies, the server address — give it for a nil receiver, so a
+// caller that only wants the effective values, `tq --help` before there is a
+// project to print, takes nil and carries on. TaskDir is the exception and says
+// so.
 //
-// Separate from FindConfig because a caller that only wants to know whether the
-// file moved should not need it to parse — the event stream fingerprints the
-// marker twice a second, and a half-saved file, which is exactly the case that
-// matters, is one that cannot be parsed at all.
+// It is not for a queue, which always has a marker. Every other error still
+// comes back, too: a marker that will not parse, or one tq is not allowed to
+// read, is the case this must not swallow.
+func Optional(cfg *Config, err error) (*Config, error) {
+	if errors.Is(err, ErrNoConfig) {
+		return nil, nil
+	}
+	return cfg, err
+}
+
+// ConfigPath is the walk on its own: the nearest marker at or above startDir,
+// without reading it and without consulting the environment. It returns ""
+// without an error when there is none.
+//
+// Callers resolving a project want MarkerPath, which is this plus the override.
+// This is for the two questions that are about the tree itself: whether a
+// directory has a project above it at all, and — since it does not parse —
+// whether a marker is merely unreadable rather than absent.
 func ConfigPath(startDir string) (string, error) {
 	dir, err := filepath.Abs(startDir)
 	if err != nil {
@@ -130,11 +218,19 @@ func ConfigPath(startDir string) (string, error) {
 	}
 }
 
-// loadConfig reads one config file. Unknown keys are tolerated: the version
-// field exists so that additive changes stay readable by older binaries, and
-// tq never rewrites this file, so nothing is lost by ignoring what it does not
-// recognise.
-func loadConfig(path string) (*Config, error) {
+// Load reads one marker, at the path given, and nothing else.
+//
+// It is how a caller that already knows where the marker is — because
+// discovery resolved the queue through it — reads the project's configuration:
+// from the disk, on every call, without walking anywhere. A marker that has
+// gone missing since is an error like any other file that cannot be read, not
+// an absent one: a queue resolved through a marker has one, and answering
+// otherwise is the silence TQ-0087 removed.
+//
+// Unknown keys are tolerated: the version field exists so that additive changes
+// stay readable by older binaries, and tq never rewrites this file, so nothing
+// is lost by ignoring what it does not recognise.
+func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
@@ -167,7 +263,7 @@ func loadConfig(path string) (*Config, error) {
 }
 
 // ConfigIn reads the marker in dir itself, without walking anywhere. It
-// returns nil without an error when dir holds none.
+// reports ErrNoConfig when dir holds none.
 //
 // `tq init` is what needs this: init creates the project in the directory it
 // is run in, so what a parent declares is none of its business — but a
@@ -188,9 +284,9 @@ func ConfigIn(dir string) (*Config, error) {
 		if err := reportNearMiss(abs); err != nil {
 			return nil, err
 		}
-		return nil, nil
+		return nil, fmt.Errorf("%w: no %s in %s", ErrNoConfig, ConfigFileName, abs)
 	}
-	return loadConfig(path)
+	return Load(path)
 }
 
 // reportNearMiss returns an error when dir holds the spelling people reach for
@@ -224,8 +320,7 @@ func WriteConfigIfMissing(dir, taskDir string) (string, error) {
 		return "", fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
 	}
 	// Checked here as well as in ConfigIn, because a caller can reach this
-	// without having asked ConfigIn anything — TQ_DIR answers where the tasks
-	// go without a marker being read at all. Writing the canonical file beside
+	// without having asked ConfigIn anything. Writing the canonical file beside
 	// the typo would leave the one the author wrote unread for good.
 	if err := reportNearMiss(abs); err != nil {
 		return "", err

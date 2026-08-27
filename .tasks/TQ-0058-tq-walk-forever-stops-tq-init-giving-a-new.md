@@ -1,7 +1,7 @@
 ---
 id: TQ-0058
 title: TQ_WALK_FOREVER stops tq init giving a new repository its own queue
-status: todo
+status: rejected
 priority: normal
 labels:
   - bug
@@ -9,7 +9,7 @@ labels:
 depends_on:
   - TQ-0029
 created: 2026-08-25T17:44:26+02:00
-updated: 2026-08-26T18:01:02+02:00
+updated: 2026-08-27T11:18:59+02:00
 ---
 
 ## Finding
@@ -54,3 +54,4 @@ workaround.
   The discoverability gap is unchanged. internal/cli/cli.go:276 says only that a directory was found above and is being left alone; the one note that names the variable (cli.go:669, via store.ShadowedTaskDir) is explicitly disabled when TQ_WALK_FOREVER=true (internal/store/store.go:130), so in exactly this case nothing tells the user how to opt out for one command. tq help lists only TQ_DIR and DEV.
 
   Fix alongside: the comment at internal/cli/cli.go:239-243 still claims init cannot adopt a queue from outside the repository, which is false whenever TQ_WALK_FOREVER=true.
+- 2026-08-27T11:18:59+02:00 — Superseded by TQ-0085 (2026-08-27). This task asks tq init to explain how to opt out of TQ_WALK_FOREVER for one command. TQ-0085 deletes the variable outright, so there is nothing left to explain: init no longer discovers anything (it creates the root where it is run) and every other command walks up for the marker until the home folder, erroring if there is none. Rejecting rather than fixing — the discoverability gap this describes is real, and TQ-0085 closes it by removing the thing that had to be discovered.

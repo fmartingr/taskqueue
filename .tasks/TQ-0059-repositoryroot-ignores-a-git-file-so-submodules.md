@@ -1,15 +1,15 @@
 ---
 id: TQ-0059
 title: repositoryRoot ignores a .git file, so submodules and worktrees fork the queue
-status: todo
-priority: high
+status: done
+priority: low
 labels:
   - bug
   - component/store
 depends_on:
   - TQ-0029
 created: 2026-08-25T17:44:26+02:00
-updated: 2026-08-26T18:01:02+02:00
+updated: 2026-08-27T12:03:20+02:00
 ---
 
 ## Finding
@@ -52,3 +52,22 @@ Found by `/code-review` over 20b06d2.
   Mitigation since filing, not a fix: ShadowedTaskDir now prints a note naming TQ_WALK_FOREVER, so the fork is announced rather than silent.
 
   Still open: the design decision this task asks for (is a submodule its own queue, or should tq read gitdir: and look through to the superproject), plus fixtures for the .git-as-file shape — every anchor in the suite is MkdirAll(.git), so nothing covers it, leaving the 'a later IsDir requirement silently unbounds discovery' hazard exactly as reported.
+- 2026-08-27T10:33:15+02:00 — Deferred (2026-08-27): dropped to low priority and skipped in the bug-fix sequence. Left in todo, unclaimed.
+
+  Re-measured on HEAD dbe3389 with a REAL submodule (git submodule add), so the .git file shape is genuine:
+
+    tq list inside vendor/mod
+      note: created .../super/vendor/mod/.tasks
+      note: the project marker .../super/.taskqueue.yaml is above this repository
+            and was not used; set TQ_WALK_FOREVER=true to search past the repository root
+      (empty board)
+
+  Three corrections to what is filed:
+  - The title is wrong. RepositoryRoot ACCEPTS a .git file exactly as it accepts a directory; it does not ignore it. File and directory shapes behave identically. The fork comes from WalkBoundary stopping at the submodule's own root, so the superproject's marker is never reached.
+  - Worktrees are NOT affected. git worktree add checks out the committed .taskqueue.yaml and .tasks, so a linked worktree reads the project's queue normally. Only submodules fork.
+  - It is no longer silent. TQ-0062 made ShadowedProjectMarker name the marker above and point at TQ_WALK_FOREVER, so the fork is announced. That is why this can wait.
+
+  The open decision is unchanged and is a product call, not a bug fix: is a submodule its own project, or part of the parent? Recommendation on record — keep it its own project, but stop creating the queue implicitly. Auto-creating .tasks on a mere tq list is the part that makes tasks look like they vanished; requiring an explicit tq init to opt in would fix that without letting a vendored dependency write the parent's tasks. TQ_WALK_FOREVER=true stays the escape hatch for one-project layouts.
+
+  Still missing either way: fixture coverage for .git as a file. Every anchor in the suite creates it as a directory, so a later change requiring IsDir would silently unbound discovery inside every worktree with the suite green — the hazard the original report named.
+- 2026-08-27T12:03:20+02:00 — Resolved by TQ-0085 (cae237f). The repository bound is gone — the walk now stops at the home folder — so a submodule's .git bounds nothing. Verified with a real git submodule add: from inside the submodule, tq list shows the superproject's tasks and tq add files into the superproject's .tasks; the submodule gains no queue of its own. The product question this task posed (own project vs look through to the parent) is answered by TQ-0085's rules: look through. The .git-as-a-file fixture gap it also named is moot — nothing stats .git any more, RepositoryRoot was deleted.

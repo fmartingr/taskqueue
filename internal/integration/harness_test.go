@@ -159,12 +159,26 @@ func (p *project) run(t *testing.T, args ...string) result {
 	return p.runIn(t, p.dir, nil, args...)
 }
 
+// runWithStdin executes the binary in the project with text on its standard
+// input. `--body -` is the only thing that reads it, and a pipe is something
+// only a process has.
+func (p *project) runWithStdin(t *testing.T, stdin string, args ...string) result {
+	t.Helper()
+	return p.exec(t, p.dir, nil, strings.NewReader(stdin), args...)
+}
+
 // runIn executes the binary in a chosen directory, with extra environment.
 func (p *project) runIn(t *testing.T, dir string, env []string, args ...string) result {
+	t.Helper()
+	return p.exec(t, dir, env, nil, args...)
+}
+
+func (p *project) exec(t *testing.T, dir string, env []string, stdin io.Reader, args ...string) result {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdin = stdin
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

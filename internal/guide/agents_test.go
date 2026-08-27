@@ -179,6 +179,34 @@ func TestGuidePathNamesTheGuideAbsolutely(t *testing.T) {
 	})
 }
 
+// This repository's own guide is generated and committed, so a change to
+// taskGuide that nobody regenerated ships a queue documenting a tq that no
+// longer exists — which is the drift generating the file exists to prevent.
+//
+// It is the one test here that reads the repository instead of a fixture, and
+// it only reads: the marker is loaded by its own path rather than by walking,
+// so nothing can put it on a developer's other project. Regenerate with
+// `tq init` at the repository root.
+func TestTheCommittedGuideIsCurrent(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(filepath.Join(root, config.ConfigFileName))
+	if err != nil {
+		t.Skipf("no marker at %s, so there is no committed guide to check: %v", root, err)
+	}
+
+	path := filepath.Join(cfg.TaskDir(), AgentsFileName)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Skipf("no committed guide to check: %v", err)
+	}
+	if want := taskGuide(cfg.TaskDir(), cfg.Vocabulary(), cfg.Board()); string(got) != string(want) {
+		t.Errorf("%s is stale: run `tq init` at %s and commit the result", path, root)
+	}
+}
+
 func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
 	guide := string(taskGuide(filepath.Join("project", ".tasks"), task.Priorities{}, task.Columns{}))
 
@@ -198,6 +226,24 @@ func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
 	}
 	if strings.Contains(guide, "single line") {
 		t.Error("the guide still describes notes as being flattened to a single line")
+	}
+
+	// The claim the guide used to open with — "use the CLI rather than editing
+	// files by hand" — forbade the only way there was to revise a body, since
+	// nothing in tq could (TQ-0044). What the CLI owns is the frontmatter, and
+	// `tq update --body` is now the sanctioned way to rewrite the rest.
+	for _, want := range []string{
+		"The frontmatter is the\nCLI's",
+		"`tq update <id> --body`",
+		"it replaces the content and keeps the notes",
+		"a notes section in the text you pass is ignored",
+		"tq update <id> --body - <<'EOF'",
+		"the `id` in the frontmatter is\n  what identifies a task",
+		"never\n  rename one by hand to match a new title",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("guide is missing %q", want)
+		}
 	}
 
 	at := -1

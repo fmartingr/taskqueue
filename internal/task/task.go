@@ -345,6 +345,39 @@ func AppendNote(body, text string, ts time.Time) string {
 	return section + "\n\n" + notes + "\n" + note
 }
 
+// ReplaceContent returns body with everything ahead of the notes section
+// replaced by content, and the notes themselves carried over untouched. It is
+// what `tq update --body` writes.
+//
+// Replacing the whole body would be the simpler rule and the wrong one: the
+// notes are the record of how a task got where it is, appended one at a time
+// and reconstructible from nothing, while the content is a document its author
+// has in front of them. So a body edit rewrites the document and leaves the
+// record alone.
+//
+// The replacement is read as a body rather than as raw content, and only its
+// content half is kept. `tq show` hands out the whole body, notes included, so
+// the natural way to revise one — read it, edit it, hand it back — passes the
+// record straight back in, and appending the file's notes to a text that
+// already carries them is how one round trip becomes two copies of every note,
+// and the next three. Notes are never set this way: `tq note` appends them, and
+// the file is what holds them.
+//
+// The section is assembled exactly as AppendNote assembles it, rule included —
+// and dropped, heading and all, when the task has no notes, so revising a body
+// never grows one.
+func ReplaceContent(body, content string) string {
+	_, notes := notesSection(body)
+	content, _ = notesSection(content)
+	switch {
+	case notes == "":
+		return content
+	case content == "":
+		return notesHeading + "\n\n" + notes
+	}
+	return content + "\n\n" + notesRule + "\n\n" + notesHeading + "\n\n" + notes
+}
+
 // noteBullet renders one note as a single Markdown list item: the first line
 // follows the timestamp and every further line is indented under it, so a note
 // keeps the structure its author gave it — a wrapped sentence, a list, a
@@ -404,6 +437,14 @@ type TaskPatch struct {
 	Labels    *[]string `json:"labels"`
 	DependsOn *[]string `json:"depends_on"`
 
+	// Partial body edits, used by the CLI. Content is `tq update --body`: it
+	// replaces the body's content and keeps its notes (see ReplaceContent),
+	// where Body above replaces the whole thing, which is what the board's
+	// dialog sends. Both are here rather than one, because the two callers want
+	// different things: the dialog has the notes on screen and submits them
+	// back, and an agent revising a ticket has only the new content.
+	Content *string `json:"-"`
+
 	// Incremental list edits, used by the CLI (--add-label, --remove-dependency).
 	AddLabels    []string `json:"-"`
 	RemoveLabels []string `json:"-"`
@@ -413,7 +454,7 @@ type TaskPatch struct {
 
 func (p TaskPatch) IsEmpty() bool {
 	return p.Title == nil && p.Status == nil && p.Priority == nil && p.Assignee == nil &&
-		p.Body == nil && p.Labels == nil && p.DependsOn == nil &&
+		p.Body == nil && p.Content == nil && p.Labels == nil && p.DependsOn == nil &&
 		len(p.AddLabels) == 0 && len(p.RemoveLabels) == 0 &&
 		len(p.AddDeps) == 0 && len(p.RemoveDeps) == 0
 }
@@ -435,6 +476,12 @@ func ApplyPatch(t Task, p TaskPatch) Task {
 	}
 	if p.Body != nil {
 		t.Body = *p.Body
+	}
+	// After Body, so that a patch carrying both replaces the body and then
+	// rewrites the content of what it replaced it with, rather than the other
+	// way round. Nothing sends both today; the order is the one that composes.
+	if p.Content != nil {
+		t.Body = ReplaceContent(t.Body, *p.Content)
 	}
 	if p.Labels != nil {
 		t.Labels = slices.Clone(*p.Labels)

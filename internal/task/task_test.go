@@ -443,6 +443,150 @@ func TestNotesSection(t *testing.T) {
 	}
 }
 
+// ReplaceContent is what `tq update --body` writes, and the notes surviving it
+// is the whole point: they are appended one at a time and reconstructible from
+// nothing, while the content is a document its author has in front of them.
+func TestReplaceContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		content string
+		want    string
+	}{
+		{
+			name:    "the notes survive a rewritten content",
+			body:    "Old finding.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+			content: "New finding.",
+			want:    "New finding.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+		},
+		{
+			name:    "a body with no notes is replaced whole",
+			body:    "Old finding.",
+			content: "New finding.",
+			want:    "New finding.",
+		},
+		{
+			// No section is grown out of nothing: a task with no notes still
+			// has none after its body is rewritten.
+			name:    "no notes are invented",
+			body:    "Old finding.",
+			content: "",
+			want:    "",
+		},
+		{
+			// Clearing the content is a body edit like any other, and it must
+			// not take the record with it. The rule goes with the content it
+			// separated, which is how AppendNote writes a section that opens a
+			// body.
+			name:    "clearing the content keeps the notes",
+			body:    "Old finding.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+			content: "",
+			want:    "## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+		},
+		{
+			// Written before the rule existed. The notes are found anyway and
+			// the rewrite is where the file gains it.
+			name:    "a legacy section without a rule gains one",
+			body:    "Old finding.\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+			content: "New finding.",
+			want:    "New finding.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+		},
+		{
+			// Prose about notes is content: a "## Notes" heading followed by
+			// another section is not the notes section, and a "---" without a
+			// blank line above it underlines a setext heading rather than
+			// opening one. Neither may be mistaken for the record, on the way
+			// in or on the way out.
+			name: "a rule and a Notes heading in ordinary prose stay content",
+			body: "Old finding.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+			content: "## Notes\nHow this project writes them.\n\n" +
+				"## Format\n\nA note is a bullet.",
+			want: "## Notes\nHow this project writes them.\n\n## Format\n\nA note is a bullet." +
+				"\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note",
+		},
+		{
+			name:    "surrounding blank lines are trimmed",
+			body:    "Old.\n\n---\n\n## Notes\n\n- a note",
+			content: "\n\nNew.\n\n",
+			want:    "New.\n\n---\n\n## Notes\n\n- a note",
+		},
+		{
+			// `tq show` hands out the whole body, notes included, so the
+			// natural revision — read it, edit it, hand it back — passes the
+			// record straight back in. Appending the file's notes to a text
+			// that already carries them is how one round trip becomes two
+			// copies of every note, and the next three.
+			name:    "a replacement carrying the notes back does not double them",
+			body:    "Old.\n\n---\n\n## Notes\n\n- a note",
+			content: "New.\n\n---\n\n## Notes\n\n- a note",
+			want:    "New.\n\n---\n\n## Notes\n\n- a note",
+		},
+		{
+			// Notes are not settable this way, whatever the task holds now:
+			// `tq note` appends them and the file is what keeps them.
+			name:    "a notes section in the replacement is not adopted",
+			body:    "Old.",
+			content: "New.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — invented",
+			want:    "New.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ReplaceContent(tt.body, tt.content)
+			if got != tt.want {
+				t.Errorf("ReplaceContent:\ngot:  %q\nwant: %q", got, tt.want)
+			}
+			// Whatever came out has to read back as the same two halves, or the
+			// next note would land in the wrong one.
+			_, notes := notesSection(got)
+			if _, want := notesSection(tt.body); notes != want {
+				t.Errorf("notes read back as %q, want %q", notes, want)
+			}
+		})
+	}
+}
+
+// The loop the guide describes — `tq show --json`, edit, hand the body back —
+// has to converge. Handing back what was read is the common case, and a rule
+// that appended the file's notes to it grew the record by one copy per pass.
+func TestReplaceContentIsIdempotentOverAWholeBody(t *testing.T) {
+	body := "## Finding\n\nThe old finding.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — a note"
+
+	for pass := range 3 {
+		body = ReplaceContent(body, body)
+		if got := strings.Count(body, "## Notes"); got != 1 {
+			t.Fatalf("pass %d: %d notes sections, want 1:\n%s", pass+1, got, body)
+		}
+		if got := strings.Count(body, "— a note"); got != 1 {
+			t.Fatalf("pass %d: the note appears %d times:\n%s", pass+1, got, body)
+		}
+		if !strings.HasPrefix(body, "## Finding\n\nThe old finding.") {
+			t.Fatalf("pass %d: the content did not survive:\n%s", pass+1, body)
+		}
+	}
+}
+
+// The record has to survive the round trip, not just the one call: a rewritten
+// body whose content ends in prose about notes is where a naive split would
+// start appending into the document.
+func TestReplaceContentKeepsAppendNoteOnTheRecord(t *testing.T) {
+	body := "Old finding.\n\n---\n\n## Notes\n\n- 2026-01-01T00:00:00Z — first"
+	body = ReplaceContent(body, "## Notes\n\nProse about notes.\n\n## Format\n\nA bullet.")
+	body = AppendNote(body, "second", time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC))
+
+	content, notes := notesSection(body)
+	if !strings.Contains(content, "Prose about notes.") {
+		t.Errorf("the prose left the content:\n%s", content)
+	}
+	if !strings.Contains(notes, "— first") || !strings.Contains(notes, "— second") {
+		t.Errorf("both notes should be in the record, got:\n%s", notes)
+	}
+	if strings.Contains(notes, "Prose about notes.") {
+		t.Errorf("the prose was read as a note:\n%s", notes)
+	}
+}
+
 func TestApplyPatch(t *testing.T) {
 	base := task("TQ-0001", StatusTodo)
 	base.Labels = []string{"backend"}
@@ -490,9 +634,29 @@ func TestApplyPatch(t *testing.T) {
 		}
 	})
 
+	t.Run("Content rewrites the document and Body replaces the whole thing", func(t *testing.T) {
+		withNotes := base
+		withNotes.Body = "Old.\n\n---\n\n## Notes\n\n- a note"
+
+		content := "New."
+		if got := ApplyPatch(withNotes, TaskPatch{Content: &content}); got.Body != "New.\n\n---\n\n## Notes\n\n- a note" {
+			t.Errorf("Content patch:\ngot: %q", got.Body)
+		}
+		// What the board's dialog sends: the notes are on screen and come back
+		// with the rest, so this one is a straight replacement.
+		body := "Everything."
+		if got := ApplyPatch(withNotes, TaskPatch{Body: &body}); got.Body != body {
+			t.Errorf("Body patch: got %q, want %q", got.Body, body)
+		}
+	})
+
 	t.Run("an empty patch is detectable", func(t *testing.T) {
 		if !(TaskPatch{}).IsEmpty() {
 			t.Error("empty patch should report IsEmpty")
+		}
+		empty := ""
+		if (TaskPatch{Content: &empty}).IsEmpty() {
+			t.Error("clearing a body is a change, so it should not report IsEmpty")
 		}
 		status := StatusDone
 		if (TaskPatch{Status: &status}).IsEmpty() {

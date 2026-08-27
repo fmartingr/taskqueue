@@ -5,8 +5,10 @@ package integration
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 type taskJSON struct {
@@ -62,6 +64,132 @@ func TestUpdateEveryField(t *testing.T) {
 	p.mustRun(t, "show", "TQ-0001", "--json").JSON(t, &after)
 	if len(after.DependsOn) != 0 {
 		t.Errorf("depends_on = %v, want empty", after.DependsOn)
+	}
+}
+
+// `tq update --body` rewrites the document and leaves the record. Driven as a
+// process because the stdout/stderr split, the exit codes and a real pipe on
+// stdin are things only a binary has (TQ-0044).
+func TestUpdateBodyRewritesTheContentAndKeepsTheNotes(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "a ticket", "--body", "## Finding\n\nThe old finding.")
+	p.mustRun(t, "note", "TQ-0001", "Worth remembering.")
+
+	r := p.mustRun(t, "update", "TQ-0001", "--body", "## Finding\n\nThe corrected finding.", "--json")
+	var got taskJSON
+	r.JSON(t, &got)
+	if r.Stderr != "" {
+		t.Errorf("stderr = %q, want it empty", r.Stderr)
+	}
+	if !strings.HasPrefix(got.Body, "## Finding\n\nThe corrected finding.") {
+		t.Errorf("body = %q, want the new content first", got.Body)
+	}
+	if strings.Contains(got.Body, "The old finding.") {
+		t.Errorf("the old content should be gone: %q", got.Body)
+	}
+	if !strings.Contains(got.Body, "Worth remembering.") {
+		t.Errorf("the note should have survived: %q", got.Body)
+	}
+
+	// Reading the file back is the point of this layer: what the JSON claimed
+	// has to be what landed on disk.
+	onDisk, err := os.ReadFile(p.path(".tasks", "TQ-0001-a-ticket.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(onDisk), "Worth remembering.") {
+		t.Errorf("the note is not in the file:\n%s", onDisk)
+	}
+	if strings.Count(string(onDisk), "## Notes") != 1 {
+		t.Errorf("the file should hold one notes section:\n%s", onDisk)
+	}
+
+	// The body arrives on stdin when the value is "-", which is how an agent
+	// hands over a document without fighting a shell over the quoting.
+	piped := p.runWithStdin(t, "## Finding\n\nPiped in.\n", "update", "TQ-0001", "--body", "-", "--json")
+	if piped.Code != 0 {
+		t.Fatalf("update --body - = %d\nstdout: %s\nstderr: %s", piped.Code, piped.Stdout, piped.Stderr)
+	}
+	var fromPipe taskJSON
+	piped.JSON(t, &fromPipe)
+	if !strings.HasPrefix(fromPipe.Body, "## Finding\n\nPiped in.") {
+		t.Errorf("body = %q, want what was piped in", fromPipe.Body)
+	}
+	if !strings.Contains(fromPipe.Body, "Worth remembering.") {
+		t.Errorf("stdin should keep the notes too: %q", fromPipe.Body)
+	}
+
+	// The loop the guide describes: the body `tq show` hands out carries the
+	// notes, so handing it straight back must not double them.
+	var read taskJSON
+	p.mustRun(t, "show", "TQ-0001", "--json").JSON(t, &read)
+	p.runWithStdin(t, read.Body, "update", "TQ-0001", "--body", "-")
+	var round taskJSON
+	p.mustRun(t, "show", "TQ-0001", "--json").JSON(t, &round)
+	if n := strings.Count(round.Body, "## Notes"); n != 1 {
+		t.Errorf("a round trip left %d notes sections:\n%s", n, round.Body)
+	}
+	if n := strings.Count(round.Body, "Worth remembering."); n != 1 {
+		t.Errorf("a round trip left %d copies of the note:\n%s", n, round.Body)
+	}
+
+	// A failure says so on stderr, leaves stdout empty, and exits 2.
+	missing := p.run(t, "update", "TQ-4242", "--body", "anything", "--json")
+	if missing.Code != 2 {
+		t.Errorf("update on a missing task = %d, want 2", missing.Code)
+	}
+	if missing.Stdout != "" {
+		t.Errorf("stdout = %q, want nothing", missing.Stdout)
+	}
+	if missing.Stderr == "" {
+		t.Error("the failure should be named on stderr")
+	}
+}
+
+// `--body -` blocks until standard input ends, which a pipe nobody closes never
+// does. The write commands run under held signals (TQ-0015), whose whole trade
+// is that they return in milliseconds — so the read happens before the hold,
+// and Ctrl-C on a command still waiting for a body ends it. With the read inside
+// the hold, SIGKILL was the only way out.
+//
+// Only a process has a signal and a pipe, so this cannot be checked anywhere
+// but here.
+func TestBodyFromStdinStaysInterruptible(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "a ticket")
+
+	cmd := exec.Command(binary, "update", "TQ-0001", "--body", "-")
+	cmd.Dir = p.dir
+	cmd.Env = os.Environ()
+	// Held open for the whole test: the read must not be what ends the command.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stdin.Close() }()
+
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	// Interrupted repeatedly rather than once, so the assertion does not rest
+	// on catching the process at the instant it reaches the read.
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case <-done:
+			return // it ended, which is the whole assertion
+		case <-deadline:
+			_ = cmd.Process.Kill()
+			<-done
+			t.Fatal("tq update --body - ignored SIGINT while waiting for a body: only SIGKILL ended it")
+		case <-time.After(200 * time.Millisecond):
+			_ = cmd.Process.Signal(os.Interrupt)
+		}
 	}
 }
 

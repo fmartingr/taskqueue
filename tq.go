@@ -19,5 +19,5 @@ func Main(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	return cli.Run(os.Stdout, os.Stderr, cwd, version, args)
+	return cli.Run(os.Stdin, os.Stdout, os.Stderr, cwd, version, args)
 }

@@ -121,10 +121,14 @@ This directory is a `+"`tq`"+` task queue: one Markdown file per task, named
 `+"`<id>-<title-slug>.md`"+`, with YAML frontmatter. The files are the source of
 truth and are meant to be committed.
 
-Use the CLI rather than editing files by hand — it validates, keeps timestamps
-and filenames in sync, and writes atomically. Every command below works from any
-subdirectory of the project — every command but `+"`tq init`"+`, which creates a
-queue wherever it is run, so run it once at the project root and never below it.
+Use the CLI rather than editing these files by hand. The frontmatter is the
+CLI's: it allocates the IDs, checks the statuses and the priorities against the
+project's, keeps the timestamps and the filename in sync with what it wrote, and
+writes atomically. The body is yours to rewrite, and `+"`tq update <id> --body`"+`
+is how — it replaces the content and keeps the notes. Every
+command below works from any subdirectory of the project — every command but
+`+"`tq init`"+`, which creates a queue wherever it is run, so run it once at the
+project root and never below it.
 
 ## Working a task
 
@@ -159,6 +163,19 @@ be one `+"`tq ready`"+` offers — see Statuses below.
     tq update <id> --add-label auth --remove-label backend
     tq update <id> --add-dependency TQ-0002 --remove-dependency TQ-0003
 
+Rewrite a body — correcting a finding, re-scoping a fix — with `+"`--body`"+`. The
+notes on the task are kept, so the record of how it got here survives the edit,
+and a notes section in the text you pass is ignored: the body `+"`tq show`"+`
+hands you can be edited and handed straight back without doubling the record.
+`+"`tq note`"+` is still the only way to add to it. A body is a document, so pass
+it on stdin rather than fighting a shell over the quoting:
+
+    tq update <id> --body - <<'EOF'
+    ## Finding
+
+    …
+    EOF
+
 Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 
 ## Labels
@@ -192,6 +209,10 @@ whole string, so `+"`tq list --label component/backend`"+` takes the whole key.
   body can document notes without `+"`tq note`"+` mistaking prose for notes.
 - Each note is one Markdown list item. The lines after its first are indented
   under the bullet, which is what keeps a multi-line note inside its note.
+- The filename carries a slug of the title, but the `+"`id`"+` in the frontmatter is
+  what identifies a task. `+"`tq update --title`"+` renames the file itself; never
+  rename one by hand to match a new title, and look a task up by its ID rather
+  than by rebuilding a filename out of one.
 - A task is *ready* when it is neither done nor in-progress and every task in
   `+"`depends_on`"+` exists and is done. A missing dependency blocks it.
 - IDs are sequential but not contiguous. A number a task still lists in

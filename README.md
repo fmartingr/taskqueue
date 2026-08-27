@@ -415,7 +415,7 @@ tq list [flags]                    --status --priority --label --assignee --json
 tq show <id> [--json]              Frontmatter fields followed by the Markdown body
 tq move <id> <status>              backlog | todo | in-progress | done
 tq done <id>                       Shorthand for: tq move <id> done
-tq update <id> [flags]             --title --status --priority --assignee
+tq update <id> [flags]             --title --status --priority --assignee --body
                                    --add-label --remove-label
                                    --add-dependency --remove-dependency
 tq note <id> <text>                Append a timestamped bullet to the notes
@@ -429,6 +429,23 @@ tq version
 
 `--label` and `--depends-on` (and the `--add-*`/`--remove-*` flags) can be
 repeated. Only the fields you pass to `tq update` change.
+
+`tq update --body` is how a body is revised. The [notes](#task-format) on the
+task are kept, so correcting a finding does not take the record of how the task
+got there with it, and a notes section in the text you pass is ignored — the
+body `tq show` hands you can be edited and handed straight back without doubling
+the record, and `tq note` stays the only way to add to it. `tq add --body`
+writes the whole body, because a new task has no record yet. Either flag takes
+`-` and reads the text from standard input, which is what a document should
+arrive on:
+
+```bash
+tq update TQ-0001 --body - <<'EOF'
+## Finding
+
+The corrected finding.
+EOF
+```
 
 Arguments that start with `-` must follow `--`, as usual:
 

@@ -44,6 +44,7 @@ type cli struct {
 	// this package is not the binary.
 	version string
 
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 	dir    string // working directory used to discover the task directory
@@ -52,8 +53,8 @@ type cli struct {
 // Run executes one command and returns the process exit code. It takes its
 // streams, its working directory and the binary's version rather than reaching
 // for globals, so a test can drive it the same way the binary does.
-func Run(stdout, stderr io.Writer, dir, version string, args []string) int {
-	return runCLI(&cli{stdout: stdout, stderr: stderr, dir: dir, version: version}, args)
+func Run(stdin io.Reader, stdout, stderr io.Writer, dir, version string, args []string) int {
+	return runCLI(&cli{stdin: stdin, stdout: stdout, stderr: stderr, dir: dir, version: version}, args)
 }
 
 // writeCommands are the commands that put a task file on disk. An interrupt
@@ -70,9 +71,36 @@ func runCLI(c *cli, args []string) int {
 		return exitError
 	}
 	if writeCommands[args[0]] {
+		// Standard input is read here rather than inside the command, because
+		// inside is inside the hold: a read from a pipe nobody closes never
+		// returns, and holdSignals turns a command that cannot return into one
+		// only SIGKILL ends. Its whole trade rests on these commands taking
+		// milliseconds, which a read from a terminal does not.
+		if stdinRequested(args) {
+			text, err := c.readStdin()
+			if err != nil {
+				return c.fail(err)
+			}
+			c.stdin = strings.NewReader(text)
+		}
 		return holdSignals(c.stderr, func() int { return dispatch(c, args) })
 	}
 	return dispatch(c, args)
+}
+
+// stdinRequested reports whether these arguments ask for a value to be read
+// from standard input. It is a scan and not a parse, and it only has to be
+// right about one thing: whether the command below is going to block on a read.
+// A false positive consumes a standard input nothing wanted, on a command that
+// then fails on its own arguments; a false negative puts the read back inside
+// the hold.
+func stdinRequested(args []string) bool {
+	for i, arg := range args[:len(args)-1] {
+		if (arg == "-body" || arg == "--body") && args[i+1] == stdinArg {
+			return true
+		}
+	}
+	return false
 }
 
 // holdSignals runs a command with SIGINT and SIGTERM held: registering a
@@ -161,7 +189,7 @@ Commands:
   show <id> [--json]              Show one task
   move <id> <status>              Change a task's status
   done <id>                       Shorthand for: move <id> done
-  update <id> [flags]             Change fields of a task
+  update <id> [flags]             Change fields of a task, its body included
   note <id> <text>                Append a timestamped note to a task
   ready [flags]                   List tasks that are unblocked and unclaimed
   label list [--json]             Print the project's label vocabulary and the
@@ -176,6 +204,12 @@ Priorities: %s (most severe first; default: %s)
 Common flags:
   --json                          Print JSON to stdout and nothing else
   --status, --priority, --label, --assignee   Filters for list/ready
+  --body <text>                   The Markdown body. On add it is the whole
+                                  body; on update the task's notes are kept and
+                                  a notes section in the text is ignored, so a
+                                  body read with "tq show" can be edited and
+                                  handed straight back. "-" reads the text from
+                                  stdin, which is how a document should arrive
   --                              End of flags: everything after it is an
                                   argument, even if it starts with "-"
 
@@ -359,7 +393,7 @@ func (c *cli) runAdd(args []string) int {
 	priority := fs.String("priority", "",
 		"priority: "+strings.Join(priorities.Names(), ", ")+" (default: "+priorities.Default()+")")
 	assignee := fs.String("assignee", "", "assignee")
-	body := fs.String("body", "", "Markdown body")
+	body := fs.String("body", "", `Markdown body ("`+stdinArg+`" reads stdin)`)
 	board := c.board()
 	status := fs.String("status", "",
 		"initial status: "+strings.Join(board.Names(), ", ")+" (default: "+board.Default()+")")
@@ -371,6 +405,16 @@ func (c *cli) runAdd(args []string) int {
 	positional, code, ok := c.parse(fs, args, 1)
 	if !ok {
 		return code
+	}
+
+	// `--body -` means the same thing here as it does on update: the document
+	// arrives on stdin rather than as an argument.
+	if *body == stdinArg {
+		text, err := c.readStdin()
+		if err != nil {
+			return c.fail(err)
+		}
+		*body = text
 	}
 
 	st, err := c.st()
@@ -617,6 +661,8 @@ func (c *cli) runUpdate(args []string) int {
 	status := fs.String("status", "", "new status: "+strings.Join(c.board().Names(), ", "))
 	priority := fs.String("priority", "", "new priority: "+strings.Join(c.priorities().Names(), ", "))
 	assignee := fs.String("assignee", "", "new assignee")
+	body := fs.String("body", "", `new body; the task's notes are kept, and a notes `+
+		`section in the text is ignored ("`+stdinArg+`" reads stdin)`)
 	var addLabels, removeLabels, addDeps, removeDeps stringList
 	fs.Var(&addLabels, "add-label", "add a label (repeatable)")
 	fs.Var(&removeLabels, "remove-label", "remove a label (repeatable)")
@@ -646,8 +692,19 @@ func (c *cli) runUpdate(args []string) int {
 			patch.Priority = priority
 		case "assignee":
 			patch.Assignee = assignee
+		case "body":
+			// Content, not Body: --body replaces the document and leaves the
+			// notes where they are (TQ-0044).
+			patch.Content = body
 		}
 	})
+	if patch.Content != nil && *patch.Content == stdinArg {
+		text, err := c.readStdin()
+		if err != nil {
+			return c.fail(err)
+		}
+		patch.Content = &text
+	}
 	if patch.IsEmpty() {
 		return c.fail(errors.New("update needs at least one field to change (see `tq help`)"))
 	}
@@ -757,6 +814,29 @@ func (c *cli) warnListing(l store.Listing) {
 	if l.Incomplete {
 		fmt.Fprintln(c.stderr, "warning: the task directory kept changing while it was read; this listing may be missing a task")
 	}
+}
+
+// stdinArg is the flag value that means "the text is on stdin". A body is a
+// document, and a shell has better ways to hand one over — a heredoc, a pipe,
+// a file — than a quoted argument that has to survive its own escaping.
+//
+// The cost is that a body of exactly "-" cannot be given as an argument, which
+// is the convention every tool with this affordance already carries; echo it in
+// instead.
+const stdinArg = "-"
+
+// readStdin reads a flag's value from standard input. An empty stdin is a value
+// like any other — it is how `tq update --body ""` is spelled through a pipe —
+// so only a read that fails is an error.
+func (c *cli) readStdin() (string, error) {
+	if c.stdin == nil {
+		return "", errors.New("nothing to read: this command has no standard input")
+	}
+	text, err := io.ReadAll(c.stdin)
+	if err != nil {
+		return "", fmt.Errorf("reading stdin: %w", err)
+	}
+	return string(text), nil
 }
 
 func (c *cli) flagSet(name string) *flag.FlagSet {

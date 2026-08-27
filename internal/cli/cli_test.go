@@ -100,12 +100,19 @@ func newCLIIn(t *testing.T, dir string) *testCLI {
 	tqtest.ClearEnv(t)
 	stdout, stderr := &syncBuffer{}, &syncBuffer{}
 	return &testCLI{
-		cli:    &cli{stdout: stdout, stderr: stderr, dir: dir, version: testVersion},
+		cli:    &cli{stdin: strings.NewReader(""), stdout: stdout, stderr: stderr, dir: dir, version: testVersion},
 		t:      t,
 		stdout: stdout,
 		stderr: stderr,
 		root:   dir,
 	}
+}
+
+// feed puts text on the CLI's standard input, for the commands that read a
+// value from it. The reader is consumed by the next command that asks for it.
+func (tc *testCLI) feed(text string) *testCLI {
+	tc.stdin = strings.NewReader(text)
+	return tc
 }
 
 func (tc *testCLI) run(args ...string) int {
@@ -625,6 +632,215 @@ func TestCLIUpdateRenamesTheFile(t *testing.T) {
 	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
 	if tk.Title != "A better title" {
 		t.Errorf("task = %+v", tk)
+	}
+}
+
+// `tq update --body` is how a body is revised, and keeping the notes is the
+// contract: they are appended one at a time and reconstructible from nothing,
+// so an edit that dropped them would lose what nobody can write again (TQ-0044).
+func TestCLIUpdateBodyKeepsTheNotes(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Ticket", "--body", "## Finding\n\nThe old finding.")
+	tc.mustRun("note", "TQ-0001", "Something worth remembering.")
+
+	out := tc.mustRun("update", "TQ-0001", "--body", "## Finding\n\nThe corrected finding.")
+	if !strings.Contains(out, "Updated TQ-0001") {
+		t.Errorf("update output = %q", out)
+	}
+
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(tk.Body, "## Finding\n\nThe corrected finding.") {
+		t.Errorf("the content should be the new one:\n%s", tk.Body)
+	}
+	if strings.Contains(tk.Body, "The old finding.") {
+		t.Errorf("the old content should be gone:\n%s", tk.Body)
+	}
+	if !strings.Contains(tk.Body, "Something worth remembering.") {
+		t.Errorf("the note should have survived the edit:\n%s", tk.Body)
+	}
+	if strings.Count(tk.Body, "## Notes") != 1 {
+		t.Errorf("the notes section should be there exactly once:\n%s", tk.Body)
+	}
+
+	// A second edit appends nothing and duplicates nothing.
+	tc.mustRun("update", "TQ-0001", "--body", "Third draft.")
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if want := "Third draft.\n\n---\n\n## Notes\n\n"; !strings.HasPrefix(tk.Body, want) {
+		t.Errorf("body:\ngot:  %q\nwant it to start with %q", tk.Body, want)
+	}
+	if strings.Count(tk.Body, "Something worth remembering.") != 1 {
+		t.Errorf("the note should appear once:\n%s", tk.Body)
+	}
+}
+
+func TestCLIUpdateBodyOnATaskWithoutNotes(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Ticket", "--body", "The old finding.")
+
+	tc.mustRun("update", "TQ-0001", "--body", "The new finding.")
+
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if tk.Body != "The new finding." {
+		t.Errorf("body = %q, want just the new content", tk.Body)
+	}
+	if strings.Contains(tk.Body, "## Notes") {
+		t.Errorf("a task with no notes should not gain a section:\n%s", tk.Body)
+	}
+}
+
+// Clearing the content is a body edit like any other. It empties the document
+// and leaves the record, which is the case a wholesale replacement would eat.
+func TestCLIUpdateBodyEmptyKeepsTheNotes(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Ticket", "--body", "Wrong from the start.")
+	tc.mustRun("note", "TQ-0001", "Filed against the wrong component.")
+
+	tc.mustRun("update", "TQ-0001", "--body", "")
+
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if strings.Contains(tk.Body, "Wrong from the start.") {
+		t.Errorf("the content should be gone:\n%s", tk.Body)
+	}
+	if !strings.HasPrefix(tk.Body, "## Notes") {
+		t.Errorf("the body should be the notes section alone:\n%s", tk.Body)
+	}
+	if !strings.Contains(tk.Body, "Filed against the wrong component.") {
+		t.Errorf("the note should have survived:\n%s", tk.Body)
+	}
+
+	// And the same on a task that has no notes to keep.
+	tc.mustRun("add", "Second")
+	tc.mustRun("update", "TQ-0002", "--body", "")
+	var empty task.Task
+	tc.mustRunJSON(&empty, "show", "TQ-0002", "--json")
+	if empty.Body != "" {
+		t.Errorf("body = %q, want it empty", empty.Body)
+	}
+}
+
+// A body may document how this project writes notes. A "## Notes" heading with
+// another section after it is prose, and a "---" without a blank line above it
+// underlines a setext heading — neither is the record, going in or coming out.
+func TestCLIUpdateBodyDoesNotMistakeProseForNotes(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Ticket", "--body", "Placeholder.")
+	tc.mustRun("note", "TQ-0001", "The real note.")
+
+	content := "Finding\n---\n\n## Notes\n\nHow we write them.\n\n## Acceptance\n\n- ships"
+	tc.mustRun("update", "TQ-0001", "--body", content)
+
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(tk.Body, content) {
+		t.Fatalf("the prose should be the content, verbatim:\n%s", tk.Body)
+	}
+	if !strings.HasSuffix(tk.Body, " — The real note.") {
+		t.Errorf("the record should still end the body:\n%s", tk.Body)
+	}
+
+	// The proof is the next note: it lands in the record, not in the prose.
+	tc.mustRun("note", "TQ-0001", "The second note.")
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(tk.Body, content) {
+		t.Errorf("a note should not have been appended to the prose:\n%s", tk.Body)
+	}
+	if !strings.HasSuffix(tk.Body, " — The second note.") {
+		t.Errorf("the note should be the last line:\n%s", tk.Body)
+	}
+}
+
+// The loop the guide describes: `tq show --json` hands out the whole body,
+// notes included, so an agent that reads it, edits it and hands it back passes
+// the record straight back in. Appending the task's notes to a text that
+// already carries them turned one revision into two copies of every note.
+func TestCLIUpdateBodyRoundTripDoesNotDoubleTheNotes(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Ticket", "--body", "## Finding\n\nThe old finding.")
+	tc.mustRun("note", "TQ-0001", "The record.")
+
+	for pass := range 3 {
+		var read task.Task
+		tc.mustRunJSON(&read, "show", "TQ-0001", "--json")
+		// Edited in place, the way an agent would: the whole body goes back.
+		tc.feed(strings.Replace(read.Body, "old finding", "corrected finding", 1)).
+			mustRun("update", "TQ-0001", "--body", "-")
+
+		var written task.Task
+		tc.mustRunJSON(&written, "show", "TQ-0001", "--json")
+		if got := strings.Count(written.Body, "## Notes"); got != 1 {
+			t.Fatalf("pass %d: %d notes sections, want 1:\n%s", pass+1, got, written.Body)
+		}
+		if got := strings.Count(written.Body, "The record."); got != 1 {
+			t.Fatalf("pass %d: the note appears %d times:\n%s", pass+1, got, written.Body)
+		}
+	}
+
+	var final task.Task
+	tc.mustRunJSON(&final, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(final.Body, "## Finding\n\nThe corrected finding.") {
+		t.Errorf("the edit should have landed:\n%s", final.Body)
+	}
+}
+
+// A body is a document, and a shell has better ways to hand one over than an
+// argument that has to survive its own quoting.
+func TestCLIBodyFromStdin(t *testing.T) {
+	tc := newTestCLI(t)
+
+	tc.feed("## Finding\n\nPiped in.\n").mustRun("add", "Ticket", "--body", "-")
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if tk.Body != "## Finding\n\nPiped in." {
+		t.Errorf("add --body -: body = %q", tk.Body)
+	}
+
+	tc.mustRun("note", "TQ-0001", "A note to keep.")
+	tc.feed("## Finding\n\nPiped in again.\n").mustRun("update", "TQ-0001", "--body", "-")
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(tk.Body, "## Finding\n\nPiped in again.") {
+		t.Errorf("update --body -: body = %q", tk.Body)
+	}
+	if !strings.Contains(tk.Body, "A note to keep.") {
+		t.Errorf("update --body - should keep the notes:\n%s", tk.Body)
+	}
+
+	// An empty stdin is a value like any other: it is how `--body ""` is
+	// spelled through a pipe.
+	tc.feed("").mustRun("update", "TQ-0001", "--body", "-")
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.HasPrefix(tk.Body, "## Notes") {
+		t.Errorf("an empty stdin should clear the content and keep the notes:\n%s", tk.Body)
+	}
+}
+
+// The --json contract: data on stdout and nothing else, everything else on
+// stderr. Agents parse the first and would choke on a warning in it.
+func TestCLIUpdateBodyJSONIsTheOnlyThingOnStdout(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Ticket", "--body", "Old.")
+	tc.mustRun("note", "TQ-0001", "Kept.")
+
+	var tk task.Task
+	tc.mustRunJSON(&tk, "update", "TQ-0001", "--body", "New.", "--json")
+	if !strings.HasPrefix(tk.Body, "New.") || !strings.Contains(tk.Body, "Kept.") {
+		t.Errorf("the JSON should carry the saved body: %q", tk.Body)
+	}
+	if tc.stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want it empty", tc.stderr)
+	}
+
+	// A missing task keeps stdout clean and exits 2.
+	if code := tc.run("update", "TQ-4242", "--body", "New.", "--json"); code != exitTaskNotFound {
+		t.Errorf("update on a missing task = exit %d, want %d", code, exitTaskNotFound)
+	}
+	if tc.stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing on a failure", tc.stdout)
+	}
+	if tc.stderr.Len() == 0 {
+		t.Error("the failure should be reported on stderr")
 	}
 }
 

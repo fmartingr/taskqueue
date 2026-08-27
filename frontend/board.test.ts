@@ -12,12 +12,14 @@ import {
   labelsInUse,
   pendingDependencies,
   visibleTasks,
+  defaultColumn,
   defaultPriority,
   findPriority,
   priorityChip,
   priorityDisplay,
   priorityOptions,
   FALLBACK_COLUMNS,
+  type ColumnSet,
   type Filters,
   type LabelSet,
   type PrioritySet,
@@ -402,6 +404,31 @@ describe("labels that collide with Object.prototype", () => {
     expect(isConfigured("toString", labels)).toBe(true);
     expect(labelDisplay("toString", labels)).toBe("Stringly");
     expect(labelChip("toString", labels)?.background).toBe("#0e8a16");
+  });
+});
+
+// ── Columns ─────────────────────────────────────────────────────
+
+describe("defaultColumn", () => {
+  // The two branches are only told apart by a board whose default is not also
+  // its first column, which is what the built-in board is: `inbox` is both, so
+  // it answers for either branch and pins neither.
+  const BOARD: ColumnSet = [
+    { name: "backlog", display_name: "Backlog" },
+    { name: "doing", display_name: "Doing", default: true },
+    { name: "shipped", display_name: "Shipped", consider_done: true },
+  ];
+
+  test("the column marked default, wherever it sits on the board", () => {
+    expect(defaultColumn(BOARD)).toBe("doing");
+  });
+
+  test("the leftmost when none is marked, so a task filed without a status has one", () => {
+    expect(defaultColumn(BOARD.map((column) => ({ ...column, default: false })))).toBe("backlog");
+  });
+
+  test("an empty board has no default rather than an invented one", () => {
+    expect(defaultColumn([])).toBe("");
   });
 });
 

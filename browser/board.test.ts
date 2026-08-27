@@ -1,13 +1,14 @@
 /**
- * The board in a real browser: drag and drop, the inline composer and the task
- * dialog. Every assertion about what changed is made against the API rather
- * than the page, so a render that lies is a failure and not a pass.
+ * The board in a real browser: drag and drop, the inline composer, the two
+ * dialogs and the keyboard that opens one. Every assertion about what changed
+ * is made against the API rather than the page, so a render that lies is a
+ * failure and not a pass.
  */
 
 import { expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { card, cardIn, idsIn, useBoard } from "./harness";
+import { card, cardIn, idsIn, useBoard, type Project, type Server, type Task } from "./harness";
 
 const openBoard = useBoard();
 
@@ -186,6 +187,122 @@ test("cancelling the dialog leaves the task alone", async () => {
   await page.waitForSelector("#task-dialog[open]", { state: "detached" });
   const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
   expect(task?.title).toBe("Untouched");
+});
+
+// Filing a task from the dialog is one gesture rather than four — the fields
+// reach the API as the API wants them, the board catches up, and only then is
+// anything said — so it is one test. `splitList` itself is a pure function with
+// its own cases in frontend/format.test.ts; what a browser is here for is the
+// wiring, that the comma-separated field reaches it at all (TQ-0080).
+test("the create dialog files a task, waits for the board, and then says so", async () => {
+  const { project, server, page } = await openBoard();
+
+  await page.click("#new-task");
+  await page.waitForSelector("#create-dialog[open]");
+
+  // It opens on the title, so the dialog is typed into rather than clicked into.
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe("create-title");
+
+  // The defaults a task filed without a status or a priority gets. That they
+  // are read from the project's configuration rather than written into the
+  // markup is what columns.test.ts and priorities.test.ts pin, on a board that
+  // declares a vocabulary of its own.
+  expect(await page.inputValue("#create-status")).toBe("inbox");
+  expect(await page.inputValue("#create-priority")).toBe("normal");
+
+  await page.fill("#create-title", "Filed from the dialog");
+  await page.fill("#create-assignee", "agent-api");
+  await page.fill("#create-labels", "backend, auth");
+  await page.fill("#create-body", "Written in the dialog.");
+
+  // Every listing is held from here on, so the board cannot catch up until this
+  // test lets it. It is what turns "the dialog refreshes before it confirms"
+  // into something with no timing in it: the confirmation the dialog would give
+  // early has nothing to race, because the refresh it should be waiting on
+  // physically cannot return.
+  let release = (): void => {};
+  const listings = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let holding = true;
+  await page.route("**/api/tasks", async (route) => {
+    if (holding && route.request().method() === "GET") await listings;
+    await route.continue();
+  });
+
+  await page.click("#create-form button[type='submit']");
+
+  // The task is on the server, so the POST is done and the dialog is inside its
+  // refresh. Nothing may have been said yet, and no card may have appeared.
+  const created = await waitForTask(project, server);
+  // Read out of the page rather than through a locator: this has to answer
+  // about the DOM as it stands, and every waiting form of the question would
+  // sit here until the toast it is asserting the absence of turned up. Reading
+  // the text rather than counting nodes is what makes the failure name what
+  // was said too early.
+  expect(await page.evaluate(() => document.querySelector("#toasts .toast.info")?.textContent ?? null)).toBeNull();
+  expect(await idsIn(page, "inbox")).toEqual([]);
+
+  holding = false;
+  release();
+
+  // The card is on the board by the time the confirmation is, and the two
+  // render together, so reading the board straight after the toast reads the
+  // same frame rather than a later one.
+  await page.waitForSelector("#toasts .toast.info");
+  const shown = await idsIn(page, "inbox");
+  const message = await page.textContent("#toasts .toast.info");
+  await page.waitForSelector("#create-dialog", { state: "detached" });
+
+  expect(shown).toEqual([created.id]);
+  expect(message).toContain(`Created ${created.id}`);
+
+  // Two labels rather than one: the comma-separated field is split on its way
+  // to the server.
+  expect(created).toMatchObject({
+    title: "Filed from the dialog",
+    status: "inbox",
+    priority: "normal",
+    assignee: "agent-api",
+    labels: ["backend", "auth"],
+    body: "Written in the dialog.",
+  });
+});
+
+/** Waits until the queue holds exactly one task and hands it back. Read from
+ *  the API rather than the page, so it says the POST landed and nothing else. */
+async function waitForTask(project: Project, server: Server): Promise<Task> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const tasks = await project.tasks(server);
+    if (tasks.length === 1) return tasks[0];
+    await Bun.sleep(50);
+  }
+  throw new Error("the create never reached the server");
+}
+
+// A card is focusable and opens on a key as well as on a click. One board each,
+// rather than one test pressing both: the second press would have to close the
+// dialog the first opened and reopen it, and a `<dialog>` reopened in the
+// millisecond it closed is swallowed (TQ-0081, rejected — the trigger stays).
+test.each([
+  ["Enter", "Enter"],
+  ["Space", " "],
+])("%s on a focused card opens its dialog", async (_name, key) => {
+  let id = "";
+  const { page } = await openBoard((project) => {
+    id = project.add("Opened with a key");
+  });
+
+  // Asserted rather than assumed: focus() is a silent no-op on an element that
+  // cannot take focus, and a card that lost its tabindex would fail below as a
+  // dialog that never opened, saying nothing about why.
+  await page.focus(cardIn("todo", id));
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("data-id"))).toBe(id);
+
+  await page.keyboard.press(key);
+
+  await page.waitForSelector("#task-dialog[open]");
+  expect(await page.textContent("#task-dialog-id")).toBe(id);
 });
 
 test("a blocked card says what it is waiting for, in the board and the dialog", async () => {

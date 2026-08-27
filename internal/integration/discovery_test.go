@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,10 +64,13 @@ func TestMarkerAndOverride(t *testing.T) {
 
 	t.Run("path moves the queue", func(t *testing.T) {
 		t.Parallel()
-		p := newProject(t)
-		if err := os.WriteFile(p.path(".taskqueue.yaml"), []byte("version: 1\npath: docs/queue\n"), 0o644); err != nil {
+		// The marker is written before init, so init puts the queue where it
+		// says rather than at the default.
+		p := &project{dir: bareDir(t)}
+		if err := writeFile(p.path(".taskqueue.yaml"), "version: 1\npath: docs/queue\n"); err != nil {
 			t.Fatal(err)
 		}
+		p.mustRun(t, "init")
 		p.mustRun(t, "add", "moved")
 
 		if _, err := os.Stat(p.path("docs", "queue")); err != nil {
@@ -79,16 +83,18 @@ func TestMarkerAndOverride(t *testing.T) {
 
 	t.Run("TQ_DIR beats the marker", func(t *testing.T) {
 		t.Parallel()
-		p := newProject(t)
-		elsewhere := p.path("elsewhere")
-		if err := os.MkdirAll(elsewhere, 0o755); err != nil {
+		p := &project{dir: bareDir(t)}
+		if err := writeFile(p.path(".taskqueue.yaml"), "version: 1\npath: .tasks\n"); err != nil {
 			t.Fatal(err)
 		}
-		p.runIn(t, p.dir, []string{"TQ_DIR=" + elsewhere}, "add", "via the environment")
+		elsewhere := p.path("elsewhere")
+		env := []string{"TQ_DIR=" + elsewhere}
+		p.runIn(t, p.dir, env, "init")
+		p.runIn(t, p.dir, env, "add", "via the environment")
 
 		entries, err := os.ReadDir(elsewhere)
-		if err != nil || len(entries) != 1 {
-			t.Errorf("TQ_DIR holds %d entries, %v; want the task", len(entries), err)
+		if err != nil || len(entries) != 2 {
+			t.Errorf("TQ_DIR holds %d entries, %v; want the task and the guide", len(entries), err)
 		}
 		if _, err := os.Stat(p.path(".tasks")); !os.IsNotExist(err) {
 			t.Error("the marker's path should have been ignored")
@@ -98,20 +104,23 @@ func TestMarkerAndOverride(t *testing.T) {
 	t.Run("a directory named .tasks is not a queue", func(t *testing.T) {
 		t.Parallel()
 		// No marker at all, and a .tasks above: tq looks for the marker and
-		// nothing else, so this project gets its own queue.
-		dir := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(dir, ".tasks"), 0o755); err != nil {
+		// nothing else, so there is no project here to find.
+		dir := bareDir(t)
+		if err := mkdirAll(filepath.Join(dir, ".tasks")); err != nil {
 			t.Fatal(err)
 		}
 		below := filepath.Join(dir, "project")
-		if err := os.MkdirAll(below, 0o755); err != nil {
+		if err := mkdirAll(below); err != nil {
 			t.Fatal(err)
 		}
 		p := &project{dir: below}
-		p.mustRun(t, "add", "mine")
 
-		if _, err := os.Stat(filepath.Join(below, ".taskqueue.yaml")); err != nil {
-			t.Errorf("the project should have gained its own marker: %v", err)
+		r := p.run(t, "add", "mine")
+		if r.Code != 3 {
+			t.Errorf("exit = %d, want 3\nstderr: %s", r.Code, r.Stderr)
+		}
+		if !strings.Contains(r.Stderr, "tq init") {
+			t.Errorf("stderr = %q, want it to name tq init", r.Stderr)
 		}
 		entries, _ := os.ReadDir(filepath.Join(dir, ".tasks"))
 		if len(entries) != 0 {
@@ -136,18 +145,23 @@ func TestBrokenConfigsAreReported(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
+			dir := bareDir(t)
 			if err := os.WriteFile(filepath.Join(dir, tc.file), []byte(tc.body), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			p := &project{dir: dir}
 
-			r := p.run(t, "list")
-			if r.Code != 1 {
-				t.Errorf("exit = %d, want 1\nstderr: %s", r.Code, r.Stderr)
-			}
-			if !strings.Contains(r.Stderr, tc.contains) {
-				t.Errorf("stderr = %q, want it to mention %q", r.Stderr, tc.contains)
+			// init as well as list: it reads the marker in the directory it is
+			// about to write into, and a file it cannot use must stop it rather
+			// than have it write a second one beside the first.
+			for _, command := range []string{"list", "init"} {
+				r := p.run(t, command)
+				if r.Code != 1 {
+					t.Errorf("tq %s = exit %d, want 1\nstderr: %s", command, r.Code, r.Stderr)
+				}
+				if !strings.Contains(r.Stderr, tc.contains) {
+					t.Errorf("tq %s stderr = %q, want it to mention %q", command, r.Stderr, tc.contains)
+				}
 			}
 		})
 	}
@@ -156,7 +170,7 @@ func TestBrokenConfigsAreReported(t *testing.T) {
 // init writes both files, and never overwrites a config a person wrote.
 func TestInitWritesTheMarkerAndTheGuide(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := bareDir(t)
 	p := &project{dir: dir}
 
 	p.mustRun(t, "init")
@@ -215,12 +229,9 @@ func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 		}
 	}
 
-	t.Run("inside a repository", func(t *testing.T) {
+	t.Run("in a directory that is not a project yet", func(t *testing.T) {
 		t.Parallel()
-		dir := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		dir := bareDir(t)
 		p := &project{dir: dir}
 		guide := realPath(t, dir, ".tasks", "AGENTS.md")
 
@@ -228,27 +239,26 @@ func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 		assertPointer(t, p.mustRun(t, "init", "--json"), guide)
 	})
 
-	t.Run("from a subdirectory", func(t *testing.T) {
+	t.Run("in a subdirectory of a project", func(t *testing.T) {
 		t.Parallel()
 		p := newProject(t)
-		p.mustRun(t, "init")
 		deep := p.path("backend", "deep")
-		if err := os.MkdirAll(deep, 0o755); err != nil {
+		if err := mkdirAll(deep); err != nil {
 			t.Fatal(err)
 		}
-		// The queue is two levels up, so a relative path was meaningless from
-		// here: it named backend/deep/.tasks, which does not exist.
-		guide := realPath(t, p.dir, ".tasks", "AGENTS.md")
+		// Init creates the queue where it is run, so the guide it names is the
+		// one it just wrote here — not the project's two levels up.
+		guide := realPath(t, deep, ".tasks", "AGENTS.md")
 
 		assertPrints(t, p.runIn(t, deep, nil, "init"), guide)
 		assertPointer(t, p.runIn(t, deep, nil, "init", "--json"), guide)
 	})
 
-	t.Run("no repository root, with TQ_DIR outside the project", func(t *testing.T) {
+	t.Run("with TQ_DIR outside the project", func(t *testing.T) {
 		t.Parallel()
-		base := t.TempDir()
+		base := bareDir(t)
 		dir := filepath.Join(base, "project")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := mkdirAll(dir); err != nil {
 			t.Fatal(err)
 		}
 		p := &project{dir: dir}
@@ -262,91 +272,216 @@ func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 	})
 }
 
-// A project above the repository is one discovery deliberately walked past, and
-// init is the command whose job is saying where the queue is: it names the
-// marker rather than staying silent (TQ-0062). The note is a note, so it goes to
-// stderr — which is the half only a real process can show, and what the --json
-// contract rests on.
-func TestInitNamesTheProjectTheBoundExcluded(t *testing.T) {
+// The two rules TQ-0085 settled on, driven through the binary: init creates the
+// queue where it is run, and every other command walks up for the marker and
+// fails with exit 3 when there is none.
+func TestInitCreatesTheQueueWhereItIsRun(t *testing.T) {
 	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "the parent's work")
 
-	// above holds the marker discovery will not reach; the repository below is
-	// where init runs and makes its own queue.
-	shadowed := func(t *testing.T) (*project, string) {
-		t.Helper()
-		above := t.TempDir()
-		if err := writeFile(filepath.Join(above, ".taskqueue.yaml"), "version: 1\npath: .tasks\n"); err != nil {
-			t.Fatal(err)
+	deep := p.path("service")
+	if err := mkdirAll(deep); err != nil {
+		t.Fatal(err)
+	}
+	sub := &project{dir: deep}
+	sub.mustRun(t, "init")
+
+	for _, name := range []string{".taskqueue.yaml", filepath.Join(".tasks", "AGENTS.md")} {
+		if _, err := os.Stat(filepath.Join(deep, name)); err != nil {
+			t.Errorf("init did not write %s in the subdirectory: %v", name, err)
 		}
-		if err := mkdirAll(filepath.Join(above, ".tasks")); err != nil {
-			t.Fatal(err)
-		}
-		repo := filepath.Join(above, "project")
-		if err := mkdirAll(filepath.Join(repo, ".git")); err != nil {
-			t.Fatal(err)
-		}
-		return &project{dir: repo}, realPath(t, above, ".taskqueue.yaml")
 	}
 
-	t.Run("the note is on stderr", func(t *testing.T) {
-		t.Parallel()
-		p, marker := shadowed(t)
+	// And commands below it use the marker init just wrote, not the parent's.
+	var listed []taskJSON
+	sub.mustRun(t, "list", "--json").JSON(t, &listed)
+	if len(listed) != 0 {
+		t.Errorf("the subdirectory listed %d tasks, want its own empty queue", len(listed))
+	}
+}
 
-		r := p.mustRun(t, "init")
-		for _, want := range []string{marker, "TQ_WALK_FOREVER"} {
-			if !strings.Contains(r.Stderr, want) {
-				t.Errorf("stderr = %q, want it to mention %q", r.Stderr, want)
+// Running init twice leaves everything exactly as it was.
+func TestInitTwiceChangesNothing(t *testing.T) {
+	t.Parallel()
+	dir := bareDir(t)
+	p := &project{dir: dir}
+	p.mustRun(t, "init")
+
+	before := snapshot(t, dir)
+	r := p.mustRun(t, "init")
+	if strings.Contains(r.Stdout, "Wrote ") {
+		t.Errorf("the second init reported a write: %q", r.Stdout)
+	}
+	if !strings.Contains(r.Stdout, "already initialized") {
+		t.Errorf("stdout = %q, want it to say the queue was already there", r.Stdout)
+	}
+	if after := snapshot(t, dir); after != before {
+		t.Errorf("the second init changed the project:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// No marker anywhere up to the home directory: the command fails with exit 3,
+// names tq init on stderr, keeps stdout clean and creates nothing.
+func TestCommandsFailWithoutAProject(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"list"},
+		{"list", "--json"},
+		{"ready", "--json"},
+		{"add", "something"},
+		{"show", "TQ-0001"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Parallel()
+			dir := bareDir(t)
+			p := &project{dir: dir}
+
+			r := p.run(t, args...)
+			if r.Code != 3 {
+				t.Errorf("exit = %d, want 3\nstderr: %s", r.Code, r.Stderr)
 			}
-		}
-		if strings.Contains(r.Stdout, "TQ_WALK_FOREVER") {
-			t.Errorf("the note reached stdout: %q", r.Stdout)
-		}
-		// init still says what it always said, on the stream it always said it.
-		if !strings.Contains(r.Stdout, "Initialized task queue in "+realPath(t, p.dir, ".tasks")) {
-			t.Errorf("stdout = %q, want init's own line", r.Stdout)
-		}
-	})
-
-	// A project without Git had no bound, so the search already went as far as
-	// TQ_WALK_FOREVER would have taken it and excluded nothing. The store pins
-	// the guard itself; what a real process adds is the note reaching stderr,
-	// answered from the working directory tq was run in — and here that
-	// directory holds the project's own marker, the one file a mistake in the
-	// guard would name back at the caller (TQ-0064).
-	t.Run("a project without a repository excludes nothing", func(t *testing.T) {
-		t.Parallel()
-		p := newProject(t)
-		requireNoRepositoryAbove(t, p.dir)
-
-		r := p.mustRun(t, "init")
-		if !strings.Contains(r.Stdout, "Initialized task queue in "+realPath(t, p.dir, ".tasks")) {
-			t.Fatalf("stdout = %q, want init to have made this project its queue", r.Stdout)
-		}
-		for _, unwanted := range []string{"TQ_WALK_FOREVER", "was not used"} {
-			if strings.Contains(r.Stderr, unwanted) {
-				t.Errorf("stderr = %q, want no mention of %q: without a repository nothing bounded the search", r.Stderr, unwanted)
+			for _, want := range []string{".taskqueue.yaml", "tq init"} {
+				if !strings.Contains(r.Stderr, want) {
+					t.Errorf("stderr = %q, want it to mention %q", r.Stderr, want)
+				}
 			}
-		}
-	})
+			if r.Stdout != "" {
+				t.Errorf("stdout = %q, want the error on stderr alone", r.Stdout)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Errorf("the command created %d entries, want none", len(entries))
+			}
+		})
+	}
+}
 
-	t.Run("--json keeps stdout machine-readable", func(t *testing.T) {
-		t.Parallel()
-		p, marker := shadowed(t)
+// A marker whose task directory is gone is the one failure that knows where the
+// queue belongs. Following a bare "run tq init" from a subdirectory would fork a
+// second project, so the message names the marker's own directory instead.
+func TestAMissingQueueSaysWhereToInitialiseIt(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	if err := os.Remove(p.path(".tasks")); err != nil {
+		t.Fatal(err)
+	}
+	deep := p.path("src", "deep")
+	if err := mkdirAll(deep); err != nil {
+		t.Fatal(err)
+	}
 
-		r := p.mustRun(t, "init", "--json")
-		var out struct {
-			TaskDir string `json:"task_dir"`
-			Created bool   `json:"created"`
+	r := p.runIn(t, deep, nil, "list")
+	if r.Code != 3 {
+		t.Fatalf("exit = %d, want 3\nstderr: %s", r.Code, r.Stderr)
+	}
+	if want := `run "tq init" in ` + realPath(t, p.dir); !strings.Contains(r.Stderr, want) {
+		t.Errorf("stderr = %q, want it to say %q", r.Stderr, want)
+	}
+}
+
+// The nearest marker wins, and a .git in the way bounds nothing: a submodule
+// reads the superproject's queue rather than forking one (TQ-0059).
+func TestTheNearestMarkerWins(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "the parent's work")
+
+	submodule := p.path("vendor", "dep")
+	if err := mkdirAll(filepath.Join(submodule, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	var listed []taskJSON
+	p.runIn(t, submodule, nil, "list", "--json").JSON(t, &listed)
+	if len(listed) != 1 {
+		t.Errorf("a directory with its own .git listed %d tasks, want the superproject's 1", len(listed))
+	}
+	if _, err := os.Stat(filepath.Join(submodule, ".taskqueue.yaml")); !os.IsNotExist(err) {
+		t.Errorf("the submodule gained a marker of its own: %v", err)
+	}
+
+	// A marker of its own is what takes it off the parent's queue.
+	inner := p.path("service")
+	if err := mkdirAll(inner); err != nil {
+		t.Fatal(err)
+	}
+	sub := &project{dir: inner}
+	sub.mustRun(t, "init")
+	sub.mustRun(t, "add", "the service's work")
+
+	deep := filepath.Join(inner, "src")
+	if err := mkdirAll(deep); err != nil {
+		t.Fatal(err)
+	}
+	var below []taskJSON
+	p.runIn(t, deep, nil, "list", "--json").JSON(t, &below)
+	if len(below) != 1 || below[0].Title != "the service's work" {
+		t.Errorf("list below the nearer marker = %+v, want the service's own queue", below)
+	}
+}
+
+// TQ_WALK_FOREVER is gone: nothing the binary prints may still name it, and no
+// value of it may change what a command does.
+func TestWalkForeverIsGone(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+
+	// init first, so the guide read below is one this binary just generated.
+	for _, args := range [][]string{{"init"}, {"help"}} {
+		r := p.mustRun(t, args...)
+		if strings.Contains(r.Stdout+r.Stderr, "TQ_WALK_FOREVER") {
+			t.Errorf("tq %s still names TQ_WALK_FOREVER:\nstdout: %s\nstderr: %s", strings.Join(args, " "), r.Stdout, r.Stderr)
 		}
-		r.JSON(t, &out)
-		if want := realPath(t, p.dir, ".tasks"); out.TaskDir != want {
-			t.Errorf("task_dir = %q, want %q", out.TaskDir, want)
+	}
+	guide, err := os.ReadFile(p.path(".tasks", "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(guide), "TQ_WALK_FOREVER") {
+		t.Error("the generated guide still documents TQ_WALK_FOREVER")
+	}
+
+	// A marker above the home directory stays out of reach whatever the
+	// variable is set to.
+	above := bareDir(t)
+	dir := filepath.Join(above, "home", "project")
+	if err := mkdirAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	outer := &project{dir: above}
+	outer.mustRun(t, "init")
+	// Resolved, because the child process answers from the kernel's idea of its
+	// working directory and an unresolved HOME would not match it.
+	home := realPath(t, filepath.Join(above, "home"))
+
+	r := (&project{dir: dir}).runIn(t, dir, []string{"HOME=" + home, "TQ_WALK_FOREVER=true"}, "list")
+	if r.Code != 3 {
+		t.Errorf("exit = %d, want 3: the variable must not lift a bound that no longer exists\nstderr: %s", r.Code, r.Stderr)
+	}
+}
+
+// snapshot is every file under dir with its contents, so a test can say that a
+// command changed nothing at all.
+func snapshot(t *testing.T, dir string) string {
+	t.Helper()
+	var b strings.Builder
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
 		}
-		if !out.Created {
-			t.Error("created = false, want init to have made the repository its own queue")
+		body, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
 		}
-		if !strings.Contains(r.Stderr, marker) {
-			t.Errorf("stderr = %q, want the note even with --json", r.Stderr)
-		}
+		fmt.Fprintf(&b, "%s\n%s\n", path, body)
+		return nil
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
 }

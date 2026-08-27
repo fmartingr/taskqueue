@@ -100,15 +100,16 @@ func TestJSONStdoutIsDataOnly(t *testing.T) {
 	t.Parallel()
 	p := newProject(t)
 
-	// The first command creates the queue, which prints a note — on stderr.
+	// A successful --json command puts the data on stdout and nothing anywhere
+	// else.
 	first := p.mustRun(t, "add", "first task", "--json")
 	var created map[string]any
 	first.JSON(t, &created)
 	if created["id"] != "TQ-0001" {
 		t.Errorf("id = %v", created["id"])
 	}
-	if !strings.Contains(first.Stderr, "created") {
-		t.Errorf("the creation note should be on stderr, got %q", first.Stderr)
+	if first.Stderr != "" {
+		t.Errorf("stderr = %q, want nothing beside the data", first.Stderr)
 	}
 
 	// An error goes to stderr too, leaving stdout empty rather than half-written.

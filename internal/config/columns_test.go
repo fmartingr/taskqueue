@@ -26,7 +26,7 @@ columns:
 `
 
 func TestBoardDefaultsWithoutAConfig(t *testing.T) {
-	cfg, err := config.FindConfig(tqtest.RootWithGit(t))
+	cfg, err := config.FindConfig(tqtest.RootWithoutMarker(t))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestABoardWithoutADoneColumnLoads(t *testing.T) {
 
 func TestWriteConfigSeedsTheBoard(t *testing.T) {
 	// WriteConfigIfMissing only writes where there is no marker.
-	root := tqtest.RootWithGit(t)
+	root := tqtest.RootWithoutMarker(t)
 	if _, err := config.WriteConfigIfMissing(root, root+"/.tasks"); err != nil {
 		t.Fatalf("WriteConfigIfMissing: %v", err)
 	}

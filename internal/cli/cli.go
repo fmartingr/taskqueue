@@ -151,9 +151,11 @@ Usage:
   tq <command> [arguments]
 
 Commands:
-  init                            Create the %s directory and write the agent
-                                  guide (%s); prints where the guide is,
-                                  to reference from your own AGENTS.md/CLAUDE.md
+  init                            Create the queue in the current directory:
+                                  %s, the %s directory, and the
+                                  agent guide (%s); prints where
+                                  the guide is, to reference from your own
+                                  AGENTS.md/CLAUDE.md
   add <title> [flags]             Create a task
   list [flags]                    List tasks
   show <id> [--json]              Show one task
@@ -186,24 +188,36 @@ Server address (tq serve), highest precedence first:
   A committed host that is not loopback exposes the board on the network of
   everyone who clones the project; tq says so on start-up when it happens.
 
+Where the queue lives:
+  tq init creates %s and the task directory in the directory it is
+  run in, and nowhere else: no search, no adopting a project above, no
+  relocating to a repository root. Run it where you want the queue.
+
+  Every other command walks up from the current directory looking for
+  %s, stopping at your home directory, and uses the nearest one it
+  finds. From a directory outside your home directory there is no home to stop
+  at, so the walk runs to the filesystem root. With no marker at all it exits 3
+  and says to run tq init; it never creates a queue itself.
+
 Environment:
-  %s      Task directory to use instead of discovering %s
+  %s             Task directory to use instead of discovering %s; it
+                     overrides the marker for every command, tq init included
   DEV                Serve frontend assets from disk instead of the embedded copy
 
 Exit codes:
   0 success   1 general/validation error   2 task not found
-  3 %s directory missing and could not be created
+  3 no task queue found (run tq init)
 `
 
 func (c *cli) usage(w io.Writer) {
 	priorities := c.priorities()
 	fmt.Fprintf(w, usageText,
-		config.TaskDirName, filepath.Join(config.TaskDirName, guide.AgentsFileName),
+		config.ConfigFileName, config.TaskDirName, filepath.Join(config.TaskDirName, guide.AgentsFileName),
 		strings.Join(c.board().Names(), ", "),
 		strings.Join(priorities.Names(), ", "), priorities.Default(),
 		config.ConfigFileName, defaultHost+", "+defaultPort,
-		config.EnvTaskDir, config.TaskDirName,
-		config.TaskDirName)
+		config.ConfigFileName, config.ConfigFileName,
+		config.EnvTaskDir, config.TaskDirName)
 }
 
 // priorities is the vocabulary for help text and for the filters, which are
@@ -284,50 +298,25 @@ func (c *cli) runInit(args []string) int {
 		return code
 	}
 
-	// Through c.st(), like every other command: init in a subdirectory adopts
-	// the project's queue instead of forking a second one, and it reports what
-	// the others report. Init's whole job is telling a caller where the queue
-	// is, so it is the last command that should explain less than `tq list`
-	// does in the same directory (TQ-0062).
-	//
-	// c.st() falls back to creating at the repository root when there is nothing
-	// to find, and discovery stops there too (TQ-0017), so within a repository
-	// init cannot adopt a queue from outside it. Without a repository root there
-	// is no bound at all, which is what withinInvokedTree below answers for.
-	st, err := c.st()
+	// Not through c.st(): init is the one command that does not discover. It
+	// creates the project in the directory it was run in, so a marker above
+	// cannot adopt this directory and a repository root cannot relocate it —
+	// where the queue lives is the caller's decision, expressed by where they
+	// stood when they ran this (TQ-0085).
+	st, err := store.InitStore(c.dir)
 	if err != nil {
 		return c.fail(err)
 	}
 
-	// Only a task directory this project owns gets a marker and a guide.
-	// Discovery has no bound in a project without a repository root, so the
-	// store may belong to somebody else: writing a guide there would dirty
-	// another repository's working tree, and writing a marker here would bind
-	// this directory to their queue for good.
 	var written []string
-	if withinInvokedTree(st.Dir, c.dir) {
-		// A queue that predates the marker gets one now: init is the command
-		// that says "this project uses tq", and the file is what later
-		// commands find.
-		if st.ConfigWritten == "" {
-			config, err := config.WriteConfigIfMissing(c.dir, st.Dir)
-			if err != nil {
-				return c.fail(err)
-			}
-			st.ConfigWritten = config
-		}
-		if st.ConfigWritten != "" {
-			written = append(written, st.ConfigWritten)
-		}
-
-		guide, err := guide.SyncAgentsDocs(st)
-		if err != nil {
-			return c.fail(err)
-		}
-		written = append(written, guide...)
-	} else if !*jsonOut {
-		fmt.Fprintf(c.stderr, "note: %s was found above this directory; leaving it and its guide alone\n", st.Dir)
+	if st.ConfigWritten != "" {
+		written = append(written, st.ConfigWritten)
 	}
+	guides, err := guide.SyncAgentsDocs(st)
+	if err != nil {
+		return c.fail(err)
+	}
+	written = append(written, guides...)
 
 	if *jsonOut {
 		return c.printJSON(map[string]any{
@@ -353,25 +342,6 @@ func (c *cli) runInit(args []string) int {
 	fmt.Fprint(c.stdout, "\nInclude it in your preferred agent context file (AGENTS.md, CLAUDE.md, or\n"+
 		"whatever your tool reads) so agents pick up the task workflow.\n")
 	return exitOK
-}
-
-// withinInvokedTree reports whether a task directory belongs to the tree the
-// command was invoked in: the enclosing repository when there is one, and the
-// working directory otherwise. A directory further up belongs to whatever
-// project holds it, which may not be this one.
-func withinInvokedTree(taskDir, workingDir string) bool {
-	base, err := filepath.Abs(workingDir)
-	if err != nil {
-		return false
-	}
-	if root, ok := config.RepositoryRoot(base); ok {
-		base = root
-	}
-	rel, err := filepath.Rel(base, taskDir)
-	if err != nil {
-		return false
-	}
-	return rel == "." || !strings.HasPrefix(rel, "..")
 }
 
 func (c *cli) runAdd(args []string) int {
@@ -714,19 +684,12 @@ func (c *cli) runVersion(args []string) int {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+// st is the queue the command works on: the project at or above the working
+// directory. Every command but `tq init` goes through it, and none of them
+// creates anything — a directory with no project above it fails here, with a
+// message naming `tq init`.
 func (c *cli) st() (*store.Store, error) {
-	st, err := store.OpenStore(c.dir)
-	if err != nil {
-		return nil, err
-	}
-	if st.Created {
-		// stderr, so --json output stays machine-readable.
-		fmt.Fprintf(c.stderr, "note: created %s\n", st.Dir)
-		if marker, ok := store.ShadowedProjectMarker(c.dir); ok {
-			fmt.Fprintf(c.stderr, "note: the project marker %s is above this repository and was not used; set %s=true to search past the repository root\n", marker, config.EnvWalkForever)
-		}
-	}
-	return st, nil
+	return store.OpenStore(c.dir)
 }
 
 // tasks lists the queue and names on stderr every file the scan had to skip,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -67,20 +68,6 @@ func (b *syncBuffer) Reset() {
 	b.buf.Reset()
 }
 
-// requireNoQueueAbove fails a test whose premise is that nothing was excluded
-// when the machine it runs on says otherwise: TMPDIR may sit inside a project
-// that has its own queue, and the notice under test would then be correct. It
-// asks the store the same question the CLI asks rather than walking the tree
-// itself, so it cannot drift from the bound and the variables the real answer
-// takes into account — and it fails rather than skipping, because a skip that
-// only shows under -v is how this stops being noticed.
-func requireNoQueueAbove(t *testing.T, dir string) {
-	t.Helper()
-	if marker, ok := store.ShadowedProjectMarker(dir); ok {
-		t.Fatalf("%s sits above the fixture, so the notice this test says must not appear is correct", marker)
-	}
-}
-
 // newTestCLI returns a CLI rooted in a temporary project that already has a
 // task directory.
 func newTestCLI(t *testing.T) *testCLI {
@@ -94,13 +81,13 @@ func newTestCLI(t *testing.T) *testCLI {
 }
 
 // newBareCLI returns a CLI rooted in a fixture directory that is not a project
-// yet — the shape `tq init` is meant to turn into one. Its anchor is .git and
-// not the marker, because an absent marker is the premise: the repository bound
-// is then the only thing that can stop the walk climbing out of the temp
-// directory and into a developer's own queue (TQ-0053).
+// yet — the shape `tq init` is meant to turn into one. The fixture asserts that
+// no marker sits above it either, since an absent marker is the premise and a
+// walk that reached one would put every command here on a different queue
+// (TQ-0053).
 func newBareCLI(t *testing.T) *testCLI {
 	t.Helper()
-	return newCLIIn(t, tqtest.RootWithGit(t))
+	return newCLIIn(t, tqtest.RootWithoutMarker(t))
 }
 
 // newCLIIn returns a CLI running in dir. It is the only place a testCLI is
@@ -161,8 +148,8 @@ func TestCLIInit(t *testing.T) {
 		t.Fatalf("init did not create %s: %v", dir, err)
 	}
 
-	// Initialising twice is not an error: every command creates the directory
-	// on demand anyway.
+	// Initialising twice is not an error: the directory is already there and
+	// the marker is left exactly as it was.
 	out = tc.mustRun("init")
 	if !strings.Contains(out, "already initialized") {
 		t.Errorf("second init output = %q, want it to say the queue already exists", out)
@@ -726,10 +713,11 @@ func TestCLIReady(t *testing.T) {
 	}
 }
 
-func TestCLICreatesTaskDirOnDemand(t *testing.T) {
-	tc := newBareCLI(t)
+// Once init has made the queue, every command works from it and says nothing
+// about creating anything: there is nothing left for them to create.
+func TestCLIWorksOnTheQueueInitMade(t *testing.T) {
+	tc := newTestCLI(t)
 
-	// No `tq init` first: the directory appears when it is needed.
 	out := tc.mustRun("add", "First task")
 	if !strings.Contains(out, "Created TQ-0001") {
 		t.Errorf("add output = %q", out)
@@ -738,11 +726,10 @@ func TestCLICreatesTaskDirOnDemand(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "TQ-0001-first-task.md")); err != nil {
 		t.Fatalf("task file not written: %v", err)
 	}
-	if !strings.Contains(tc.stderr.String(), dir) {
-		t.Errorf("stderr should note the created directory, got %q", tc.stderr)
+	if tc.stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing: the queue was already there", tc.stderr)
 	}
 
-	// Reading commands work the same way, and say nothing once it exists.
 	var tasks []task.Task
 	tc.mustRunJSON(&tasks, "list", "--json")
 	if len(tasks) != 1 {
@@ -750,43 +737,25 @@ func TestCLICreatesTaskDirOnDemand(t *testing.T) {
 	}
 }
 
-func TestCLIReadCommandsCreateAnEmptyQueue(t *testing.T) {
+// A queue that cannot be made is init's problem to report, and it is a plain
+// error rather than "no project found": the project is right here.
+func TestCLIInitReportsAnUncreatableTaskDir(t *testing.T) {
 	tc := newBareCLI(t)
-
-	var tasks []task.Task
-	tc.mustRunJSON(&tasks, "ready", "--json")
-	if len(tasks) != 0 {
-		t.Errorf("ready = %+v, want an empty list", tasks)
-	}
-	if _, err := os.Stat(filepath.Join(tc.root, config.TaskDirName)); err != nil {
-		t.Errorf("%s should have been created: %v", config.TaskDirName, err)
-	}
-}
-
-func TestCLIReportsUncreatableTaskDir(t *testing.T) {
-	tc := newBareCLI(t)
-	file := filepath.Join(tc.root, "not-a-directory")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	tc.dir = filepath.Join(file, "sub")
-
-	// Fixtures are anchored, so creation falls back to the repository root:
-	// put a regular file where the task directory would go, or there is
-	// nothing uncreatable left to report. A permission bit would not do —
-	// uid 0 ignores it, and CI runs as root in a container — but no privilege
-	// makes a directory out of a file.
+	// A regular file where the task directory belongs. A permission bit would
+	// not do — uid 0 ignores it, and CI runs as root in a container — but no
+	// privilege makes a directory out of a file.
 	if err := os.WriteFile(filepath.Join(tc.root, config.TaskDirName), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, args := range [][]string{{"list"}, {"add", "x"}, {"ready"}} {
-		if code := tc.run(args...); code != exitProjectNotFound {
-			t.Errorf("tq %s = exit %d, want %d", strings.Join(args, " "), code, exitProjectNotFound)
-		}
-		if !strings.Contains(tc.stderr.String(), config.TaskDirName) {
-			t.Errorf("stderr should mention %s, got %q", config.TaskDirName, tc.stderr)
-		}
+	if code := tc.run("init"); code != exitError {
+		t.Errorf("tq init = exit %d, want %d", code, exitError)
+	}
+	if !strings.Contains(tc.stderr.String(), config.TaskDirName) {
+		t.Errorf("stderr should mention %s, got %q", config.TaskDirName, tc.stderr)
+	}
+	if tc.stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing", tc.stdout)
 	}
 }
 
@@ -859,123 +828,162 @@ func TestCLIEnvTaskDirOverride(t *testing.T) {
 	}
 }
 
-// Creating a local queue while a project sits above the repository is the
-// moment a developer's tasks appear to vanish, so that is where tq should name
-// the variable that would have found them — and it says so on every command
-// that can create one. `tq init` is the command whose whole job is telling a
-// caller where the queue is, so it is the last one that should explain less
-// than `tq list` does in the same directory (TQ-0062).
-func TestCLINamesAProjectTheBoundExcluded(t *testing.T) {
-	for _, command := range []string{"list", "init"} {
-		t.Run(command, func(t *testing.T) {
-			// The marker is what makes the directory above a project, and what
-			// discovery walked past; the queue beside it is incidental.
-			outer := tqtest.Root(t)
-			if _, err := store.InitStore(outer); err != nil {
-				t.Fatal(err)
-			}
-			repo := filepath.Join(outer, "project")
-			if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-				t.Fatal(err)
-			}
+// tq init makes the queue in the directory it is run in, and nowhere else: a
+// project above does not adopt it, and a repository root does not relocate it.
+// Forking in a subdirectory is the specified behaviour now, not the bug TQ-0047
+// filed (TQ-0085).
+func TestCLIInitCreatesTheQueueWhereItIsRun(t *testing.T) {
+	outer := newTestCLI(t)
+	outer.mustRun("add", "the parent's work")
 
-			tc := newCLIIn(t, repo)
-			tc.mustRun(command)
-
-			notice := tc.stderr.String()
-			for _, want := range []string{filepath.Join(outer, config.ConfigFileName), config.EnvWalkForever} {
-				if !strings.Contains(notice, want) {
-					t.Errorf("stderr = %q, want it to mention %q", notice, want)
-				}
-			}
-		})
-	}
-}
-
-// A directory that merely happens to be named .tasks is not a queue since the
-// marker arrived (TQ-0029), so one above the repository is nothing to warn
-// about: the note the old check printed here named a directory tq would not
-// have used even with the bound lifted.
-func TestCLIDoesNotNameABareTaskDirectoryAbove(t *testing.T) {
-	// No marker above: a directory named .tasks is all there is.
-	outer := tqtest.RootWithGit(t)
-	stray := filepath.Join(outer, config.TaskDirName)
-	if err := os.MkdirAll(stray, 0o755); err != nil {
+	nested := filepath.Join(outer.root, "src", "deep")
+	if err := os.MkdirAll(filepath.Join(nested, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	repo := filepath.Join(outer, "project")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	tc := newCLIIn(t, repo)
-	tc.mustRun("init")
-
-	// Named specifically rather than asserting the note is absent altogether: a
-	// developer whose TMPDIR sits inside a real project has one above the
-	// fixture, and that note would be correct.
-	if notice := tc.stderr.String(); strings.Contains(notice, stray) {
-		t.Errorf("stderr = %q, want no note about %s, which is not a queue", notice, stray)
-	}
-}
-
-// The other half of TQ-0062, fixed by TQ-0029's marker and never covered: init
-// in a vendored subdirectory that carries its own .tasks must resolve to the
-// project's queue and leave the stray directory exactly as it found it.
-func TestCLIInitIgnoresAStrayTaskDirectory(t *testing.T) {
-	tc := newBareCLI(t)
-	tc.mustRun("init")
-
-	vendored := filepath.Join(tc.root, "vendor", "dependency")
-	stray := filepath.Join(vendored, config.TaskDirName)
-	if err := os.MkdirAll(stray, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	sub := newCLIIn(t, nested)
 
 	var out struct {
 		TaskDir string   `json:"task_dir"`
 		Created bool     `json:"created"`
 		Written []string `json:"written"`
 	}
-	newCLIIn(t, vendored).mustRunJSON(&out, "init", "--json")
+	sub.mustRunJSON(&out, "init", "--json")
 
-	if want := filepath.Join(tc.root, config.TaskDirName); out.TaskDir != want {
-		t.Errorf("task_dir = %q, want the project's own queue %q", out.TaskDir, want)
+	if want := filepath.Join(nested, config.TaskDirName); out.TaskDir != want {
+		t.Errorf("task_dir = %q, want the queue in the directory init was run in, %q", out.TaskDir, want)
 	}
-	if out.Created {
-		t.Error("init created a second queue in the vendored directory")
+	if !out.Created {
+		t.Error("created = false, want true")
 	}
-	if len(out.Written) != 0 {
-		t.Errorf("written = %v, want nothing: the project already had its marker and guide", out.Written)
+	marker := filepath.Join(nested, config.ConfigFileName)
+	if !slices.Contains(out.Written, marker) {
+		t.Errorf("written = %v, want it to include %q", out.Written, marker)
 	}
-	entries, err := os.ReadDir(stray)
+	if _, err := os.Stat(filepath.Join(nested, config.TaskDirName, guide.AgentsFileName)); err != nil {
+		t.Errorf("the guide belongs beside the queue init made: %v", err)
+	}
+
+	// And the commands below it use the nearer marker, not the parent's.
+	sub.reset()
+	if listing := sub.mustRun("list"); strings.Contains(listing, "the parent's work") {
+		t.Errorf("the subdirectory still reads the parent's queue: %q", listing)
+	}
+}
+
+// Running init twice changes nothing the second time: the marker is the user's
+// file and the queue is already there.
+func TestCLIInitTwiceChangesNothing(t *testing.T) {
+	tc := newBareCLI(t)
+	tc.mustRun("init")
+
+	marker := filepath.Join(tc.root, config.ConfigFileName)
+	before, err := os.ReadFile(marker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Errorf("the stray directory was adopted and written into: %d entries", len(entries))
+	guidePath := filepath.Join(tc.root, config.TaskDirName, guide.AgentsFileName)
+	beforeGuide, err := os.ReadFile(guidePath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(vendored, config.ConfigFileName)); !os.IsNotExist(err) {
-		t.Errorf("the vendored directory gained a marker of its own: %v", err)
+
+	tc.reset()
+	var out struct {
+		TaskDir string   `json:"task_dir"`
+		Created bool     `json:"created"`
+		Written []string `json:"written"`
+	}
+	tc.mustRunJSON(&out, "init", "--json")
+
+	if out.Created {
+		t.Error("created = true on the second init")
+	}
+	if len(out.Written) != 0 {
+		t.Errorf("written = %v, want nothing rewritten", out.Written)
+	}
+	if after, err := os.ReadFile(marker); err != nil || string(after) != string(before) {
+		t.Errorf("the marker changed: %v\n%s", err, after)
+	}
+	if after, err := os.ReadFile(guidePath); err != nil || string(after) != string(beforeGuide) {
+		t.Errorf("the guide changed: %v", err)
 	}
 }
 
-// With nothing above it, the notice stays a single line.
-func TestCLIDoesNotInventAnExcludedQueue(t *testing.T) {
-	tc := newBareCLI(t)
-	requireNoQueueAbove(t, tc.root)
-	tc.mustRun("list")
+// Every command but init needs a project to exist, and says which command makes
+// one. Nothing is created on the way to that message.
+func TestCLIRefusesToWorkWithoutAProject(t *testing.T) {
+	for _, args := range [][]string{
+		{"list"},
+		{"ready"},
+		{"add", "something"},
+		{"show", "TQ-0001"},
+		{"note", "TQ-0001", "text"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			tc := newBareCLI(t)
 
-	if strings.Contains(tc.stderr.String(), config.EnvWalkForever) {
-		t.Errorf("stderr = %q, want no mention of %s when nothing was excluded", tc.stderr, config.EnvWalkForever)
+			if code := tc.run(args...); code != exitProjectNotFound {
+				t.Errorf("tq %s = exit %d, want %d\nstderr: %s", strings.Join(args, " "), code, exitProjectNotFound, tc.stderr)
+			}
+			for _, want := range []string{config.ConfigFileName, "tq init"} {
+				if !strings.Contains(tc.stderr.String(), want) {
+					t.Errorf("stderr = %q, want it to mention %q", tc.stderr, want)
+				}
+			}
+			if tc.stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want nothing but the error on stderr", tc.stdout)
+			}
+			entries, err := os.ReadDir(tc.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Errorf("the command created %d entries, want none", len(entries))
+			}
+		})
 	}
 }
 
-// The reason this fix was reverted once: with init discovering, an unanchored
-// fixture walks out of its temp directory. TQ-0017's bound does not help there,
-// since a bare temp directory has no repository root to stop at, so the fixture
-// carries its own anchor. This drives the shared fixture rather than building
-// one: give newBareCLI a bare t.TempDir() back and this is what fails.
+// The nearest marker wins, and a .git in between bounds nothing (TQ-0059).
+func TestCLIUsesTheNearestMarker(t *testing.T) {
+	outer := newTestCLI(t)
+	outer.mustRun("add", "the parent's work")
+
+	// A submodule-shaped directory: its own .git, no marker of its own.
+	submodule := filepath.Join(outer.root, "vendor", "dep")
+	if err := os.MkdirAll(filepath.Join(submodule, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if listing := newCLIIn(t, submodule).mustRun("list"); !strings.Contains(listing, "the parent's work") {
+		t.Errorf("a directory with its own .git lost the project's queue: %q", listing)
+	}
+	if _, err := os.Stat(filepath.Join(submodule, config.TaskDirName)); !os.IsNotExist(err) {
+		t.Error("a command forked a queue inside the submodule")
+	}
+
+	// A marker of its own is what takes it off the parent's queue.
+	service := filepath.Join(outer.root, "service")
+	if err := os.MkdirAll(service, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inner := newCLIIn(t, service)
+	inner.mustRun("init")
+	inner.mustRun("add", "the service's work")
+	inner.reset()
+
+	deep := filepath.Join(service, "src")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	listing := newCLIIn(t, deep).mustRun("list")
+	if !strings.Contains(listing, "the service's work") || strings.Contains(listing, "the parent's work") {
+		t.Errorf("the nearest marker did not win: %q", listing)
+	}
+}
+
+// The fixture must not be able to reach a queue above its temporary directory.
+// This drives the shared fixture rather than building one: give newBareCLI a
+// bare t.TempDir() back and the guard inside it is what fails.
 func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 	tc := newBareCLI(t)
 
@@ -1004,156 +1012,6 @@ func TestCLIFixturesCannotReachAQueueAboveTempDir(t *testing.T) {
 	}
 }
 
-// tq init from a subdirectory must adopt the project's queue, not fork one.
-// The project here is deliberately not a Git repository, which is the shape
-// that still breaks: when there is a repository root, taskDirTarget already
-// stops at it and init lands in the right place by accident.
-//
-// So no .git may sit anywhere above this fixture — an anchor there is what made
-// the fork assertion below unable to fail, because an init that lost sight of
-// the project's marker would land at that anchor rather than in the
-// subdirectory (TQ-0064). The enclosing marker is the barrier instead: it is
-// what discovery looks for, so it stops the marker walk climbing out of the
-// temp directory just as well, and the nearer marker the project owns is the
-// one that wins. The repository walk has no such barrier, which is why the
-// fixture asserts the absence rather than arranging it.
-func TestCLIInitFindsTheQueueAbove(t *testing.T) {
-	outer := tqtest.RootWithoutGit(t)
-
-	project := filepath.Join(outer, "project")
-	nested := filepath.Join(project, "backend")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Directly, not through store.InitStore: the enclosing marker would send it
-	// one level up, and the point here is a queue the project owns. The marker
-	// is what makes it the project's queue rather than a directory that happens
-	// to be named .tasks.
-	if err := os.MkdirAll(filepath.Join(project, config.TaskDirName), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(project, config.ConfigFileName), []byte("version: 1\npath: "+config.TaskDirName+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	newCLIIn(t, project).mustRun("add", "existing work")
-
-	sub := newCLIIn(t, nested)
-
-	var out struct {
-		TaskDir string `json:"task_dir"`
-		Created bool   `json:"created"`
-	}
-	sub.mustRunJSON(&out, "init", "--json")
-
-	if want := filepath.Join(project, config.TaskDirName); out.TaskDir != want {
-		t.Errorf("task_dir = %q, want the project's queue %q", out.TaskDir, want)
-	}
-	if out.Created {
-		t.Error("created = true, want false: the queue already existed")
-	}
-	// The fork this test exists for: with no .git anywhere, an init that lost
-	// the project's marker has nowhere to fall back to but the directory it was
-	// run in.
-	if _, err := os.Stat(filepath.Join(nested, config.TaskDirName)); !os.IsNotExist(err) {
-		t.Error("init forked a second queue in the subdirectory")
-	}
-	// And the nearer marker is the one that decides: the enclosing project has
-	// one too, and adopting it would skip past the project the caller is in.
-	if _, err := os.Stat(filepath.Join(outer, config.TaskDirName)); !os.IsNotExist(err) {
-		t.Error("init created a queue at the marker above the project")
-	}
-	sub.reset()
-	if listing := sub.mustRun("list"); !strings.Contains(listing, "existing work") {
-		t.Errorf("the subdirectory lost sight of the project's work: %q", listing)
-	}
-}
-
-// The bound TQ-0017 added is what makes the above safe: discovery must not
-// reach a queue outside the repository, or init adopts it and creates nothing.
-func TestCLIInitDoesNotAdoptAQueueOutsideTheRepository(t *testing.T) {
-	outer := tqtest.Root(t)
-	outsideStore, err := store.InitStore(outer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The premise, asserted rather than assumed: there has to be a queue
-	// outside for "not adopted" to mean anything, and a fixture that quietly
-	// stopped making one would leave this test asserting nothing.
-	info, err := os.Stat(outsideStore.Dir)
-	if err != nil {
-		t.Fatalf("the queue outside the repository was not created at %s: %v", outsideStore.Dir, err)
-	}
-	if !info.IsDir() {
-		t.Fatalf("%s is not a directory, so there is no queue outside for this test to refuse", outsideStore.Dir)
-	}
-	if want := filepath.Join(outer, config.TaskDirName); outsideStore.Dir != want {
-		t.Fatalf("the queue outside the repository is at %q, want %q: it has to sit where the walk would reach it", outsideStore.Dir, want)
-	}
-	repo := filepath.Join(outer, "project")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	tc := newCLIIn(t, repo)
-
-	var out struct {
-		TaskDir string `json:"task_dir"`
-		Created bool   `json:"created"`
-	}
-	tc.mustRunJSON(&out, "init", "--json")
-
-	if want := filepath.Join(repo, config.TaskDirName); out.TaskDir != want {
-		t.Errorf("task_dir = %q, want the repository's own queue %q", out.TaskDir, want)
-	}
-	if !out.Created {
-		t.Error("created = false, want true: the repository had no queue")
-	}
-}
-
-// The other half of the pair: with nothing to adopt, init from a deep
-// subdirectory creates one queue and puts it at the repository root, so an
-// agent working below does not scatter task directories around the tree
-// (TQ-0047). The marker and the guide go with the queue, since together they
-// are what makes the root the project.
-func TestCLIInitCreatesAtTheRepositoryRoot(t *testing.T) {
-	// No marker in the fixture, and the repository bound hides any above it:
-	// the repository is the anchor and the bound at once.
-	root := tqtest.RootWithGit(t)
-	nested := filepath.Join(root, "src", "deep")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	tc := newCLIIn(t, nested)
-	var out struct {
-		TaskDir string `json:"task_dir"`
-		Created bool   `json:"created"`
-	}
-	tc.mustRunJSON(&out, "init", "--json")
-
-	want := filepath.Join(root, config.TaskDirName)
-	if out.TaskDir != want {
-		t.Errorf("task_dir = %q, want the repository root's queue %q", out.TaskDir, want)
-	}
-	if !out.Created {
-		t.Error("created = false, want true: the repository had no queue")
-	}
-	for _, dir := range []string{nested, filepath.Join(root, "src")} {
-		if _, err := os.Stat(filepath.Join(dir, config.TaskDirName)); !os.IsNotExist(err) {
-			t.Errorf("init made a queue in %s, want only the one at the repository root", dir)
-		}
-		if _, err := os.Stat(filepath.Join(dir, config.ConfigFileName)); !os.IsNotExist(err) {
-			t.Errorf("init wrote a marker in %s, binding it to a queue of its own", dir)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, config.ConfigFileName)); err != nil {
-		t.Errorf("the marker belongs at the repository root: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(want, guide.AgentsFileName)); err != nil {
-		t.Errorf("the guide belongs in the queue at the repository root: %v", err)
-	}
-}
-
 // The CLI fixtures build their own store, so they need the same isolation the
 // store fixtures have.
 func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
@@ -1175,56 +1033,46 @@ func TestCLIFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 	}
 }
 
-// tq init must not write a guide into a task directory belonging to another
-// project. The fixture has no repository root, which is the shape where
-// discovery has no bound; its marker is what stops the walk, and the queue that
-// marker names is the one the guide must be kept out of.
-func TestCLIInitDoesNotWriteTheGuideOutsideTheInvokedTree(t *testing.T) {
-	root := tqtest.Root(t)
-
-	outside := filepath.Join(root, config.TaskDirName)
-	if err := os.MkdirAll(outside, 0o755); err != nil {
+// A project above the directory init is run in keeps its queue and its guide:
+// init writes into the queue it just made, and touches nothing else.
+func TestCLIInitLeavesTheProjectAboveAlone(t *testing.T) {
+	outer := newTestCLI(t)
+	// Removed so a guide found there afterwards can only have been written by
+	// the init below.
+	outerGuide := filepath.Join(outer.root, config.TaskDirName, guide.AgentsFileName)
+	if err := os.Remove(outerGuide); err != nil {
 		t.Fatal(err)
 	}
-	deep := filepath.Join(root, "projects", "foo")
+
+	deep := filepath.Join(outer.root, "projects", "foo")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	tc := newCLIIn(t, deep)
-	tc.mustRun("init")
-
-	if _, err := os.Stat(filepath.Join(outside, guide.AgentsFileName)); !os.IsNotExist(err) {
-		t.Errorf("init wrote a guide into %s, which belongs to another project", outside)
-	}
-	if strings.Contains(tc.stdout.String(), "Wrote ") {
-		t.Errorf("init reported a write it must not make: %q", tc.stdout)
-	}
-	if !strings.Contains(tc.stderr.String(), outside) {
-		t.Errorf("stderr should say which directory was left alone, got %q", tc.stderr)
-	}
-}
-
-// The ordinary cases must keep their guide: init at the root of a project, and
-// init anywhere inside a repository.
-func TestCLIInitWritesTheGuideInsideTheInvokedTree(t *testing.T) {
-	tc := newTestCLI(t)
-	guide := filepath.Join(tc.root, config.TaskDirName, guide.AgentsFileName)
-	if _, err := os.Stat(guide); err != nil {
-		t.Fatalf("guide not written at the project root: %v", err)
-	}
-
-	deep := filepath.Join(tc.root, "src", "deep")
-	if err := os.MkdirAll(deep, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(guide); err != nil {
 		t.Fatal(err)
 	}
 	newCLIIn(t, deep).mustRun("init")
 
-	if _, err := os.Stat(guide); err != nil {
-		t.Errorf("init inside the repository should still write the guide: %v", err)
+	if _, err := os.Stat(outerGuide); !os.IsNotExist(err) {
+		t.Errorf("init wrote a guide into %s, which belongs to the project above: %v", outer.root, err)
+	}
+	if _, err := os.Stat(filepath.Join(deep, config.TaskDirName, guide.AgentsFileName)); err != nil {
+		t.Errorf("init did not write the guide beside the queue it made: %v", err)
+	}
+}
+
+// The guide is rewritten wherever init runs, so a project whose guide went
+// missing gets it back by running init at its root.
+func TestCLIInitRestoresTheGuide(t *testing.T) {
+	tc := newTestCLI(t)
+	guidePath := filepath.Join(tc.root, config.TaskDirName, guide.AgentsFileName)
+	if _, err := os.Stat(guidePath); err != nil {
+		t.Fatalf("guide not written at the project root: %v", err)
+	}
+	if err := os.Remove(guidePath); err != nil {
+		t.Fatal(err)
+	}
+
+	tc.mustRun("init")
+	if _, err := os.Stat(guidePath); err != nil {
+		t.Errorf("init should have written the guide back: %v", err)
 	}
 }
 
@@ -1285,6 +1133,7 @@ func TestCLIFollowsTheConfigPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tc.root, config.ConfigFileName), []byte("version: 1\npath: docs/queue\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	tc.mustRun("init")
 	tc.mustRun("add", "configured")
 
 	if _, err := os.Stat(filepath.Join(tc.root, "docs", "queue")); err != nil {
@@ -1623,6 +1472,7 @@ func TestCLIRejectsAStatusTheBoardHasNoColumnFor(t *testing.T) {
 func TestCLIDoneSaysWhenNoColumnClaimsIt(t *testing.T) {
 	tc := newBareCLI(t)
 	tqtest.WriteConfig(t, tc.root, "version: 1\npath: .tasks\ncolumns:\n  - {name: a}\n  - {name: b}\n")
+	tc.mustRun("init")
 	tc.mustRun("add", "Something")
 
 	if code := tc.run("done", "TQ-0001"); code != exitError {

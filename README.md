@@ -43,7 +43,7 @@ only needed at build time.
 
 ```bash
 cd your-project
-tq init                                        # mandatory: .tasks/ and .taskqueue.yaml
+tq init                                        # mandatory: creates .tasks/ and .taskqueue.yaml here
 tq add "Implement REST API" --priority high --label backend
 tq add "Build Kanban board" --label frontend --depends-on TQ-0001
 tq ready                                       # what can be picked up right now
@@ -53,13 +53,13 @@ tq done TQ-0001
 tq serve                                       # board on http://127.0.0.1:7331
 ```
 
-`tq init` is **mandatory**. It creates `.tasks/` (at the root of the enclosing
-Git repository, so running `tq` from a subdirectory does not scatter task
-directories around the tree) and writes `.taskqueue.yaml` with the project
-configuration. Other commands need both of those to exist. It is harmless to
-repeat: besides the directory and the config it writes `.tasks/AGENTS.md` — a
-short CLI cheat sheet for coding agents, generated from the statuses, priorities
-and exit codes the binary actually implements.
+`tq init` is **mandatory**, and it creates the queue **in the directory you run
+it in** — `.tasks/` and `.taskqueue.yaml`, side by side, with no searching and
+no guessing. Run it at the root of your project. Other commands need both of
+those files to exist and never create them. It is harmless to repeat: besides
+the directory and the config it writes `.tasks/AGENTS.md` — a short CLI cheat
+sheet for coding agents, generated from the statuses, priorities and exit codes
+the binary actually implements.
 
 Point your agents at it yourself, by referencing that guide from your
 `AGENTS.md`, `CLAUDE.md` or whatever your tool reads — an `@.tasks/AGENTS.md`
@@ -120,7 +120,7 @@ than silently making it ready, so a typo shows up as blocked work.
 
 ### Where the tasks live
 
-`tq init` writes a marker at the repository root:
+`tq init` writes a marker in the directory it is run in:
 
 ```yaml
 # .taskqueue.yaml
@@ -128,15 +128,30 @@ version: 1
 path: .tasks
 ```
 
-That file is what `tq` looks for, walking up from the current directory and
-stopping at the repository root, so any subdirectory of the project reaches the
-same queue and a marker outside the repository is none of its business.
+There are two rules, and nothing else:
+
+- **`tq init` creates the queue where you run it.** It never searches, never
+  adopts a project above, never relocates to a repository root. The folder you
+  are standing in is the answer, which makes a queue for a subdirectory a
+  matter of `cd`-ing there and running it again.
+- **Every other command walks up for the marker, and stops at your home
+  directory.** The nearest one wins, so any subdirectory of a project reaches
+  the same queue, and a nested project takes over from its own root down. With
+  no marker at or above the current directory the command exits `3` and tells
+  you to run `tq init`; it never creates a queue of its own.
+
+A marker at `~/.taskqueue.yaml` is usable — the home directory is checked and
+then the walk stops. From a directory that is not under your home directory at
+all — `/opt/thing`, a container's `/app`, a temp directory — there is no home to
+stop at, so the walk runs to the filesystem root instead and will use any marker
+it meets on the way.
+
 `path` is resolved against the directory holding the config — never against the
 working directory — so the committed file means the same thing on every machine,
 and moving the queue is a one-line edit.
 
 The marker is the only thing `tq` looks for. A directory that happens to be
-called `.tasks`, with no marker above it, is not adopted: guessing at names on
+called `.tasks`, with no marker beside it, is not adopted: guessing at names on
 the way up is exactly what this replaces. You never have to write the file by
 hand — `tq init` creates the directory and the marker together, which is why
 it is mandatory. `tq` never rewrites a config you wrote.
@@ -146,9 +161,8 @@ file written by a newer `tq` still reads here, and unknown keys are ignored. A
 file declaring a version this binary does not understand is an error that says
 so, rather than a silent partial read.
 
-`TQ_DIR=/path/to/.tasks` overrides the search and `path` alike.
-`TQ_WALK_FOREVER=true` lets the search continue past the repository root, for
-one queue shared above several repositories.
+`TQ_DIR=/path/to/.tasks` overrides the search and `path` alike, for every
+command including `tq init`.
 
 ### Where the server binds
 
@@ -349,7 +363,7 @@ one. Removing the `priorities` key restores the built-in `urgent`, `high`,
 | `0` | success |
 | `1` | general or validation error |
 | `2` | task not found |
-| `3` | the `.tasks` directory is missing and could not be created |
+| `3` | no task queue found — run `tq init` |
 
 A task file that will not parse — a merge conflict in a committed `.tasks/`, a
 key the format does not have — does not fail a listing. `tq list` and `tq ready`
@@ -377,9 +391,10 @@ do not want and the task comes back.
 ## CLI reference
 
 ```text
-tq init                            Create .tasks/ and .taskqueue.yaml with
-                                   the project configuration, and refresh
-                                   the agent instructions. Mandatory.
+tq init                            Create .tasks/ and .taskqueue.yaml in the
+                                   current directory, and refresh the agent
+                                   instructions. Mandatory, and the only
+                                   command that creates a queue.
 tq add <title> [flags]             --priority --assignee --label --depends-on --body --status --json
 tq list [flags]                    --status --priority --label --assignee --json
 tq show <id> [--json]              Frontmatter fields followed by the Markdown body

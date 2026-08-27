@@ -42,9 +42,39 @@ func TestInitStore(t *testing.T) {
 	}
 }
 
-func TestOpenStoreCreatesTaskDirOnDemand(t *testing.T) {
+// `tq init` is the only thing that creates a queue (TQ-0085). A marker whose
+// task directory is not on disk is a project a reading command cannot serve,
+// and inventing the directory is what that rule forbids — so the failure names
+// the marker that made the claim, the directory it named, and the command that
+// would put it there.
+func TestOpenStoreCreatesNothing(t *testing.T) {
 	root := tqtest.Root(t)
+	declared := filepath.Join(root, config.TaskDirName)
 
+	_, err := store.OpenStore(root)
+	if !errors.Is(err, store.ErrProjectNotFound) {
+		t.Fatalf("err = %v, want ErrProjectNotFound", err)
+	}
+	for _, want := range []string{filepath.Join(root, config.ConfigFileName), declared, "tq init"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+	// And where to run it. Init creates the queue where it stands, so a bare
+	// "run tq init" followed from a subdirectory forks a second project
+	// instead of repairing this one.
+	if want := `run "tq init" in ` + root; !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to say %q", err, want)
+	}
+	if _, err := os.Stat(declared); !os.IsNotExist(err) {
+		t.Errorf("OpenStore created the task directory: %v", err)
+	}
+
+	// Once init has made it, the same call finds it and reports no creation of
+	// its own.
+	if _, err := store.InitStore(root); err != nil {
+		t.Fatal(err)
+	}
 	st, err := store.OpenStore(root)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -52,66 +82,57 @@ func TestOpenStoreCreatesTaskDirOnDemand(t *testing.T) {
 	if want := filepath.Join(root, config.TaskDirName); st.Dir != want {
 		t.Errorf("Dir = %q, want %q", st.Dir, want)
 	}
+	if st.Created {
+		t.Error("Created = true, want false: OpenStore never creates anything")
+	}
+}
+
+// Init creates the project where it is run and nowhere else: not at a
+// repository root, and not at the marker of a project above.
+func TestInitStoreCreatesWhereItIsRun(t *testing.T) {
+	outer := tqtest.Root(t)
+	nested := filepath.Join(outer, "src", "deep")
+	if err := os.MkdirAll(filepath.Join(nested, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.InitStore(nested)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if want := filepath.Join(nested, config.TaskDirName); st.Dir != want {
+		t.Errorf("Dir = %q, want the queue in the directory init was run in, %q", st.Dir, want)
+	}
 	if !st.Created {
-		t.Error("Created should report that OpenStore made the directory")
+		t.Error("Created = false, want true")
 	}
-	if info, err := os.Stat(st.Dir); err != nil || !info.IsDir() {
-		t.Fatalf("task directory not created: %v", err)
+	if want := filepath.Join(nested, config.ConfigFileName); st.ConfigWritten != want {
+		t.Errorf("ConfigWritten = %q, want %q", st.ConfigWritten, want)
 	}
-
-	// Opening it again finds the existing directory instead of recreating it.
-	again, err := store.OpenStore(root)
-	if err != nil {
-		t.Fatalf("second OpenStore: %v", err)
-	}
-	if again.Dir != st.Dir || again.Created {
-		t.Errorf("second OpenStore = %+v, want the same directory with Created=false", again)
+	if _, err := os.Stat(filepath.Join(outer, config.TaskDirName)); !os.IsNotExist(err) {
+		t.Errorf("init made a queue at the project above it: %v", err)
 	}
 }
 
-func TestOpenStoreCreatesAtTheRepositoryRoot(t *testing.T) {
-	// The repository bound is the thing under test, so the fixture is anchored
-	// by .git and carries no marker: with one, the marker would decide and the
-	// fallback below it would never run.
-	root := tqtest.RootWithGit(t)
-	nested := filepath.Join(root, "src", "deep")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// A new task directory belongs next to .git, not in whichever
-	// subdirectory the agent happened to be standing in.
-	st, err := store.OpenStore(nested)
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	if want := filepath.Join(root, config.TaskDirName); st.Dir != want {
-		t.Errorf("Dir = %q, want %q", st.Dir, want)
-	}
-	if _, err := os.Stat(filepath.Join(nested, config.TaskDirName)); err == nil {
-		t.Errorf("no %s should have been created in the subdirectory", config.TaskDirName)
-	}
-}
-
-func TestOpenStoreReportsUncreatableDir(t *testing.T) {
-	root := tqtest.Root(t)
-	file := filepath.Join(root, "not-a-directory")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// The root is anchored, so creation falls back to the place its marker
-	// names: put a regular file there too. A permission bit would not do —
-	// uid 0 ignores it, and CI runs as root in a container — but no privilege
-	// makes a directory out of a file.
+// Nothing can be created below a regular file, and init says so rather than
+// leaving a caller with a filesystem error nobody can act on.
+func TestInitStoreReportsAnUncreatableDir(t *testing.T) {
+	root := tqtest.RootWithoutMarker(t)
+	// A regular file where the task directory belongs. A permission bit would
+	// not do — uid 0 ignores it, and CI runs as root in a container — but no
+	// privilege makes a directory out of a file.
 	if err := os.WriteFile(filepath.Join(root, config.TaskDirName), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Nothing can be created below a regular file, so this is still "no usable
-	// task directory" rather than a filesystem error nobody can act on.
-	_, err := store.OpenStore(filepath.Join(file, "sub"))
-	if !errors.Is(err, store.ErrProjectNotFound) {
-		t.Errorf("err = %v, want ErrProjectNotFound", err)
+	_, err := store.InitStore(root)
+	if err == nil {
+		t.Fatal("InitStore() = nil error, want one for a task directory that cannot exist")
+	}
+	// Not a missing project: the project is right here and its queue cannot be
+	// made, which is a plain error rather than "run tq init".
+	if errors.Is(err, store.ErrProjectNotFound) {
+		t.Errorf("err = %v, want it not to read as a missing project", err)
 	}
 }
 
@@ -1160,27 +1181,61 @@ func TestDiscoverTaskDirWalksUp(t *testing.T) {
 	}
 }
 
+// With no marker to find, the message has to say what was looked for, where,
+// and what to run about it: "no task queue found" alone leaves a caller with
+// nothing to do next.
 func TestDiscoverTaskDirNotFound(t *testing.T) {
-	// No marker: its absence is the case under test, so .git is the anchor.
-	_, err := store.DiscoverTaskDir(tqtest.RootWithGit(t))
-	if !errors.Is(err, store.ErrProjectNotFound) {
-		t.Errorf("err = %v, want ErrProjectNotFound", err)
-	}
-}
-
-// A project without Git is the shape where the search has no bound at all: it
-// runs to the filesystem root and finds nothing. What it says then is its own
-// message, and it has to stay that way — the bounded one names a repository
-// root that does not exist here, and offers to lift a bound that was never
-// applied (TQ-0064).
-func TestDiscoverTaskDirWithoutARepositoryOrAMarker(t *testing.T) {
-	root := tqtest.RootWithoutAnchor(t)
+	root := tqtest.RootWithoutMarker(t)
 
 	_, err := store.DiscoverTaskDir(root)
 	if !errors.Is(err, store.ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
-	want := fmt.Sprintf("%s (no %s in %s or any parent directory)", store.ErrProjectNotFound, config.ConfigFileName, root)
+	for _, want := range []string{config.ConfigFileName, root, "tq init"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// A marker whose task directory is missing is the one case that knows where
+// init belongs, and a subdirectory is where following a bare hint would fork a
+// second project. The message has to name the marker's own directory there.
+func TestDiscoverTaskDirSaysWhereToInitialiseAMissingQueue(t *testing.T) {
+	root := tqtest.Root(t)
+	nested := filepath.Join(root, "src", "deep")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.DiscoverTaskDir(nested)
+	if !errors.Is(err, store.ErrProjectNotFound) {
+		t.Fatalf("err = %v, want ErrProjectNotFound", err)
+	}
+	if want := `run "tq init" in ` + root; !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to say %q rather than a bare hint that would fork a queue here", err, want)
+	}
+}
+
+// A directory outside the home directory cannot reach the bound, so the walk
+// runs out at the filesystem root instead and says so without naming a stop it
+// never made.
+func TestDiscoverTaskDirOutsideTheHomeDirectoryRunsOutOfTree(t *testing.T) {
+	root := tqtest.RootWithoutMarker(t)
+	// A home directory the fixture is demonstrably not under, so the branch is
+	// the one under test rather than an accident of where TMPDIR points.
+	t.Setenv("HOME", filepath.Join(tqtest.RootWithoutMarker(t), "home"))
+
+	_, err := store.DiscoverTaskDir(root)
+	if !errors.Is(err, store.ErrProjectNotFound) {
+		t.Fatalf("err = %v, want ErrProjectNotFound", err)
+	}
+	abs, absErr := filepath.Abs(root)
+	if absErr != nil {
+		t.Fatal(absErr)
+	}
+	want := fmt.Sprintf("%s: no %s in %s or any parent directory; run \"tq init\" to create one",
+		store.ErrProjectNotFound, config.ConfigFileName, abs)
 	if err.Error() != want {
 		t.Errorf("err = %q, want %q", err, want)
 	}
@@ -1435,78 +1490,43 @@ func TestUpdateConvergesAfterAnInterruptedMove(t *testing.T) {
 	}
 }
 
-// A queue above a project must not capture it: a developer who once ran tq in
-// their home directory would otherwise have every new repository file into it.
-func TestDiscoverTaskDirStopsAtTheRepositoryRoot(t *testing.T) {
+// A repository root is not a boundary any more, and a .git in the way must not
+// hide the project the marker declares — which is what made a queue fork inside
+// a submodule (TQ-0059).
+func TestDiscoverTaskDirWalksPastAGitDirectory(t *testing.T) {
 	outer := tqtest.Root(t)
 	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
-	repo := filepath.Join(outer, "project")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+	submodule := filepath.Join(outer, "vendor", "dep")
+	if err := os.MkdirAll(filepath.Join(submodule, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := store.DiscoverTaskDir(repo)
-	if !errors.Is(err, store.ErrProjectNotFound) {
-		t.Fatalf("err = %v, want ErrProjectNotFound rather than the queue above the repository", err)
-	}
-	// The message has to explain itself: the queue is plainly there, one level
-	// up, so "not found" alone reads as a bug.
-	for _, want := range []string{"repository root", config.EnvWalkForever} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("err = %q, want it to mention %q", err, want)
-		}
-	}
-}
-
-func TestDiscoverTaskDirWalksPastTheRepositoryRootWhenAsked(t *testing.T) {
-	outer := tqtest.Root(t)
-	if _, err := store.InitStore(outer); err != nil {
-		t.Fatal(err)
-	}
-	repo := filepath.Join(outer, "project")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(config.EnvWalkForever, "true")
-
-	dir, err := store.DiscoverTaskDir(repo)
+	dir, err := store.DiscoverTaskDir(submodule)
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
 	if want := filepath.Join(outer, config.TaskDirName); dir != want {
-		t.Errorf("dir = %q, want %q", dir, want)
+		t.Errorf("dir = %q, want the enclosing project's queue %q", dir, want)
 	}
 }
 
-// Only "true" lifts the bound; anything else leaves the default in place.
-func TestDiscoverTaskDirIgnoresAnUnsetWalkForever(t *testing.T) {
+// The nearest marker wins, whatever sits above it. Two projects one inside the
+// other is the ordinary shape once init creates a queue wherever it is run.
+func TestDiscoverTaskDirTakesTheNearestMarker(t *testing.T) {
 	outer := tqtest.Root(t)
 	if _, err := store.InitStore(outer); err != nil {
 		t.Fatal(err)
 	}
-	repo := filepath.Join(outer, "project")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+	inner := filepath.Join(outer, "service")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(config.EnvWalkForever, "1")
-
-	if _, err := store.DiscoverTaskDir(repo); !errors.Is(err, store.ErrProjectNotFound) {
-		t.Errorf("err = %v, want the bound to hold for a value other than \"true\"", err)
-	}
-}
-
-// The bound is the repository root, not the starting directory: a queue at the
-// root is still found from a subdirectory of the same repository.
-func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
-	// The repository is the bound under test, so it is what anchors the
-	// fixture; InitStore leaves the marker behind on its own.
-	repo := tqtest.RootWithGit(t)
-	if _, err := store.InitStore(repo); err != nil {
+	if _, err := store.InitStore(inner); err != nil {
 		t.Fatal(err)
 	}
-	nested := filepath.Join(repo, "src", "deep")
+	nested := filepath.Join(inner, "src", "deep")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1515,8 +1535,46 @@ func TestDiscoverTaskDirFindsTheQueueInsideItsOwnRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverTaskDir: %v", err)
 	}
-	if want := filepath.Join(repo, config.TaskDirName); dir != want {
-		t.Errorf("dir = %q, want %q", dir, want)
+	if want := filepath.Join(inner, config.TaskDirName); dir != want {
+		t.Errorf("dir = %q, want the nearest project's queue %q", dir, want)
+	}
+}
+
+// The walk stops at the home directory, having checked it: a marker at
+// ~/.taskqueue.yaml is usable, and one above it is somebody else's.
+func TestDiscoverTaskDirStopsAtTheHomeDirectory(t *testing.T) {
+	above := tqtest.Root(t)
+	if _, err := store.InitStore(above); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(above, "home")
+	project := filepath.Join(home, "work", "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	// Above the home directory, so out of reach even though it is plainly a
+	// project.
+	_, err := store.DiscoverTaskDir(project)
+	if !errors.Is(err, store.ErrProjectNotFound) {
+		t.Fatalf("err = %v, want the walk to stop before the queue above the home directory", err)
+	}
+	if !strings.Contains(err.Error(), home) {
+		t.Errorf("err = %q, want it to name where the search stopped", err)
+	}
+
+	// The home directory itself is checked, so a marker there is reachable.
+	homeStore, err := store.InitStore(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := store.DiscoverTaskDir(project)
+	if err != nil {
+		t.Fatalf("DiscoverTaskDir: %v", err)
+	}
+	if dir != homeStore.Dir {
+		t.Errorf("dir = %q, want the queue at the home directory %q", dir, homeStore.Dir)
 	}
 }
 
@@ -1545,10 +1603,10 @@ func TestFixturesIgnoreAnAmbientTaskDirOverride(t *testing.T) {
 	}
 }
 
-// The same for the walk-forever escape hatch: an exported value must not let a
-// fixture climb out of its own temp directory. The assertion is on where the
-// store landed, not on the variables — clearing them is one way to get there,
-// and the tasks are what actually has to stay inside the fixture.
+// A queue directly above the fixture must not capture it, whatever the
+// environment says. The assertion is on where the store landed, not on the
+// variables — clearing them is one way to get there, and the tasks are what
+// actually has to stay inside the fixture.
 func TestFixturesNeutraliseAmbientConfiguration(t *testing.T) {
 	// A real project, above the fixture, for the ambient configuration to
 	// point at. It lives in the test's own temp space: naming an absolute
@@ -1561,10 +1619,9 @@ func TestFixturesNeutraliseAmbientConfiguration(t *testing.T) {
 	}
 	tqtest.WriteConfig(t, above, "version: 1\npath: "+config.TaskDirName+"\n")
 
-	// TQ_DIR names it outright, and walk-forever lifts the bound that would
-	// otherwise stop the search short of it.
+	// TQ_DIR names it outright, and the fixture's own marker is what has to
+	// stop the walk reaching it in spite of that.
 	t.Setenv(config.EnvTaskDir, outside)
-	t.Setenv(config.EnvWalkForever, "true")
 
 	st := tqtest.NewStore(t)
 	if st.Dir == outside {
@@ -1770,18 +1827,80 @@ func TestDiscoverTaskDirFollowsTheConfigPath(t *testing.T) {
 	}
 }
 
-// A config naming a directory that does not exist yet is not an error: the
-// queue is created where it says.
+// A marker already in the directory decides where the queue goes, even to a
+// path that does not exist yet. That is what makes a second init a no-op on a
+// project whose queue has been moved.
 func TestInitStoreCreatesWhereTheConfigSays(t *testing.T) {
 	root := tqtest.Root(t)
 	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
 
-	st, err := store.InitStore(filepath.Join(root, "src"))
+	st, err := store.InitStore(root)
 	if err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
 	if want := filepath.Join(root, "docs", "queue"); st.Dir != want {
 		t.Errorf("Dir = %q, want %q", st.Dir, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.TaskDirName)); !os.IsNotExist(err) {
+		t.Errorf("the default directory should not have been created: %v", err)
+	}
+}
+
+// The near-miss spelling stops init whichever way the task directory was
+// decided. TQ_DIR answers that without a marker being read at all, so the guard
+// has to sit on the write as well as on the read: init would otherwise put
+// .taskqueue.yaml beside the .taskqueue.yml its author wrote, and nothing would
+// ever read theirs again.
+func TestInitStoreRefusesToWriteBesideANearMiss(t *testing.T) {
+	for _, override := range []string{"", "elsewhere"} {
+		name := "without " + config.EnvTaskDir
+		if override != "" {
+			name = "with " + config.EnvTaskDir
+		}
+		t.Run(name, func(t *testing.T) {
+			root := tqtest.RootWithoutMarker(t)
+			nearMiss := filepath.Join(root, ".taskqueue.yml")
+			if err := os.WriteFile(nearMiss, []byte("version: 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if override != "" {
+				t.Setenv(config.EnvTaskDir, filepath.Join(root, override))
+			}
+
+			_, err := store.InitStore(root)
+			if err == nil {
+				t.Fatal("InitStore() = nil error, want one naming the file tq reads")
+			}
+			if !errors.Is(err, config.ErrConfig) {
+				t.Errorf("err = %v, want it to wrap config.ErrConfig", err)
+			}
+			if _, err := os.Stat(filepath.Join(root, config.ConfigFileName)); !os.IsNotExist(err) {
+				t.Errorf("init wrote a marker beside %s: %v", nearMiss, err)
+			}
+		})
+	}
+}
+
+// A marker in a directory above is not this directory's marker: init creates
+// the project where it is run, so it makes its own rather than following one it
+// never went looking for.
+func TestInitStoreIgnoresTheConfigAbove(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, "version: 1\npath: docs/queue\n")
+	nested := filepath.Join(root, "src")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.InitStore(nested)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if want := filepath.Join(nested, config.TaskDirName); st.Dir != want {
+		t.Errorf("Dir = %q, want %q", st.Dir, want)
+	}
+	if want := filepath.Join(nested, config.ConfigFileName); st.ConfigWritten != want {
+		t.Errorf("ConfigWritten = %q, want %q", st.ConfigWritten, want)
 	}
 }
 
@@ -1809,7 +1928,7 @@ func TestTaskDirOverrideBeatsTheConfigPath(t *testing.T) {
 // guessing it would take to claim it is what the marker replaces.
 func TestDiscoverTaskDirIgnoresABareTaskDirWithNoMarker(t *testing.T) {
 	// A marker of its own is exactly what this root must not have.
-	root := tqtest.RootWithGit(t)
+	root := tqtest.RootWithoutMarker(t)
 	if err := os.MkdirAll(filepath.Join(root, config.TaskDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1843,7 +1962,7 @@ func TestDiscoverTaskDirReportsABrokenConfig(t *testing.T) {
 func TestInitStoreWritesTheConfigMarker(t *testing.T) {
 	// The marker InitStore writes is the subject, so the fixture must not
 	// already have one.
-	root := tqtest.RootWithGit(t)
+	root := tqtest.RootWithoutMarker(t)
 
 	st, err := store.InitStore(root)
 	if err != nil {
@@ -2107,89 +2226,6 @@ func TestBacklogStillReadsAsInbox(t *testing.T) {
 	if got.Status != task.StatusInbox {
 		t.Errorf("Get() = %q, want inbox", got.Status)
 	}
-}
-
-// A project above the repository is what discovery deliberately walks past, and
-// the marker is what makes it a project. Both directions matter: the marker is
-// reported, and a directory that merely happens to be named .tasks is not,
-// because since TQ-0029 it is not a queue and naming it would be a warning
-// about nothing.
-func TestShadowedProjectMarker(t *testing.T) {
-	t.Run("a marker above the repository is reported", func(t *testing.T) {
-		outer := tqtest.Root(t)
-		repo := filepath.Join(outer, "project")
-		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-
-		marker, ok := store.ShadowedProjectMarker(repo)
-		if !ok {
-			t.Fatal("ShadowedProjectMarker() = false, want the project above the repository")
-		}
-		if want := filepath.Join(outer, config.ConfigFileName); marker != want {
-			t.Errorf("marker = %q, want %q", marker, want)
-		}
-	})
-
-	t.Run("a bare .tasks above the repository is not", func(t *testing.T) {
-		// No marker of its own: a directory named .tasks is all there is.
-		outer := tqtest.RootWithGit(t)
-		stray := filepath.Join(outer, config.TaskDirName)
-		if err := os.MkdirAll(stray, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		repo := filepath.Join(outer, "project")
-		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-
-		if marker, ok := store.ShadowedProjectMarker(repo); ok && marker == stray {
-			t.Errorf("ShadowedProjectMarker() = %q, want a directory named %s to count for nothing", marker, config.TaskDirName)
-		}
-	})
-
-	t.Run("a project without a repository excludes nothing", func(t *testing.T) {
-		// No repository means no bound, so the search already went as far as
-		// TQ_WALK_FOREVER would have taken it and there is nothing it failed to
-		// reach. The project's own marker is not something it walked past.
-		project := tqtest.RootWithoutGit(t)
-
-		// The working directory is the project, which is how the CLI always
-		// calls this: it passes the directory tq was run in. Answering from
-		// the process's working directory rather than from the repository is
-		// the mistake that would make a project without Git warn about its own
-		// marker.
-		//
-		// t.Chdir moves the whole process, so this and anything running beside
-		// it must stay sequential — which is why nothing in this package calls
-		// t.Parallel.
-		t.Chdir(project)
-
-		if marker, ok := store.ShadowedProjectMarker(project); ok {
-			t.Errorf("ShadowedProjectMarker() = %q, want nothing shadowed: without a repository nothing bounded the search", marker)
-		}
-	})
-
-	t.Run("nothing is excluded when the walk is not bounded", func(t *testing.T) {
-		outer := tqtest.Root(t)
-		repo := filepath.Join(outer, "project")
-		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		// The variables that lift the bound: with either one set the search was
-		// never stopped, so there is nothing it failed to reach.
-		for _, env := range []struct{ name, value string }{
-			{config.EnvWalkForever, "true"},
-			{config.EnvTaskDir, filepath.Join(outer, config.TaskDirName)},
-		} {
-			t.Run(env.name, func(t *testing.T) {
-				t.Setenv(env.name, env.value)
-				if marker, ok := store.ShadowedProjectMarker(repo); ok {
-					t.Errorf("ShadowedProjectMarker() = %q with %s set, want nothing shadowed", marker, env.name)
-				}
-			})
-		}
-	})
 }
 
 // ── A lowercase .md, and only that (TQ-0039) ─────────────────────────────

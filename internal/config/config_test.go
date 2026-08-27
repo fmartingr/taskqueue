@@ -55,9 +55,9 @@ func TestFindConfigStopsAtTheNearestFile(t *testing.T) {
 }
 
 func TestFindConfigReturnsNothingWhenThereIsNone(t *testing.T) {
-	// An absent marker is the case under test, so .git is what anchors the
-	// walk here.
-	cfg, err := config.FindConfig(tqtest.RootWithGit(t))
+	// An absent marker is the case under test, so the fixture asserts that
+	// none sits above the walk either.
+	cfg, err := config.FindConfig(tqtest.RootWithoutMarker(t))
 	if err != nil {
 		t.Fatalf("config.FindConfig: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestConfigPathAnswersForAFileItCouldNotParse(t *testing.T) {
 }
 
 func TestConfigPathIsEmptyWithNoMarker(t *testing.T) {
-	path, err := config.ConfigPath(tqtest.RootWithGit(t))
+	path, err := config.ConfigPath(tqtest.RootWithoutMarker(t))
 	if err != nil {
 		t.Fatalf("config.ConfigPath: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestFindConfigToleratesUnknownKeys(t *testing.T) {
 // would leave the queue somewhere the user did not intend.
 func TestFindConfigRejectsTheWrongExtension(t *testing.T) {
 	// The near miss has to be the only marker-ish file here.
-	root := tqtest.RootWithGit(t)
+	root := tqtest.RootWithoutMarker(t)
 	if err := os.WriteFile(filepath.Join(root, ".taskqueue.yml"), []byte("version: 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

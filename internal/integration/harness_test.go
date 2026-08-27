@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 	// separate processes, so t.Setenv would not reach them, and a developer
 	// with TQ_DIR exported must not have the suite operate on their own queue.
 	// TQ-0021 and TQ-0023 are this mistake made in the unit tests.
-	for _, name := range []string{"TQ_DIR", "TQ_WALK_FOREVER", "TQ_HOST", "TQ_PORT", "DEV"} {
+	for _, name := range []string{"TQ_DIR", "TQ_HOST", "TQ_PORT", "DEV"} {
 		_ = os.Unsetenv(name)
 	}
 
@@ -64,41 +64,56 @@ func TestMain(m *testing.M) {
 }
 
 // project is a directory the binary can treat as a real project: it carries the
-// marker, so discovery resolves inside it and cannot climb out into whatever
-// happens to be above the temp directory.
+// marker and the task directory the marker names, so discovery resolves inside
+// it rather than climbing out into whatever happens to be above the temp
+// directory.
+//
+// Both files, not just the marker: since TQ-0085 no command but `tq init`
+// creates a task directory, so a marker on its own is a project every other
+// command refuses. They are written directly rather than by running init,
+// because a generated AGENTS.md in the queue is a file the tests that count
+// what a command left behind would have to know about.
 type project struct {
 	dir string
 }
 
 func newProject(t *testing.T) *project {
 	t.Helper()
-	dir := t.TempDir()
-	marker := filepath.Join(dir, ".taskqueue.yaml")
-	if err := os.WriteFile(marker, []byte("version: 1\npath: .tasks\n"), 0o644); err != nil {
+	dir := bareDir(t)
+	if err := writeFile(filepath.Join(dir, ".taskqueue.yaml"), "version: 1\npath: .tasks\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mkdirAll(filepath.Join(dir, ".tasks")); err != nil {
 		t.Fatal(err)
 	}
 	return &project{dir: dir}
 }
 
-// requireNoRepositoryAbove fails a test whose premise is a project without Git
-// when the machine says otherwise: TMPDIR inside a developer's own checkout puts
-// the repository bound back, and a test written for the unbounded case then
-// passes for the wrong reason (TQ-0064).
+// bareDir is a temporary directory that is not a project, with the premise
+// asserted rather than assumed: no marker in it, and none anywhere the walk
+// could reach from it. Since TQ-0085 the walk stops at the home directory, so
+// with TMPDIR inside a developer's own project a fixture built on t.TempDir
+// alone would resolve to their queue (TQ-0023, TQ-0064).
 //
-// It walks for .git itself rather than calling config.RepositoryRoot: this
-// package links none of tq's own code, because what it is here to check is the
-// compiled binary's behaviour and not a function it could have called directly.
-func requireNoRepositoryAbove(t *testing.T, dir string) {
+// It walks for the marker itself rather than calling into tq: this package
+// links none of tq's own code, because what it is here to check is the compiled
+// binary's behaviour and not a function it could have called directly.
+func bareDir(t *testing.T) string {
 	t.Helper()
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			t.Fatalf("%s is a repository above the fixture, so this test's premise — a project with no Git anywhere above it — does not hold here", dir)
+	dir := t.TempDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	for at := dir; ; {
+		if _, err := os.Stat(filepath.Join(at, ".taskqueue.yaml")); err == nil {
+			t.Fatalf("%s sits above the fixture, so this test's premise — a directory with no project above it — does not hold here", at)
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return
+		parent := filepath.Dir(at)
+		if at == home || parent == at {
+			return dir
 		}
-		dir = parent
+		at = parent
 	}
 }
 

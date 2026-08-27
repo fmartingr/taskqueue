@@ -154,8 +154,8 @@ func TestGuidePathNamesTheGuideAbsolutely(t *testing.T) {
 		}
 	})
 
-	t.Run("inside a repository", func(t *testing.T) {
-		root := tqtest.RootWithGit(t)
+	t.Run("a directory that is not a project yet", func(t *testing.T) {
+		root := tqtest.RootWithoutMarker(t)
 		st, err := store.InitStore(root)
 		if err != nil {
 			t.Fatal(err)

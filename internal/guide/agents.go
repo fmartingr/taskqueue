@@ -123,7 +123,8 @@ truth and are meant to be committed.
 
 Use the CLI rather than editing files by hand — it validates, keeps timestamps
 and filenames in sync, and writes atomically. Every command below works from any
-subdirectory of the repository.
+subdirectory of the project — every command but `+"`tq init`"+`, which creates a
+queue wherever it is run, so run it once at the project root and never below it.
 
 ## Working a task
 
@@ -214,27 +215,34 @@ whole string, so `+"`tq list --label component/backend`"+` takes the whole key.
   another process is retitling is not quietly missing from it, or in it twice.
   When the directory will not hold still, the command says so on stderr and
   still exits 0: run it again rather than planning against what it printed.
-- Exit codes: 0 success, 1 validation error, 2 task not found, 3 task directory
-  missing and uncreatable.
+- Exit codes: 0 success, 1 validation error, 2 task not found, 3 no task queue
+  found — run `+"`tq init`"+`.
 
 ## Where the tasks live
 
     %s
 
-The project marker is `+"`%s`"+` at the repository root, and it says
-where the tasks live:
+The project marker is `+"`%s`"+`, and it says where the tasks live:
 
     version: 1
     path: .tasks
 
 `+"`path`"+` is resolved against the directory holding that file. The marker is
-the only thing tq looks for, and the search stops at the repository root: a
-directory merely named .tasks is not a queue. The first command that needs one
-writes both, so nothing has to be created by hand.
+the only thing tq looks for: a directory merely named .tasks is not a queue.
+
+Two rules, and nothing else:
+
+- `+"`tq init`"+` creates the queue in the directory it is run in — the marker,
+  the task directory and this guide — and nowhere else. It never searches, never
+  adopts a project above, never relocates to a repository root.
+- Every other command walks up from the current directory for the marker,
+  stopping at the home directory, and uses the nearest one — or running to the
+  filesystem root, from a directory outside the home directory. With no marker
+  it exits 3 and says to run `+"`tq init`"+`. No command creates a queue on its
+  own.
 
 Set `+"`%s`"+` to point tq at a different task directory, which overrides
-the marker. Set `+"`%s=true`"+` to let the search walk past the
-repository root.
+the marker for every command, `+"`tq init`"+` included.
 `,
 		generatedNotice,
 		example,
@@ -246,6 +254,6 @@ repository root.
 		strings.Join(offering(columns), " and "), satisfying(columns),
 		strings.Join(priorities.Names(), ", "), priorities.Default(), config.ConfigFileName,
 		taskDir,
-		config.ConfigFileName, config.EnvTaskDir, config.EnvWalkForever,
+		config.ConfigFileName, config.EnvTaskDir,
 	)
 }

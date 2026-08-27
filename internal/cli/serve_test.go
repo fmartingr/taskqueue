@@ -68,8 +68,8 @@ func TestServeDefaultsPrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc := tc
 			// A case with no config needs a root that genuinely has no
-			// marker, and .git is then the only thing that anchors it.
-			root := tqtest.RootWithGit(t)
+			// marker, at it or anywhere above it.
+			root := tqtest.RootWithoutMarker(t)
 			if tc.config != "" {
 				tqtest.WriteConfig(t, root, tc.config)
 			}
@@ -92,6 +92,7 @@ func TestServeDefaultsPrecedence(t *testing.T) {
 func TestServeFlagBeatsTheConfig(t *testing.T) {
 	tc := newBareCLI(t)
 	tqtest.WriteConfig(t, tc.root, "version: 1\npath: .tasks\nserver:\n  host: 10.0.0.5\n  port: 7412\n")
+	tc.mustRun("init")
 	t.Setenv("TQ_HOST", "")
 	t.Setenv("TQ_PORT", "")
 
@@ -142,7 +143,7 @@ func TestServeExposureWarning(t *testing.T) {
 }
 
 func TestServeStaysQuietOnLoopback(t *testing.T) {
-	tc := newBareCLI(t)
+	tc := newTestCLI(t)
 	t.Setenv("TQ_HOST", "")
 	t.Setenv("TQ_PORT", "")
 

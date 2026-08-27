@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // TaskDirName is the directory, relative to the project root, that holds one
@@ -14,35 +15,63 @@ const TaskDirName = ".tasks"
 // and tests: TQ_DIR=/repo/.tasks tq list. It overrides the marker.
 const EnvTaskDir = "TQ_DIR"
 
-// EnvWalkForever lifts the bound on the search: set to "true", the walk goes
-// past the repository root to the filesystem root, for one project marker
-// deliberately kept above several repositories.
-const EnvWalkForever = "TQ_WALK_FOREVER"
-
-// RepositoryRoot returns the nearest directory at or above dir that holds .git.
-func RepositoryRoot(dir string) (string, bool) {
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
-}
-
-// WalkBoundary is where a search up the tree stops: the repository root, so a
-// marker above a project cannot capture it. Returns "" when there is no
-// repository to anchor to, or when the walk-forever escape hatch is set, in
-// which case the walk runs to the filesystem root.
+// WalkBoundary is where a search up the tree stops: the home directory, which
+// the walk checks and then goes no further. A marker at ~/.taskqueue.yaml is
+// usable, and one in a sibling user's tree is not.
+//
+// It returns "" when there is no home directory to stop at — a path outside it
+// (/opt/thing, or the temporary directories macOS hands out under /var/folders)
+// and a process with no HOME both land here. The walk then runs to the
+// filesystem root, so it is bounded by the tree rather than by a directory: it
+// will use a marker it meets on the way up, and only runs out of tree when
+// there is none.
+//
+// dir must be absolute and clean; every caller comes through filepath.Abs.
 func WalkBoundary(dir string) string {
-	if os.Getenv(EnvWalkForever) == "true" {
+	home, err := os.UserHomeDir()
+	if err != nil {
 		return ""
 	}
-	if root, ok := RepositoryRoot(dir); ok {
-		return root
+	home = filepath.Clean(home)
+	if under(home, dir) {
+		return home
 	}
-	return ""
+
+	// A literal comparison misses a home reached through a symlink: HOME is
+	// usually the spelling in the passwd entry, while the working directory
+	// arrives already resolved, because that is what the kernel answers with.
+	// /home/u against an automounted /export/home/u is the shape. Resolving is
+	// the fallback rather than the rule — it costs syscalls, and it fails on a
+	// path that is not there.
+	realHome, homeErr := filepath.EvalSymlinks(home)
+	realDir, dirErr := filepath.EvalSymlinks(dir)
+	if homeErr != nil || dirErr != nil || !under(realHome, realDir) {
+		return ""
+	}
+	// The answer has to be a directory the walk will actually arrive at, and
+	// the walk climbs dir as it was given. So climb it by as many levels as
+	// separate the resolved pair, which lands on dir's own spelling of home.
+	stopAt := dir
+	for range depth(realHome, realDir) {
+		stopAt = filepath.Dir(stopAt)
+	}
+	return stopAt
+}
+
+// under reports whether dir is base or sits inside it.
+func under(base, dir string) bool {
+	rel, err := filepath.Rel(base, dir)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// depth is how many levels dir sits below base. Callers check `under` first.
+func depth(base, dir string) int {
+	rel, err := filepath.Rel(base, dir)
+	if err != nil || rel == "." {
+		return 0
+	}
+	return len(strings.Split(rel, string(filepath.Separator)))
 }

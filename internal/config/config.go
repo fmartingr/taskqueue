@@ -11,10 +11,11 @@ import (
 	"github.com/fmartingr/taskqueue/internal/fsx"
 )
 
-// ConfigFileName is the project marker. It sits at the root of the repository,
-// not inside the task directory, which is what makes discovery unambiguous:
-// there is one file to find, it says where the tasks live, and the search has a
-// definite stopping point instead of guessing at directory names on the way up.
+// ConfigFileName is the project marker. `tq init` writes it in the directory
+// it is run in, and it sits beside the task directory rather than inside it,
+// which is what makes discovery unambiguous: there is one file to find, it says
+// where the tasks live, and the search has a definite stopping point instead of
+// guessing at directory names on the way up.
 const ConfigFileName = ".taskqueue.yaml"
 
 // ConfigVersion is the highest config version this binary understands. It only
@@ -75,11 +76,11 @@ func (c *Config) TaskDir() string {
 }
 
 // FindConfig reads the nearest config at or above startDir. It returns nil
-// without an error when there is none: the file is optional, and a project
-// without one keeps working on the defaults.
+// without an error when there is none, which is how a caller learns that
+// startDir belongs to no project at all.
 //
-// The walk stops at the first config found. It is bounded the same way task
-// directory discovery is, so a stray config above a project cannot capture it.
+// The walk stops at the first config found, and at the home directory when it
+// has found none by then (see WalkBoundary).
 func FindConfig(startDir string) (*Config, error) {
 	path, err := ConfigPath(startDir)
 	if err != nil || path == "" {
@@ -117,9 +118,8 @@ func ConfigPath(startDir string) (string, error) {
 
 		// A typo is not an absent config. Reported here rather than at the end
 		// of the walk, so the message names the file the author actually wrote.
-		nearMiss := filepath.Join(dir, nearMissConfigName)
-		if _, err := os.Stat(nearMiss); err == nil {
-			return "", fmt.Errorf("%w: %s: tq reads %s, rename it", ErrConfig, nearMiss, ConfigFileName)
+		if err := reportNearMiss(dir); err != nil {
+			return "", err
 		}
 
 		parent := filepath.Dir(dir)
@@ -166,31 +166,68 @@ func loadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// configTarget is where `tq init` writes a config when a project has none: the
-// root of the enclosing repository, or the working directory when there is no
-// repository to anchor to.
-func configTarget(startDir string) (string, error) {
-	dir, err := filepath.Abs(startDir)
+// ConfigIn reads the marker in dir itself, without walking anywhere. It
+// returns nil without an error when dir holds none.
+//
+// `tq init` is what needs this: init creates the project in the directory it
+// is run in, so what a parent declares is none of its business — but a
+// directory that already has a marker keeps the task directory that marker
+// names, which is what makes running init twice change nothing.
+func ConfigIn(dir string) (*Config, error) {
+	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if root, ok := RepositoryRoot(dir); ok {
-		dir = root
+	path := filepath.Join(abs, ConfigFileName)
+	if _, err := os.Stat(path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+		}
+		// A typo is not an absent config here either: writing the canonical
+		// file beside it would leave the one the author wrote silently unread.
+		if err := reportNearMiss(abs); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
-	return filepath.Join(dir, ConfigFileName), nil
+	return loadConfig(path)
 }
 
-// WriteConfigIfMissing writes the marker for a task directory that has none,
-// and reports the path when it wrote one. Unlike the generated guide, this file
-// is the user's: an existing one is never touched, whatever it says.
-func WriteConfigIfMissing(startDir, taskDir string) (string, error) {
-	existing, err := FindConfig(startDir)
-	if err != nil || existing != nil {
+// reportNearMiss returns an error when dir holds the spelling people reach for
+// instead of the one tq reads. Callers use it only where the canonical file was
+// not found, which is the only case in which it could be mistaken for the
+// project's marker.
+func reportNearMiss(dir string) error {
+	nearMiss := filepath.Join(dir, nearMissConfigName)
+	if _, err := os.Stat(nearMiss); err == nil {
+		return fmt.Errorf("%w: %s: tq reads %s, rename it", ErrConfig, nearMiss, ConfigFileName)
+	}
+	return nil
+}
+
+// WriteConfigIfMissing writes the marker into dir, and reports the path when it
+// wrote one. A directory that already has one is left alone: unlike the
+// generated guide, this file is the user's, whatever it says.
+//
+// It looks in dir and nowhere else. A marker further up belongs to another
+// project, and `tq init` — the only caller — is explicitly not discovery.
+func WriteConfigIfMissing(dir, taskDir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
 		return "", err
 	}
-
-	path, err := configTarget(startDir)
-	if err != nil {
+	path := filepath.Join(abs, ConfigFileName)
+	switch _, err := os.Stat(path); {
+	case err == nil:
+		return "", nil
+	case !errors.Is(err, os.ErrNotExist):
+		return "", fmt.Errorf("%w: %s: %v", ErrConfig, path, err)
+	}
+	// Checked here as well as in ConfigIn, because a caller can reach this
+	// without having asked ConfigIn anything — TQ_DIR answers where the tasks
+	// go without a marker being read at all. Writing the canonical file beside
+	// the typo would leave the one the author wrote unread for good.
+	if err := reportNearMiss(abs); err != nil {
 		return "", err
 	}
 
@@ -200,12 +237,10 @@ func WriteConfigIfMissing(startDir, taskDir string) (string, error) {
 	if err != nil {
 		rel = taskDir
 	}
-	// The board and both vocabularies are seeded with the marker rather than
-	// left to
-	// `tq init` alone: any command can be the one that creates a queue, and a
-	// config the user never sees written would silently never get one. The
-	// columns come first, since the board is the first thing a project tends
-	// to want its own version of.
+	// The board and both vocabularies are seeded here rather than left to a
+	// later hand edit: a config the user never sees written would silently
+	// never get one. The columns come first, since the board is the first
+	// thing a project tends to want its own version of.
 	body := fmt.Appendf(nil, "version: %d\npath: %s\n%s%s%s",
 		ConfigVersion, filepath.ToSlash(rel),
 		columnsYAML(DefaultColumns()), prioritiesYAML(DefaultPriorities()), labelsYAML(DefaultLabels()))

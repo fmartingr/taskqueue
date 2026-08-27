@@ -194,10 +194,28 @@ frontend`, `make typecheck` or `make dev` will run.
 - Keep stdout clean when `--json` is active: data on stdout, everything else on
   stderr.
 - Keep exit codes stable: 0 success, 1 general/validation, 2 task not found,
-  3 `.tasks` missing and uncreatable.
-- The task directory is created on demand by any command that needs it, at the
-  root of the enclosing Git repository (or `TQ_DIR`). Commands must not fail
-  merely because a project has not been initialised.
+  3 no task queue found. 3 kept its number through TQ-0085 and had its meaning
+  restated rather than split: it has always meant "tq could not reach a usable
+  queue", and "no project at or above here" is now the ordinary way to get
+  there rather than the edge case. A fourth code would have broken every script
+  already treating 3 as "no queue". Every message behind it names `tq init`.
+- Discovery is two rules and nothing else (TQ-0085). `tq init` creates the
+  queue in the directory it is run in — the marker, the task directory and the
+  guide — and never searches, never adopts a project above, never relocates to
+  a repository root. Every other command walks up from the working directory
+  for `.taskqueue.yaml`, takes the nearest one, and stops at the home
+  directory, which it checks before stopping. A path not under the home
+  directory — `/opt/thing`, a container's `/app`, macOS's `/var/folders`
+  temporary directories — cannot reach that bound, and the walk then runs to
+  the filesystem root: it is bounded by the tree rather than by a directory,
+  and it will use a marker it meets on the way. A process with no `HOME` lands
+  in the same branch. With no marker the command fails with exit 3 and names
+  `tq init`.
+- `tq init` is the only thing that creates a task directory or writes a marker.
+  No command creates a queue implicitly — not even one whose marker is there
+  and whose task directory is missing, which is reported rather than silently
+  made. A `.git` bounds nothing, so a submodule reads the superproject's queue
+  (TQ-0059), and `TQ_DIR` still overrides everything, `tq init` included.
 - Prefer the Go standard library where practical.
 - Keep the layering: `internal/task` imports nothing of ours, and nothing
   imports back up the list above. Everything except `cmd/tq` stays under
@@ -225,9 +243,11 @@ and `TQ_DIR` in a developer's shell points the whole suite at their real queue
 `TestMain` calling `tqtest.Isolate` and a `TestTheSuiteIsIsolated` calling
 `tqtest.RequireIsolated`, which fails if that call is ever dropped. Fixtures come
 from `internal/tqtest` and nowhere else: `Root` for a root anchored by the
-project marker, `RootWithGit` for the tests whose premise is a directory that is
-*not* a project yet — an absent marker leaves the repository bound as the only
-anchor — and `NewStore`, `MustCreate`, `WriteConfig`, `AboveFixtures` above them.
+project marker, `RootWithoutMarker` for the tests whose premise is a directory
+that is *not* a project yet — with no marker to stop the walk, the fixture
+asserts instead that none sits above it, which since TQ-0085 is the only thing
+that can keep such a root isolated — and `NewStore`, `MustCreate`,
+`WriteConfig`, `AboveFixtures` above them.
 `internal/store`'s tests are in the external `store_test` package for this
 reason: `tqtest` imports the store, so an in-package test file cannot import the
 fixtures. `export_test.go` is the two unexported names those tests still need.

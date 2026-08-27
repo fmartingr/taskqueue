@@ -22,6 +22,9 @@ import (
 func TestHTTPAndCLIProduceTheSameFile(t *testing.T) {
 	viaCLI := tqtest.Root(t)
 	t.Chdir(viaCLI)
+	if code := Main([]string{"init"}); code != 0 {
+		t.Fatalf("tq init = %d", code)
+	}
 	if code := Main([]string{"add", "Implement REST API", "--priority", "high", "--label", "backend"}); code != 0 {
 		t.Fatalf("tq add = %d", code)
 	}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -137,6 +138,7 @@ func TestCLILabelListReadsTheProjectsOwnSet(t *testing.T) {
 	tc := newBareCLI(t)
 	tqtest.WriteConfig(t, tc.root, "version: 1\npath: "+config.TaskDirName+
 		"\nlabels:\n  spicy:\n    color: \"#ff0000\"\n    display_name: Spicy\n")
+	tc.mustRun("init")
 	tc.mustRun("add", "Hot", "--label", "spicy", "--label", "bug")
 
 	var rows []labelRow
@@ -195,20 +197,19 @@ func TestCLILabelNeedsASubcommand(t *testing.T) {
 
 // Nothing but data on stdout, so an agent can pipe it.
 func TestCLILabelListJSONKeepsStdoutClean(t *testing.T) {
-	tc := newBareCLI(t)
+	tc := newTestCLI(t)
 	out := tc.mustRun("label", "list", "--json")
 	if !strings.HasPrefix(strings.TrimSpace(out), "[") {
 		t.Errorf("stdout = %q, want JSON alone", out)
 	}
-	if !strings.Contains(tc.stderr.String(), "created") {
-		t.Errorf("stderr = %q, want the queue-created note to go there", tc.stderr)
+	if tc.stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing beside the data", tc.stderr)
 	}
 }
 
-// A store the command creates on demand still lists the vocabulary: no command
-// may fail merely because a project has not been initialised.
-func TestCLILabelListWorksWithoutAProject(t *testing.T) {
-	tc := newBareCLI(t)
+// A project that declares no vocabulary of its own lists the defaults.
+func TestCLILabelListFallsBackToTheDefaults(t *testing.T) {
+	tc := newTestCLI(t)
 	var rows []labelRow
 	tc.mustRunJSON(&rows, "label", "list", "--json")
 	if len(rows) != len(config.DefaultLabels()) {
@@ -228,6 +229,9 @@ func TestCLILabelListReadsTheConfigOfTheQueueItLists(t *testing.T) {
 	elsewhere := tqtest.Root(t)
 	tqtest.WriteConfig(t, elsewhere, "version: 1\npath: "+config.TaskDirName+
 		"\nlabels:\n  there:\n    color: \"#00ff00\"\n    display_name: There\n")
+	if err := os.MkdirAll(filepath.Join(elsewhere, config.TaskDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv(config.EnvTaskDir, filepath.Join(elsewhere, config.TaskDirName))
 	tc.mustRun("add", "Over there", "--label", "there")
 

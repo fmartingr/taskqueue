@@ -18,9 +18,24 @@ import (
 )
 
 var (
-	ErrTaskNotFound    = errors.New("task not found")
-	ErrProjectNotFound = errors.New("no " + config.TaskDirName + " directory found")
+	ErrTaskNotFound = errors.New("task not found")
+
+	// ErrProjectNotFound is every way a command can fail to reach a queue: no
+	// marker at or above the working directory, or a marker naming a task
+	// directory that is not there. No command creates one — `tq init` is the
+	// only thing that writes a marker or a task directory — so every message
+	// wrapping this says to run it.
+	ErrProjectNotFound = errors.New("no task queue found")
 )
+
+// initHint is what an ErrProjectNotFound message ends with when the directory
+// the command was run in is the right place to run init. Kept in one place so
+// those cases cannot drift on what a caller is supposed to do.
+//
+// One case says something else: a marker whose task directory is missing knows
+// where the queue belongs, and init would fork a second project if it were run
+// anywhere but there. See DiscoverTaskDir.
+const initHint = `run "tq init" to create one`
 
 // Store owns every filesystem interaction. Both the CLI and the HTTP server go
 // through it, so there is exactly one implementation of validation, ID
@@ -36,12 +51,14 @@ type Store struct {
 	// highest number, and both claim it.
 	mu sync.Mutex
 
-	// Created reports that this call made the task directory, so the CLI can
-	// say where a queue appeared instead of creating one silently.
+	// Created reports that InitStore made the task directory, so `tq init` can
+	// say whether a queue appeared or was already there. Only init sets it:
+	// nothing else creates a directory.
 	Created bool
 
-	// ConfigWritten is the marker this call wrote, when it wrote one. Empty
-	// when the project already had a config, which is the common case.
+	// ConfigWritten is the marker InitStore wrote, when it wrote one. Empty
+	// when the directory already had a config, which is what a second `tq
+	// init` sees.
 	ConfigWritten string
 
 	// duringScan runs inside a listing's read window — after the directory has
@@ -60,128 +77,87 @@ type Store struct {
 	duringUpdate func()
 }
 
-// InitStore makes sure the task directory exists and returns a store for it:
-// the TQ_DIR override when set, otherwise root/.tasks. An existing directory is
-// left alone, so running it twice is harmless.
-func InitStore(root string) (*Store, error) {
-	dir, err := taskDirTarget(root)
+// InitStore creates the project in dir and returns a store for its task
+// directory. It is what `tq init` runs, and it is the only thing in tq that
+// creates a task directory or writes a marker.
+//
+// It never looks above dir: the folder init is run in is the answer, so a
+// project above cannot capture it and a repository root cannot relocate it.
+// The task directory is TQ_DIR when that is set, otherwise the one a marker
+// already in dir declares, otherwise dir/.tasks. Running it twice is harmless
+// — an existing directory is left alone and an existing marker is never
+// rewritten.
+func InitStore(dir string) (*Store, error) {
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	taskDir, err := initTaskDir(root)
 	if err != nil {
 		return nil, err
 	}
 
-	info, err := os.Stat(dir)
+	created := false
+	info, err := os.Stat(taskDir)
 	switch {
-	case err == nil && info.IsDir():
-		return &Store{Dir: dir}, nil
+	case err == nil && !info.IsDir():
+		return nil, fmt.Errorf("%s exists and is not a directory", taskDir)
 	case err == nil:
-		return nil, fmt.Errorf("%s exists and is not a directory", dir)
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, err
+	default:
+		if err := os.MkdirAll(taskDir, 0o755); err != nil {
+			return nil, err
+		}
+		created = true
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
 	// A queue without its marker is the ambiguity the marker exists to remove,
 	// so making one writes both.
-	config, err := config.WriteConfigIfMissing(root, dir)
+	marker, err := config.WriteConfigIfMissing(root, taskDir)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{Dir: dir, Created: true, ConfigWritten: config}, nil
+	return &Store{Dir: taskDir, Created: created, ConfigWritten: marker}, nil
 }
 
-// OpenStore returns the store for startDir, creating the task directory when
-// there is none: `tq add` in a fresh repository should just work rather than
-// stopping to demand `tq init`.
+// OpenStore returns the store for the project startDir belongs to, and fails
+// when there is none. Nothing here creates anything: `tq init` is the only
+// command that makes a queue, so a directory with no project at or above it
+// gets an error naming that command rather than a queue it did not ask for.
 func OpenStore(startDir string) (*Store, error) {
 	dir, err := DiscoverTaskDir(startDir)
-	switch {
-	case err == nil:
-		return &Store{Dir: dir}, nil
-	case errors.Is(err, ErrProjectNotFound):
-		store, createErr := InitStore(startDir)
-		if createErr != nil {
-			// Still "no usable task directory", which is exit code 3.
-			return nil, fmt.Errorf("%w: %v", ErrProjectNotFound, createErr)
-		}
-		return store, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &Store{Dir: dir}, nil
 }
 
-// taskDirTarget is where a new task directory belongs: TQ_DIR when set,
-// otherwise .tasks at the root of the enclosing Git repository, falling back to
-// startDir itself. Preferring the repository root keeps an agent working in a
-// subdirectory from scattering task directories around the tree.
-func taskDirTarget(startDir string) (string, error) {
+// initTaskDir is where `tq init` puts the queue: TQ_DIR when set, otherwise
+// what a marker already in dir declares, otherwise dir/.tasks. It reads the
+// marker in dir alone — init creates the project where it is run, and a marker
+// further up belongs to another project.
+func initTaskDir(dir string) (string, error) {
 	if override := os.Getenv(config.EnvTaskDir); override != "" {
 		return filepath.Abs(override)
 	}
-
-	cfg, err := config.FindConfig(startDir)
+	cfg, err := config.ConfigIn(dir)
 	if err != nil {
 		return "", err
 	}
 	if cfg != nil {
 		return cfg.TaskDir(), nil
 	}
-
-	dir, err := filepath.Abs(startDir)
-	if err != nil {
-		return "", err
-	}
-	if root, ok := config.RepositoryRoot(dir); ok {
-		dir = root
-	}
 	return filepath.Join(dir, config.TaskDirName), nil
 }
 
-// ShadowedProjectMarker reports a project marker that discovery deliberately
-// walked past — a .taskqueue.yaml above the enclosing repository, which the
-// bounded search will not adopt. Creating a fresh queue while that exists is
-// when a caller's tasks appear to vanish, so the CLI names it.
-//
-// The marker is the whole question, because the marker is what discovery looks
-// for (TQ-0029). Looking for a directory named .tasks was wrong in both
-// directions: a bare one above is not a queue at all, so the note was a false
-// positive, and a real project above whose path is named anything else went
-// unreported.
-func ShadowedProjectMarker(startDir string) (string, bool) {
-	if os.Getenv(config.EnvTaskDir) != "" || os.Getenv(config.EnvWalkForever) == "true" {
-		return "", false // nothing was excluded: the search was not bounded
-	}
-	abs, err := filepath.Abs(startDir)
-	if err != nil {
-		return "", false
-	}
-	root, ok := config.RepositoryRoot(abs)
-	if !ok {
-		return "", false
-	}
-
-	// Discovery already covered startDir up to root and found nothing, so the
-	// shadowed marker is the nearest one above it — and the walk runs to the
-	// filesystem root, since that is how far TQ_WALK_FOREVER would have gone.
-	for dir := filepath.Dir(root); ; {
-		candidate := filepath.Join(dir, config.ConfigFileName)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
-}
-
 // DiscoverTaskDir returns the existing task directory to use: the TQ_DIR
-// override when set, otherwise the nearest .tasks directory at or above
-// startDir. Walking up lets an agent run tq from any subdirectory of a
-// repository. It reports ErrProjectNotFound when there is nothing yet, which is
-// what makes OpenStore create one.
+// override when set, otherwise the one named by the nearest .taskqueue.yaml at
+// or above startDir. Walking up lets an agent run tq from any subdirectory of a
+// project; the walk stops at the home directory (see config.WalkBoundary).
+//
+// It reports ErrProjectNotFound when there is nothing to find, and that is the
+// end of it — no caller creates a queue on the strength of it.
 func DiscoverTaskDir(startDir string) (string, error) {
 	if override := os.Getenv(config.EnvTaskDir); override != "" {
 		abs, err := filepath.Abs(override)
@@ -191,7 +167,7 @@ func DiscoverTaskDir(startDir string) (string, error) {
 		info, err := os.Stat(abs)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			return "", fmt.Errorf("%w: %s=%s does not exist yet", ErrProjectNotFound, config.EnvTaskDir, override)
+			return "", fmt.Errorf("%w: %s=%s does not exist; %s", ErrProjectNotFound, config.EnvTaskDir, override, initHint)
 		case err != nil:
 			return "", fmt.Errorf("%s=%s: %w", config.EnvTaskDir, override, err)
 		case !info.IsDir():
@@ -211,26 +187,31 @@ func DiscoverTaskDir(startDir string) (string, error) {
 		if info, err := os.Stat(declared); err == nil && info.IsDir() {
 			return declared, nil
 		}
-		// The project is configured; the directory just is not there yet.
-		// Creating it is the caller's business, at the declared location.
-		return "", fmt.Errorf("%w (%s says the task directory is %s)", ErrProjectNotFound, cfg.File, declared)
+		// The project is declared but its queue is not on disk — a marker
+		// committed without the directory, or one deleted since. Init puts it
+		// back, but only when it is run in the marker's own directory: init
+		// creates the queue where it stands, so following a bare "run tq init"
+		// from a subdirectory would fork a second project rather than repair
+		// this one. So this is the case where the hint names the directory.
+		return "", fmt.Errorf("%w: %s says the task directory is %s, which does not exist; run \"tq init\" in %s to create it",
+			ErrProjectNotFound, cfg.File, declared, filepath.Dir(cfg.File))
 	}
 
 	// No marker, so there is no project here. tq does not go looking for a
 	// directory that happens to be called .tasks: guessing at names on the way
-	// up is what the marker replaces. The caller creates one, which writes the
-	// marker with it.
+	// up is what the marker replaces.
 	abs, err := filepath.Abs(startDir)
 	if err != nil {
 		return "", err
 	}
 	if stopAt := config.WalkBoundary(abs); stopAt != "" {
-		// Say where the search stopped. The project the caller means may be
-		// one directory further up and plainly visible to them.
-		return "", fmt.Errorf("%w (no %s in %s up to the repository root %s; set %s=true to look past it)",
-			ErrProjectNotFound, config.ConfigFileName, startDir, stopAt, config.EnvWalkForever)
+		// Say where the search stopped, so a caller whose project sits above
+		// their home directory can see why it was not reached.
+		return "", fmt.Errorf("%w: no %s in %s or any parent directory up to %s; %s",
+			ErrProjectNotFound, config.ConfigFileName, abs, stopAt, initHint)
 	}
-	return "", fmt.Errorf("%w (no %s in %s or any parent directory)", ErrProjectNotFound, config.ConfigFileName, startDir)
+	return "", fmt.Errorf("%w: no %s in %s or any parent directory; %s",
+		ErrProjectNotFound, config.ConfigFileName, abs, initHint)
 }
 
 // CreateTaskInput carries the fields a caller may set when creating a task.

@@ -15,8 +15,9 @@ import (
 )
 
 // isolationEnv is the configuration that can send a test outside its own
-// temporary directory: the two variables discovery reads before anything else.
-var isolationEnv = []string{config.EnvTaskDir, config.EnvWalkForever}
+// temporary directory: TQ_DIR overrides every other answer discovery has, so
+// an exported one points the whole suite at whatever queue it names.
+var isolationEnv = []string{config.EnvTaskDir}
 
 // ambient is what those variables held when the test binary started, taken
 // before Isolate clears them. It is what lets RequireIsolated tell a suite that
@@ -53,8 +54,8 @@ func Isolate() {
 func RequireIsolated(t *testing.T) {
 	t.Helper()
 	if !isolated {
-		t.Fatalf("this package's TestMain must call tqtest.Isolate(): without it an exported %s or %s points the whole suite at a real queue",
-			config.EnvTaskDir, config.EnvWalkForever)
+		t.Fatalf("this package's TestMain must call tqtest.Isolate(): without it an exported %s points the whole suite at a real queue",
+			config.EnvTaskDir)
 	}
 	for _, name := range isolationEnv {
 		got := os.Getenv(name)
@@ -85,11 +86,15 @@ func ClearEnv(t *testing.T) {
 	}
 }
 
-// Root returns a temporary directory that discovery cannot climb out of.
-// t.TempDir() alone is not enough: it honours TMPDIR, and the walk up looks for
-// the marker in every parent, so with TMPDIR inside a project the fixtures would
-// bind to that project's queue. The marker is what stops the walk here, because
-// the marker is what discovery looks for (TQ-0029).
+// Root returns a temporary project directory that discovery cannot climb out
+// of. t.TempDir() alone is not enough: it honours TMPDIR, and the walk up looks
+// for the marker in every parent, so with TMPDIR inside a project the fixtures
+// would bind to that project's queue. The marker is what stops the walk here,
+// because the marker is what discovery looks for (TQ-0029).
+//
+// It writes the marker and nothing else. The task directory the marker names
+// does not exist yet, which is a project no command but `tq init` can work in
+// (TQ-0085): a fixture that needs the queue too calls NewStore, or runs init.
 func Root(t *testing.T) string {
 	t.Helper()
 	root := bareRoot(t)
@@ -97,92 +102,42 @@ func Root(t *testing.T) string {
 	return root
 }
 
-// RootWithGit returns a temporary directory anchored by .git and holding no
-// marker. It is for the tests whose premise is a directory that is not a project
-// yet — `tq init` writing the first marker, discovery reporting that there is
-// nothing to find, a queue created at the repository root — where the marker
-// cannot be the barrier because its absence is the thing under test. The
-// repository bound is then the only thing that can stop the walk.
-func RootWithGit(t *testing.T) string {
+// RootWithoutMarker returns a temporary directory that is not a project: no
+// marker in it, and — asserted, not assumed — none anywhere the walk could
+// reach from it. It is for the tests whose premise is that there is nothing to
+// find: `tq init` writing the first marker, discovery reporting no project,
+// a config loader answering "none".
+//
+// The assertion is the whole fixture. Since TQ-0085 the walk stops at the home
+// directory, and a temporary directory outside it — macOS hands out
+// /var/folders/… — runs to the filesystem root instead, so nothing structural
+// keeps this root isolated. Asking discovery's own question is what does: a
+// marker above would put the code under test on a different branch entirely,
+// and the test would pass or fail for a reason that has nothing to do with it
+// (TQ-0064).
+//
+// Furnish the directory freely; what it must not be handed to is anything that
+// would climb out of it, and the assertion is what proves nothing can.
+func RootWithoutMarker(t *testing.T) string {
 	t.Helper()
 	root := bareRoot(t)
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
-// RootWithoutAnchor returns a temporary directory with neither anchor: no
-// marker and no repository, at it or above it. It is for the configuration
-// TQ-0064 found missing from the suite — a project on a machine without Git,
-// where discovery has no bound and nothing to find, and simply runs out of
-// tree.
-//
-// The contract is about what the code under test may do with it, not about
-// what the test puts in it: furnish the directory freely, but never hand it to
-// something that creates a queue. With no anchor there is nothing to stop that
-// walk climbing into a developer's own project, which is what TQ-0021 and
-// TQ-0053 are about, so a test that exercises creation takes one of the
-// anchored roots above instead.
-//
-// The guard is the isolation the anchors would otherwise be. Rather than trust
-// that nothing sits above the temporary directory, it asks the same two
-// questions discovery asks and fails when either answers — a marker above
-// would put discovery on a different branch entirely, and a repository above
-// would put the bound back.
-func RootWithoutAnchor(t *testing.T) string {
-	t.Helper()
-	root := bareRoot(t)
-	// A near-miss name or an unreadable directory anywhere up to the filesystem
-	// root comes back as an error rather than "no marker", and either one means
-	// the answer below cannot be trusted.
+	// A near-miss name or an unreadable directory anywhere up the walk comes
+	// back as an error rather than "no marker", and either one means the answer
+	// below cannot be trusted.
 	path, err := config.ConfigPath(root)
 	if err != nil {
 		t.Fatalf("looking for a marker above %s: %v", root, err)
 	}
 	if path != "" {
-		t.Fatalf("%s sits above the fixture, so this test's premise — a project with no marker anywhere above it — does not hold here", path)
+		t.Fatalf("%s sits above the fixture, so this test's premise — a directory with no marker anywhere above it — does not hold here", path)
 	}
-	RequireNoRepositoryAbove(t, root)
 	return root
 }
 
-// RootWithoutGit returns a marker-anchored temporary directory with no
-// repository anywhere above it. It is for the tests whose premise is a project
-// on a machine without Git: the marker is the barrier, and the absence of a
-// repository is the thing under test rather than an accident of where TMPDIR
-// happens to point.
-//
-// Root would do for the barrier alone. What this adds is the guard, and the
-// guard is the point: a repository above hands the fallbacks below the bound
-// somewhere to land, and a test written to catch them lands there too and
-// passes for the wrong reason (TQ-0064).
-func RootWithoutGit(t *testing.T) string {
-	t.Helper()
-	root := Root(t)
-	RequireNoRepositoryAbove(t, root)
-	return root
-}
-
-// RequireNoRepositoryAbove fails a test whose premise is a project without Git
-// when the machine says otherwise — TMPDIR inside a developer's own checkout is
-// all it takes. Exported so the premise and its wording live in one place: the
-// fixtures here assert it for the roots they hand out, and a test that builds a
-// directory of its own asserts it for that.
-//
-// It fails rather than skipping, because a skip that only shows under -v is how
-// this stops being noticed.
-func RequireNoRepositoryAbove(t *testing.T, dir string) {
-	t.Helper()
-	if repo, ok := config.RepositoryRoot(dir); ok {
-		t.Fatalf("%s is a repository above the fixture, so this test's premise — a project with no Git anywhere above it — does not hold here", repo)
-	}
-}
-
-// bareRoot is a temporary directory with the environment cleared and no anchor
-// of its own. Unexported: an unanchored root is what TQ-0021 and TQ-0053 are
-// about, so a test reaches for one of the anchored roots above, or for the
-// guarded RootWithoutAnchor when both absences are the premise.
+// bareRoot is a temporary directory with the environment cleared and no marker
+// of its own. Unexported: an unguarded root is what TQ-0021 and TQ-0053 are
+// about, so a test reaches for Root, or for the guarded RootWithoutMarker when
+// an absent marker is the premise.
 func bareRoot(t *testing.T) string {
 	t.Helper()
 	// Belt and braces: Isolate cleared the ambient values, this clears anything

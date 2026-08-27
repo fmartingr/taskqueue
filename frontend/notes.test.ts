@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { formatNote, joinBody, mergeNotes, parseNotes, splitBody, type Note } from "./notes";
+import {
+  formatNote,
+  joinBody,
+  mergeBody,
+  mergeNotes,
+  parseNotes,
+  splitBody,
+  type Note,
+} from "./notes";
 
 const STAMP = "2026-08-25T09:42:00+02:00";
 
@@ -332,5 +340,90 @@ describe("mergeNotes", () => {
     const twin = note(first.timestamp, "the first note");
     const edited = note(first.timestamp, "the second twin, reworded");
     expect(mergeNotes([first, twin], [first, edited], [twin])).toEqual([first]);
+  });
+});
+
+describe("mergeBody", () => {
+  const note = (timestamp: string, text: string): Note => ({ timestamp, text });
+
+  const first = note("2026-08-25T09:00:00+02:00", "the first note");
+  const later = note("2026-08-25T11:00:00+02:00", "written while the dialog was open");
+
+  const body = (content: string, ...notes: Note[]) => ({ content, notes });
+
+  test("a body nobody touched needs no patch at all", () => {
+    const opened = body("## Finding\n\nAs filed.", first);
+    expect(mergeBody(opened, opened, opened)).toEqual({ outcome: "unchanged" });
+  });
+
+  test("a content edit made only in the file survives a save (TQ-0079)", () => {
+    // The whole bug: the dialog changed Priority, never the textarea, and used
+    // to write its open-time snapshot back over the agent's revision.
+    const opened = body("## Finding\n\nAs filed.", first);
+    const current = body("## Finding\n\nRevised by an agent.", first);
+    expect(mergeBody(opened, opened, current)).toEqual({ outcome: "unchanged" });
+  });
+
+  test("a note appended under an open dialog is still kept (TQ-0010)", () => {
+    const opened = body("Content.", first);
+    const current = body("Content.", first, later);
+    expect(mergeBody(opened, opened, current)).toEqual({ outcome: "unchanged" });
+  });
+
+  test("a note edited here rides on the file's content, not the snapshot", () => {
+    const opened = body("As filed.", first);
+    const edited = body("As filed.", note(first.timestamp, "reworded in the dialog"));
+    const current = body("Revised by an agent.", first, later);
+
+    expect(mergeBody(opened, edited, current)).toEqual({
+      outcome: "write",
+      body: joinBody(body("Revised by an agent.", note(first.timestamp, "reworded in the dialog"), later)),
+    });
+  });
+
+  test("a content edit is written when the file's content has not moved", () => {
+    const opened = body("As filed.", first);
+    const edited = body("Rewritten in the dialog.", first);
+    const current = body("As filed.", first, later);
+
+    expect(mergeBody(opened, edited, current)).toEqual({
+      outcome: "write",
+      body: joinBody(body("Rewritten in the dialog.", first, later)),
+    });
+  });
+
+  test("both sides editing the content is refused rather than merged", () => {
+    const opened = body("As filed.", first);
+    const edited = body("Rewritten in the dialog.", first);
+    const current = body("Revised by an agent.", first);
+    expect(mergeBody(opened, edited, current)).toEqual({ outcome: "conflict" });
+  });
+
+  test("the refusal does not depend on the notes agreeing", () => {
+    const opened = body("As filed.", first);
+    const edited = body("Rewritten in the dialog.", note(first.timestamp, "reworded"));
+    const current = body("Revised by an agent.", first, later);
+    expect(mergeBody(opened, edited, current)).toEqual({ outcome: "conflict" });
+  });
+
+  test("a file whose content was emptied still counts as changed", () => {
+    const opened = body("As filed.");
+    expect(mergeBody(opened, body("Rewritten in the dialog."), body(""))).toEqual({
+      outcome: "conflict",
+    });
+    // …and with nothing typed here, the emptying stands.
+    expect(mergeBody(opened, opened, body(""))).toEqual({ outcome: "unchanged" });
+  });
+
+  test("clearing the textarea is a content edit like any other", () => {
+    const opened = body("As filed.", first);
+    expect(mergeBody(opened, body("", first), body("As filed.", first))).toEqual({
+      outcome: "write",
+      body: joinBody(body("", first)),
+    });
+  });
+
+  test("an empty body on every side needs no patch", () => {
+    expect(mergeBody(body(""), body(""), body(""))).toEqual({ outcome: "unchanged" });
   });
 });

@@ -9,16 +9,18 @@
  *
  * That is also what made TQ-0010 possible: a body snapshot taken at open time
  * and PATCHed wholesale erased every note the CLI wrote in between. Saving
- * therefore re-reads the task first and merges (see buildPatch and mergeNotes):
+ * therefore re-reads the task first and merges (see buildPatch and mergeBody):
  * the file decides which notes exist, the dialog decides only the wording of
- * the ones it was opened with.
+ * the ones it was opened with, and the content half above them belongs to
+ * whichever side actually edited it — the snapshot is never written back over
+ * an edit the dialog did not make (TQ-0079).
  */
 import { computed, onMounted, ref } from "vue";
 
 import { addNote, describe, fetchTask, patchTask, type TaskInput } from "../api";
 import { defaultPriority, pendingDependencies, priorityOptions, type Task } from "../board";
 import { formatTime, splitList } from "../format";
-import { joinBody, mergeNotes, splitBody, type Note } from "../notes";
+import { mergeBody, splitBody, type Note, type SplitBody } from "../notes";
 import { columns, index, priorities, refresh, toast } from "../state";
 import NotesPanel from "./NotesPanel.vue";
 
@@ -28,8 +30,11 @@ const emit = defineEmits<{ close: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 
 const opened = splitBody(props.task.body ?? "");
-/** The notes exactly as the dialog opened them, for the merge on save. */
-const baseline = ref<Note[]>(opened.notes.map((note) => ({ ...note })));
+/** The body exactly as the dialog opened it, for the merge on save. */
+const baseline = ref<SplitBody>({
+  content: opened.content,
+  notes: opened.notes.map((note) => ({ ...note })),
+});
 
 const title = ref(props.task.title);
 const status = ref<string>(props.task.status);
@@ -61,26 +66,74 @@ function dismiss(): void {
 /**
  * The whole dialog as one patch, against what the file holds *now* rather than
  * what it held when the dialog opened.
+ *
+ * `body` is left out of the patch whenever the body needs no writing, so a save
+ * that changed only Priority cannot touch content someone else wrote. Null is
+ * the one case with no honest patch at all — both sides edited the content half
+ * — and every caller answers it by writing nothing and saying so.
  */
-async function buildPatch(): Promise<Partial<TaskInput>> {
-  const current = splitBody((await fetchTask(props.task.id)).body ?? "").notes;
-  return {
+async function buildPatch(): Promise<Partial<TaskInput> | null> {
+  const current = splitBody((await fetchTask(props.task.id)).body ?? "");
+  const merged = mergeBody(baseline.value, { content: content.value, notes: notes.value }, current);
+  if (merged.outcome === "conflict") return null;
+
+  const patch: Partial<TaskInput> = {
     title: title.value,
     status: status.value,
     priority: priority.value,
     assignee: assignee.value,
     labels: splitList(labelList.value),
     depends_on: splitList(dependsOn.value),
-    body: joinBody({
-      content: content.value,
-      notes: mergeNotes(baseline.value, notes.value, current),
-    }),
   };
+  if (merged.outcome === "write") patch.body = merged.body;
+  return patch;
+}
+
+/**
+ * Says why nothing was written, and leaves every field exactly as the user left
+ * it, typing included: the point of refusing is that their text is the half
+ * that would have been lost, so it is the last thing to throw away.
+ *
+ * Deliberately without a refresh. The listing is what App.vue finds this dialog
+ * in, so replacing it can unmount the component — and a task withheld from a
+ * scan is exactly what a file being written twice looks like (TQ-0012,
+ * TQ-0040), which is the situation a refusal is already in. Closing the dialog
+ * releases the change the stream held while it was open, so reopening starts
+ * from the file either way.
+ *
+ * "since this dialog read it" rather than "while it was open": the body it was
+ * opened with comes from the last listing, so the change may have landed just
+ * before the click rather than after it.
+ */
+function refuse(): void {
+  toast(
+    `Not saved: the body of ${props.task.id} changed on disk since this dialog read it. ` +
+      `Your text is still here — copy it, then close and reopen the task.`,
+  );
+}
+
+/**
+ * Starts the body over from what the server just wrote back, baseline and all.
+ *
+ * Anything that writes has to do this before it can fail again: a baseline left
+ * behind a write the dialog itself made reads as somebody else's edit, and
+ * every later save would refuse itself over it.
+ */
+function rebase(task: Task): void {
+  const written = splitBody(task.body ?? "");
+  content.value = written.content;
+  notes.value = written.notes.map((note) => ({ ...note }));
+  baseline.value = { content: written.content, notes: written.notes.map((note) => ({ ...note })) };
 }
 
 async function save(): Promise<void> {
   try {
-    await patchTask(props.task.id, await buildPatch());
+    const patch = await buildPatch();
+    if (patch === null) {
+      refuse();
+      return;
+    }
+    await patchTask(props.task.id, patch);
     dismiss();
     await refresh();
   } catch (error) {
@@ -95,14 +148,17 @@ async function append(): Promise<void> {
   try {
     // Pending edits are saved first: appending a note rewrites the body, and
     // silently dropping what the user typed would be worse than an extra write.
-    await patchTask(props.task.id, await buildPatch());
-    const task = await addNote(props.task.id, text);
+    const patch = await buildPatch();
+    if (patch === null) {
+      refuse();
+      return;
+    }
+    // Rebased twice, because the note is a second write and can fail on its
+    // own: leaving the dialog on the pre-patch baseline until both had landed
+    // is what would strand it, refusing every later save over its own edit.
+    rebase(await patchTask(props.task.id, patch));
+    rebase(await addNote(props.task.id, text));
     noteDraft.value = "";
-
-    const written = splitBody(task.body ?? "");
-    content.value = written.content;
-    notes.value = written.notes.map((note) => ({ ...note }));
-    baseline.value = written.notes.map((note) => ({ ...note }));
 
     await refresh();
     toast(`Note added to ${props.task.id}`, "info");

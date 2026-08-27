@@ -5974,6 +5974,20 @@ function mergeNotes(opened, edited, current) {
     return edited[at] ?? note;
   });
 }
+function mergeBody(opened, edited, current) {
+  const notes = mergeNotes(opened.notes, edited.notes, current.notes);
+  if (edited.content !== opened.content) {
+    if (current.content !== opened.content)
+      return { outcome: "conflict" };
+    return { outcome: "write", body: joinBody({ content: edited.content, notes }) };
+  }
+  if (sameNotes(notes, current.notes))
+    return { outcome: "unchanged" };
+  return { outcome: "write", body: joinBody({ content: current.content, notes }) };
+}
+function sameNotes(a, b) {
+  return a.length === b.length && a.every((note, i) => note.timestamp === b[i].timestamp && note.text === b[i].text);
+}
 function formatNote(note) {
   const [first = "", ...rest] = trimBlankLines(note.text).split(`
 `);
@@ -6814,7 +6828,10 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
     const emit2 = __emit;
     const dialog = ref(null);
     const opened = splitBody(props.task.body ?? "");
-    const baseline = ref(opened.notes.map((note) => ({ ...note })));
+    const baseline = ref({
+      content: opened.content,
+      notes: opened.notes.map((note) => ({ ...note }))
+    });
     const title = ref(props.task.title);
     const status = ref(props.task.status);
     const priority = ref(props.task.priority || defaultPriority(priorities.value));
@@ -6833,23 +6850,39 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
       dialog.value?.close();
     }
     async function buildPatch() {
-      const current = splitBody((await fetchTask(props.task.id)).body ?? "").notes;
-      return {
+      const current = splitBody((await fetchTask(props.task.id)).body ?? "");
+      const merged = mergeBody(baseline.value, { content: content.value, notes: notes.value }, current);
+      if (merged.outcome === "conflict")
+        return null;
+      const patch = {
         title: title.value,
         status: status.value,
         priority: priority.value,
         assignee: assignee.value,
         labels: splitList(labelList.value),
-        depends_on: splitList(dependsOn.value),
-        body: joinBody({
-          content: content.value,
-          notes: mergeNotes(baseline.value, notes.value, current)
-        })
+        depends_on: splitList(dependsOn.value)
       };
+      if (merged.outcome === "write")
+        patch.body = merged.body;
+      return patch;
+    }
+    function refuse() {
+      toast(`Not saved: the body of ${props.task.id} changed on disk since this dialog read it. ` + `Your text is still here — copy it, then close and reopen the task.`);
+    }
+    function rebase(task) {
+      const written = splitBody(task.body ?? "");
+      content.value = written.content;
+      notes.value = written.notes.map((note) => ({ ...note }));
+      baseline.value = { content: written.content, notes: written.notes.map((note) => ({ ...note })) };
     }
     async function save() {
       try {
-        await patchTask(props.task.id, await buildPatch());
+        const patch = await buildPatch();
+        if (patch === null) {
+          refuse();
+          return;
+        }
+        await patchTask(props.task.id, patch);
         dismiss();
         await refresh();
       } catch (error) {
@@ -6861,13 +6894,14 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
       if (text === "")
         return;
       try {
-        await patchTask(props.task.id, await buildPatch());
-        const task = await addNote(props.task.id, text);
+        const patch = await buildPatch();
+        if (patch === null) {
+          refuse();
+          return;
+        }
+        rebase(await patchTask(props.task.id, patch));
+        rebase(await addNote(props.task.id, text));
         noteDraft.value = "";
-        const written = splitBody(task.body ?? "");
-        content.value = written.content;
-        notes.value = written.notes.map((note) => ({ ...note }));
-        baseline.value = written.notes.map((note) => ({ ...note }));
         await refresh();
         toast(`Note added to ${props.task.id}`, "info");
       } catch (error) {

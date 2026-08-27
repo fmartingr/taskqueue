@@ -198,6 +198,54 @@ export function mergeNotes(opened: Note[], edited: Note[], current: Note[]): Not
   });
 }
 
+/** What a save should do to a body: leave it alone, write this, or refuse. */
+export type BodyMerge =
+  | { outcome: "unchanged" }
+  | { outcome: "write"; body: string }
+  | { outcome: "conflict" };
+
+/**
+ * Decides what a save should do to a task's body.
+ *
+ * `opened` is the body as the dialog read it, `edited` the same body as the
+ * user has since made it, and `current` is what the file holds now — the dialog
+ * re-reads before every write, because the poll stands down while it is open
+ * and the file can be arbitrarily ahead of the snapshot.
+ *
+ * The notes half merges, note by note (see mergeNotes). The content half does
+ * not: a three-way merge of free Markdown is guesswork, so one side gets the
+ * whole of it and the two are never interleaved.
+ *
+ * - Untouched here: the file's content half stands, whoever wrote it, and the
+ *   dialog's snapshot is dropped. This is TQ-0079 — a save that changed only
+ *   Priority used to write that snapshot back over an agent's edit.
+ * - Touched here, untouched there: the dialog's content half is written.
+ * - Touched on both sides: "conflict". There is no honest answer, so the
+ *   caller refuses the save rather than picking a winner.
+ *
+ * "unchanged" means the body needs no patch at all, so the save can leave the
+ * field out and touch nothing — which is the whole of the first case above
+ * whenever the notes did not move either.
+ */
+export function mergeBody(opened: SplitBody, edited: SplitBody, current: SplitBody): BodyMerge {
+  const notes = mergeNotes(opened.notes, edited.notes, current.notes);
+
+  if (edited.content !== opened.content) {
+    if (current.content !== opened.content) return { outcome: "conflict" };
+    return { outcome: "write", body: joinBody({ content: edited.content, notes }) };
+  }
+
+  if (sameNotes(notes, current.notes)) return { outcome: "unchanged" };
+  return { outcome: "write", body: joinBody({ content: current.content, notes }) };
+}
+
+function sameNotes(a: Note[], b: Note[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((note, i) => note.timestamp === b[i].timestamp && note.text === b[i].text)
+  );
+}
+
 export function formatNote(note: Note): string {
   const [first = "", ...rest] = trimBlankLines(note.text).split("\n");
   const head = note.timestamp === "" ? `- ${first.trim()}` : `- ${note.timestamp} — ${first.trim()}`;

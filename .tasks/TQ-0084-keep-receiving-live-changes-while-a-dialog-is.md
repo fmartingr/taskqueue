@@ -1,13 +1,13 @@
 ---
 id: TQ-0084
 title: Keep receiving live changes while a dialog is open
-status: in-progress
+status: done
 priority: normal
 labels:
   - feature
   - component/frontend
 created: 2026-08-26T14:24:52+02:00
-updated: 2026-08-27T17:27:06+02:00
+updated: 2026-08-27T17:33:49+02:00
 ---
 
 ## What happens today

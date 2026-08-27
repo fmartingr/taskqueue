@@ -1,14 +1,14 @@
 ---
 id: TQ-0083
 title: Scoped labels hide their scope in the UI
-status: in-progress
+status: done
 priority: normal
 labels:
   - bug
   - component/frontend
   - component/config
 created: 2026-08-26T13:20:40+02:00
-updated: 2026-08-27T16:26:12+02:00
+updated: 2026-08-27T16:41:12+02:00
 ---
 
 ## Symptom

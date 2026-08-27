@@ -1,13 +1,14 @@
 ---
 id: TQ-0081
 title: A dialog reopened within a millisecond of closing is swallowed
-status: todo
+status: rejected
 priority: low
 labels:
   - bug
   - component/frontend
+  - wontfix
 created: 2026-08-26T13:12:58+02:00
-updated: 2026-08-26T23:58:34+02:00
+updated: 2026-08-27T16:16:49+02:00
 ---
 
 ## Finding
@@ -76,3 +77,22 @@ Found by the review of TQ-0076.
   TaskDialog.append()'s own `await refresh()` is a second path to the same state.
 
   Reference: frontend/components/App.vue:19. Treat the guard as fixing a reachable bug, not as defensive polish.
+- 2026-08-27T16:16:49+02:00 — Rejected as wontfix (2026-08-27), by decision, not because it was disproved. Recording what is known so it can be picked up accurately.
+
+  TWO separate defects live at frontend/components/App.vue:37.
+
+  A — the swallowed reopen, which this task is named for. Needs a sub-millisecond window between close and reopen: ~40% via focus()+press() back to back, never at 5ms or more, 12/12 clean with a real mouse. A human will not hit it. Genuinely low.
+
+  B — the board stops updating, permanently. Nothing to do with A's timing. `open` is computed(() => tasks.value.find(t => t.id === openTaskID.value)). If openTaskID ever names a task not in the listing, TaskDialog unmounts WITHOUT firing @close, openTaskID stays set, busy stays true, and every later change signal queues forever. Only a reload recovers. Reachable path: a card click during applySignals' await, on a task the resolving listing no longer contains. TaskDialog.append()'s own await refresh() is a second path.
+
+  The Finding above says 'no trigger exists today — there is no DELETE endpoint'. That was true when filed and is NOT true any more. This sequence made a task leaving the listing routine:
+  - TQ-0040 withholds BOTH copies of a duplicated ID from /api/tasks (verified by hand: tq list showed only TQ-0002 while TQ-0001 was duplicated)
+  - TQ-0015 shipped as option A, so an interrupted retitle still produces duplicates in roughly a quarter of concurrent updates
+  - TQ-0011 skips an unreadable file — a merge conflict, an agent mid-write, a BOM
+  - TQ-0039 withholds a task whose ID a .MD file also claims
+
+  So: have a task open, let a concurrent tq update leave two files claiming it, and the board goes quiet until reloaded.
+
+  Also on record: the Suggested fix below is INSUFFICIENT on its own. Comparing the id on close does not restore the dialog, because v-if carries no :key — a reopen patches the existing instance rather than remounting, so onMounted(() => showModal()) never re-runs. With only the id guard the element survives mounted with no open attribute and the click is still swallowed, silently rather than visibly, which is worse. A complete fix needs the id comparison AND a path that re-shows the element.
+
+  Related, same root cause: TQ-0079's review found refuse() refetching the listing could unmount the dialog mid-edit and destroy the text it had just promised to keep. Fixed there by not refetching, not by fixing the mount derivation.

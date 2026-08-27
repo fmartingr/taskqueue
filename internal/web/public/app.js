@@ -5556,8 +5556,23 @@ function isConfigured(name, labels) {
 function definitionOf(name, labels) {
   return isConfigured(name, labels) ? labels[name] : undefined;
 }
+var LABEL_JOINER = " | ";
+function titleCase(text) {
+  return text.split(LABEL_SEPARATOR).map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1)).join(LABEL_SEPARATOR);
+}
+function labelHalves(name, labels) {
+  const configured = definitionOf(name, labels)?.display_name ?? "";
+  const named = configured === name ? "" : configured;
+  const at = name.indexOf(LABEL_SEPARATOR);
+  const scope = at > 0 ? name.slice(0, at) : "";
+  const value = at > 0 ? name.slice(at + LABEL_SEPARATOR.length) : "";
+  if (scope === "" || value === "")
+    return { scope: "", value: named || name };
+  return { scope: titleCase(scope), value: named || titleCase(value) };
+}
 function labelDisplay(name, labels) {
-  return definitionOf(name, labels)?.display_name || name;
+  const { scope, value } = labelHalves(name, labels);
+  return scope === "" ? value : scope + LABEL_JOINER + value;
 }
 function labelsInUse(tasks) {
   const names = new Set;
@@ -6005,14 +6020,36 @@ var LabelChip_default = /* @__PURE__ */ defineComponent({
   },
   setup(__props) {
     const props = __props;
-    const display = computed2(() => labelDisplay(props.name, labels.value));
+    const halves = computed2(() => labelHalves(props.name, labels.value));
     const chip = computed2(() => labelChip(props.name, labels.value));
+    const scoped = computed2(() => halves.value.scope !== "");
+    const pillStyle = computed2(() => {
+      const drawn = chip.value;
+      if (drawn === null)
+        return;
+      return scoped.value ? { borderColor: drawn.background } : { background: drawn.background, color: drawn.text };
+    });
+    const scopeStyle = computed2(() => chip.value === null ? undefined : { background: chip.value.background, color: chip.value.text });
+    const valueStyle = computed2(() => chip.value === null ? undefined : { color: chip.value.background });
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("span", {
-        class: normalizeClass(["label", { tinted: chip.value !== null }]),
-        style: normalizeStyle(chip.value ? { background: chip.value.background, color: chip.value.text } : undefined),
+        class: normalizeClass(["label", { tinted: chip.value !== null, scoped: scoped.value }]),
+        style: normalizeStyle(pillStyle.value),
         title: __props.name
-      }, toDisplayString(display.value), 15, _hoisted_1);
+      }, [
+        scoped.value ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+          createBaseVNode("span", {
+            class: "label-scope",
+            style: normalizeStyle(scopeStyle.value)
+          }, toDisplayString(halves.value.scope), 5),
+          createBaseVNode("span", {
+            class: "label-value",
+            style: normalizeStyle(valueStyle.value)
+          }, toDisplayString(halves.value.value), 5)
+        ], 64)) : (openBlock(), createElementBlock(Fragment, { key: 1 }, [
+          createTextVNode(toDisplayString(halves.value.value), 1)
+        ], 64))
+      ], 14, _hoisted_1);
     };
   }
 });

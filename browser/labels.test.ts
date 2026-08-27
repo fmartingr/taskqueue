@@ -14,17 +14,29 @@ import { card, idsIn, useBoard, type Project } from "./harness";
 
 const openBoard = useBoard();
 
-/** The chips on a card, as the page renders them. */
+/** The chips on a card, as the page renders them — halves and all. */
 async function chips(page: Awaited<ReturnType<typeof openBoard>>["page"], id: string) {
   return page.$$eval(`${card(id)} .label`, (nodes) =>
     nodes.map((node) => {
       const element = node as HTMLElement;
+      const half = (selector: string) => {
+        const part = element.querySelector<HTMLElement>(selector);
+        if (part === null) return null;
+        const style = getComputedStyle(part);
+        return { text: part.textContent ?? "", background: style.backgroundColor, color: style.color };
+      };
+      const style = getComputedStyle(element);
       return {
         text: element.textContent ?? "",
         title: element.title,
-        background: getComputedStyle(element).backgroundColor,
-        color: getComputedStyle(element).color,
+        background: style.backgroundColor,
+        color: style.color,
+        // Every side carries the same colour; one of them is the assertion.
+        borderColor: style.borderTopColor,
         tinted: element.classList.contains("tinted"),
+        scoped: element.classList.contains("scoped"),
+        scope: half(".label-scope"),
+        value: half(".label-value"),
       };
     }),
   );
@@ -35,29 +47,84 @@ function setLabels(project: Project, labels: string): void {
   writeFileSync(join(project.dir, ".taskqueue.yaml"), `version: 1\npath: .tasks\n${labels}`);
 }
 
-test("a configured label is drawn with its colour and display name", async () => {
+/** A project declaring one flat label and one scoped one. */
+const TWO_LABELS =
+  'labels:\n  bug:\n    color: "#d73a4a"\n    display_name: Bug\n' +
+  '  component/frontend:\n    color: "#c5def5"\n    display_name: Frontend\n';
+
+test("a label with no scope is drawn as one chip, in its colour", async () => {
   let id = "";
   const { page } = await openBoard((project) => {
-    setLabels(
-      project,
-      'labels:\n  bug:\n    color: "#d73a4a"\n    display_name: Bug\n' +
-        '  component/frontend:\n    color: "#c5def5"\n    display_name: Frontend\n',
-    );
-    id = project.add("Coloured", "--label", "bug", "--label", "component/frontend");
+    setLabels(project, TWO_LABELS);
+    id = project.add("Coloured", "--label", "bug");
   });
 
-  const [bug, frontend] = await chips(page, id);
+  const [bug] = await chips(page, id);
 
   // The display name is what the board shows; the raw label, which is what the
   // CLI takes, is the tooltip.
-  expect(bug).toMatchObject({ text: "Bug", title: "bug", background: "rgb(215, 58, 74)", tinted: true });
-  expect(frontend).toMatchObject({ text: "Frontend", title: "component/frontend", tinted: true });
+  expect(bug).toMatchObject({
+    text: "Bug",
+    title: "bug",
+    background: "rgb(215, 58, 74)",
+    tinted: true,
+    scoped: false,
+    scope: null,
+  });
 
-  // Each chip carries its own background, so its text is picked to contrast
-  // with that rather than with the page: a dark chip gets light text and a
-  // light one dark text, in either theme.
+  // The chip carries its own background, so its text is picked to contrast with
+  // that rather than with the page: a dark chip gets light text and a light one
+  // dark text, in either theme.
   expect(bug!.color).toBe("rgb(255, 255, 255)");
-  expect(frontend!.color).toBe("rgb(17, 20, 24)");
+});
+
+test("a scoped label is drawn as two halves, tied together by the border", async () => {
+  let id = "";
+  const { page } = await openBoard((project) => {
+    setLabels(project, TWO_LABELS);
+    id = project.add("Coloured", "--label", "component/frontend");
+  });
+
+  const [frontend] = await chips(page, id);
+
+  // The scope comes from the key and the value from the display name, so the
+  // half saying what kind of label this is survives onto the board.
+  expect(frontend).toMatchObject({ title: "component/frontend", tinted: true, scoped: true });
+  expect(frontend!.scope).toEqual({
+    text: "Component",
+    background: "rgb(197, 222, 245)",
+    color: "rgb(17, 20, 24)",
+  });
+  expect(frontend!.value).toMatchObject({ text: "Frontend", color: "rgb(197, 222, 245)" });
+
+  // One object rather than two: the pill's border is the label's colour, and
+  // the value half sits on the page's own surface.
+  expect(frontend!.borderColor).toBe("rgb(197, 222, 245)");
+  expect(frontend!.value!.background).toBe("rgb(255, 255, 255)");
+
+  // That surface is a theme token, not white: the same chip in the dark palette
+  // draws its value half on the dark surface, with the same colour as its text.
+  await page.emulateMedia({ colorScheme: "dark" });
+  const [dark] = await chips(page, id);
+  expect(dark!.value).toEqual({ text: "Frontend", background: "rgb(28, 32, 39)", color: "rgb(197, 222, 245)" });
+  expect(dark!.scope).toEqual({ text: "Component", background: "rgb(197, 222, 245)", color: "rgb(17, 20, 24)" });
+});
+
+test("a scoped label the project does not declare still shows its scope", async () => {
+  let id = "";
+  const { page } = await openBoard((project) => {
+    setLabels(project, TWO_LABELS);
+    id = project.add("Improvised", "--label", "component/whatever");
+  });
+
+  const [chip] = await chips(page, id);
+
+  // Both halves come from the key, and neither has a colour to draw with, so
+  // the pill stays neutral.
+  expect(chip).toMatchObject({ title: "component/whatever", tinted: false, scoped: true });
+  expect(chip!.scope?.text).toBe("Component");
+  expect(chip!.value?.text).toBe("Whatever");
+  expect(chip!.borderColor).toBe("rgb(217, 220, 227)");
 });
 
 test("a label the project does not declare is accepted and drawn neutral", async () => {
@@ -92,9 +159,19 @@ test("the filter groups labels by prefix and filters on a whole label", async ()
     nodes.map((node) => ({
       label: (node as HTMLOptGroupElement).label,
       options: [...node.querySelectorAll("option")].map((option) => option.value),
+      // An option is one line of text, so it spells out what a chip draws as
+      // two halves — otherwise the bar would read "Backend" beside a chip
+      // reading "Component | Backend".
+      texts: [...node.querySelectorAll("option")].map((option) => option.textContent),
     })),
   );
-  expect(groups).toEqual([{ label: "component", options: ["component/backend", "component/cli"] }]);
+  expect(groups).toEqual([
+    {
+      label: "component",
+      options: ["component/backend", "component/cli"],
+      texts: ["Component | Backend", "Component | CLI"],
+    },
+  ]);
 
   const flat = await page.$$eval("#filter-label > option", (nodes) =>
     nodes.map((node) => (node as HTMLOptionElement).value),

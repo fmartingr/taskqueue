@@ -1,14 +1,14 @@
 ---
 id: TQ-0083
 title: Scoped labels hide their scope in the UI
-status: todo
+status: in-progress
 priority: normal
 labels:
   - bug
   - component/frontend
   - component/config
 created: 2026-08-26T13:20:40+02:00
-updated: 2026-08-26T13:20:40+02:00
+updated: 2026-08-27T16:26:12+02:00
 ---
 
 ## Symptom
@@ -85,3 +85,15 @@ the version with no `display_name` at all.
   it sets the value half.
 - Both themes checked, not just light.
 - The stored label and every CLI surface are untouched.
+
+---
+
+## Notes
+
+- 2026-08-27T16:26:12+02:00 — Implemented the two-half scoped chip.
+
+  frontend/board.ts: labelHalves(name, labels) splits a key at its FIRST separator — scope title-cased always, value title-cased only when it comes from the key. display_name now names the value half alone, so component/api reads 'Component | API' instead of losing the half that says it is a component. A display name equal to the key is treated as absent, because internal/config fills an empty one in with the key (that is what tq label list prints) and it would otherwise land in the value half. A key with an empty half (/x, x/) is not scoped: half a pill says less than the whole key. labelDisplay now returns the halves joined with ' | ', for the one place that has a single line of text — the filter bar's options, which would otherwise read 'Backend' beside a chip reading 'Component | Backend'.
+
+  LabelChip.vue draws one pill in two spans: the colour on .label-scope with text picked to contrast, .label-value on var(--surface) with the colour as its text, and the pill's border inline in the colour so the halves read as one object. The contrasting half is a theme token, not white — checked in both palettes in the browser test. A flat label is byte-identical to before; a scoped label the project does not declare keeps both halves neutral (--surface-alt scope, --border ring).
+
+  Noted for the record: a very pale colour (component/frontend, #c5def5) as the value half's text on the light surface is faint, and a very dark one is faint on the dark surface. That is the specified design — GitLab's scoped pill has the same property — and it is only the value half; the scope half still computes contrast.

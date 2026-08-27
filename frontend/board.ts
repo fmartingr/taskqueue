@@ -161,9 +161,64 @@ function definitionOf(name: string, labels: LabelSet): LabelDef | undefined {
   return isConfigured(name, labels) ? labels[name] : undefined;
 }
 
-/** What the board shows for a label: its display name, or the label itself. */
+/**
+ * The two halves the board draws a label as, GitLab style. A label carrying the
+ * separator splits at the first one: the scope says what kind of label it is,
+ * the value says which one. A label without a separator has no scope and stays
+ * the single-tone pill it has always been.
+ */
+export interface LabelHalves {
+  /** Title-cased, or "" for a label the board draws as one piece. */
+  scope: string;
+  value: string;
+}
+
+/** The joiner for a control that has one line of text and no second half. */
+export const LABEL_JOINER = " | ";
+
+/**
+ * Title-cases every segment. Nothing derives "API" from "api" — casing is the
+ * whole remaining job of a display name — but a key with none still reads
+ * better capitalised than raw.
+ */
+function titleCase(text: string): string {
+  return text
+    .split(LABEL_SEPARATOR)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(LABEL_SEPARATOR);
+}
+
+/**
+ * How the board splits a label into halves.
+ *
+ * A display name decorates the value half only: the scope always comes from the
+ * key, so `component/api` reads "Component | API" rather than losing the half
+ * that says it is a component at all. A display name equal to the key is the
+ * absent case — internal/config fills an empty one in with the key, because
+ * that is what `tq label list` prints — so the halves come from the key there
+ * too.
+ *
+ * A key with an empty half (`/x`, `x/`) is not scoped: half a pill says less
+ * than the whole key does.
+ */
+export function labelHalves(name: string, labels: LabelSet): LabelHalves {
+  const configured = definitionOf(name, labels)?.display_name ?? "";
+  const named = configured === name ? "" : configured;
+
+  const at = name.indexOf(LABEL_SEPARATOR);
+  const scope = at > 0 ? name.slice(0, at) : "";
+  const value = at > 0 ? name.slice(at + LABEL_SEPARATOR.length) : "";
+  if (scope === "" || value === "") return { scope: "", value: named || name };
+  return { scope: titleCase(scope), value: named || titleCase(value) };
+}
+
+/**
+ * What the board shows for a label where only one line of text fits — an
+ * <option>, where the two halves a chip draws have to be spelled out.
+ */
 export function labelDisplay(name: string, labels: LabelSet): string {
-  return definitionOf(name, labels)?.display_name || name;
+  const { scope, value } = labelHalves(name, labels);
+  return scope === "" ? value : scope + LABEL_JOINER + value;
 }
 
 /** Every label the tasks actually carry, deduplicated and sorted. */
@@ -193,6 +248,10 @@ const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
  * How to draw a configured label, or null when there is nothing to draw it
  * with — an unconfigured label, or a colour this board cannot parse. A null
  * chip is not a failure: it is the neutral rendering the ticket asks for.
+ *
+ * It is the colour-filled part: the whole pill on a label with no scope, and
+ * the scope half on one that has a scope. The other half is the page's own
+ * surface, so it takes its colours from the theme rather than from here.
  */
 export function labelChip(name: string, labels: LabelSet): Chip | null {
   const color = definitionOf(name, labels)?.color ?? "";

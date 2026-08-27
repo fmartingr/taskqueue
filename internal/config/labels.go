@@ -140,8 +140,9 @@ func labelsYAML(labels []NamedLabel) string {
 # The project's label vocabulary. Labels stay freeform — any label can be put on
 # a task — and this set is what gives them a colour, a display name and the
 # grouping the board shows. A "/" groups labels for display only; the label is
-# stored and matched as the whole string. Hex colours must be quoted, or YAML
-# reads them as a comment.
+# stored and matched as the whole string, and the board draws what is before it
+# as the first half of a two-tone chip, with display_name naming the second.
+# Hex colours must be quoted, or YAML reads them as a comment.
 labels:
 `)
 	for _, label := range labels {

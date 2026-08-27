@@ -330,6 +330,34 @@ button.ghost {
   font-weight: 600;
 }
 
+/* A scoped label is one pill in two halves: the pill gives its padding to them
+   and clips them to its own shape, and keeps the border a tinted chip drops,
+   set inline to the label's colour so the halves read as one object. */
+.label.scoped {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+
+.label.scoped .label-scope,
+.label.scoped .label-value {
+  padding: 1px 6px;
+}
+
+/* The colour arrives inline on a label the project declares; these are what one
+   it does not declare falls back to, so a scope still shows, only neutrally.
+   The value half is a theme token rather than white because the board has a
+   dark palette: it is the page's own surface, carrying the label's colour as
+   its text. */
+.label.scoped .label-scope {
+  background: var(--surface-alt);
+}
+
+.label.scoped .label-value {
+  background: var(--surface);
+}
+
 .blocked-note {
   margin: 0;
   font-size: 12px;

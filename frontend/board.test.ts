@@ -8,6 +8,7 @@ import {
   isReady,
   labelChip,
   labelDisplay,
+  labelHalves,
   labelsInUse,
   pendingDependencies,
   visibleTasks,
@@ -232,9 +233,51 @@ const LABELS: LabelSet = {
   broken: { color: "not-a-colour", display_name: "Broken" },
 };
 
+describe("labelHalves", () => {
+  test("a scoped label keeps its scope, and its display name names the value", () => {
+    expect(labelHalves("component/backend", LABELS)).toEqual({ scope: "Component", value: "Backend" });
+  });
+
+  test("a scoped label with no display name takes both halves from the key", () => {
+    expect(labelHalves("component/docs", LABELS)).toEqual({ scope: "Component", value: "Docs" });
+    expect(labelHalves("component/docs", { "component/docs": { color: "#fff", display_name: "" } })).toEqual({
+      scope: "Component",
+      value: "Docs",
+    });
+  });
+
+  test("a display name that is the key is the absent case, not the value half", () => {
+    // internal/config fills an empty display name in with the key, because that
+    // is what `tq label list` prints. It must not land in the value half, or a
+    // project that named no display name would read "Component | component/api".
+    const labels: LabelSet = { "component/api": { color: "#006b75", display_name: "component/api" } };
+    expect(labelHalves("component/api", labels)).toEqual({ scope: "Component", value: "Api" });
+  });
+
+  test("a label with no separator has no scope", () => {
+    expect(labelHalves("bug", LABELS)).toEqual({ scope: "", value: "Bug" });
+    expect(labelHalves("whatever", LABELS)).toEqual({ scope: "", value: "whatever" });
+    expect(labelHalves("x", { x: { color: "#ffffff", display_name: "" } })).toEqual({ scope: "", value: "x" });
+  });
+
+  test("the first separator splits; the rest stay in the value", () => {
+    expect(labelHalves("a/b/c", {})).toEqual({ scope: "A", value: "B/C" });
+  });
+
+  test("a key with an empty half is not scoped", () => {
+    expect(labelHalves("/x", {})).toEqual({ scope: "", value: "/x" });
+    expect(labelHalves("x/", {})).toEqual({ scope: "", value: "x/" });
+    expect(labelHalves("/", {})).toEqual({ scope: "", value: "/" });
+  });
+});
+
 describe("labelDisplay", () => {
+  test("a scoped label spells both halves out, since an option has one line", () => {
+    expect(labelDisplay("component/backend", LABELS)).toBe("Component | Backend");
+  });
+
   test("a configured label shows its display name", () => {
-    expect(labelDisplay("component/backend", LABELS)).toBe("Backend");
+    expect(labelDisplay("bug", LABELS)).toBe("Bug");
   });
 
   test("an unconfigured label shows itself", () => {
@@ -280,7 +323,10 @@ describe("groupLabels", () => {
     const groups = groupLabels(LABELS, []);
     expect(groups.map((group) => group.prefix)).toEqual(["", "component"]);
     expect(groups[0]!.labels.map((label) => label.name)).toEqual(["broken", "bug"]);
-    expect(groups[1]!.labels.map((label) => label.display)).toEqual(["Backend", "Frontend"]);
+    expect(groups[1]!.labels.map((label) => label.display)).toEqual([
+      "Component | Backend",
+      "Component | Frontend",
+    ]);
   });
 
   test("labels in use join their group even when unconfigured", () => {
@@ -293,7 +339,7 @@ describe("groupLabels", () => {
     ]);
     expect(component.labels.find((label) => label.name === "component/docs")).toEqual({
       name: "component/docs",
-      display: "component/docs",
+      display: "Component | Docs",
       configured: false,
     });
     expect(groups[0]!.labels.map((label) => label.name)).toEqual(["broken", "bug", "loose"]);
@@ -307,7 +353,7 @@ describe("groupLabels", () => {
   test("only the first slash groups: the rest is part of the label", () => {
     const groups = groupLabels({}, ["a/b/c"]);
     expect(groups).toEqual([
-      { prefix: "a", labels: [{ name: "a/b/c", display: "a/b/c", configured: false }] },
+      { prefix: "a", labels: [{ name: "a/b/c", display: "A | B/C", configured: false }] },
     ]);
   });
 

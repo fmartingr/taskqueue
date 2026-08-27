@@ -367,8 +367,8 @@ squared with the directory prints on stderr that it may be missing a task, and
 still exits `0` with what it read.
 
 Two files that go on claiming one ID are not a directory in motion but a queue
-to fix: an interrupted retitle, a file copied by hand, two branches merged.
-Both copies are left out of the listing — an ID identifies a task, and with two
+to fix: two saves of one task landing in the same instant, a file copied by
+hand, two branches merged. Both copies are left out of the listing — an ID identifies a task, and with two
 files answering to one there is nothing to say which of them a reader means —
 and `tq list` and `tq ready` name the ID and both files on stderr, in the same
 words `tq show` refuses that ID with, and still exit `0`. Delete the copy you
@@ -460,6 +460,11 @@ Implement authentication using the existing OIDC provider.
   it as a rename).
 - Writes are atomic (write to a temporary file, then rename), so a crash never
   leaves a half-written task behind.
+- A save moves the task's file to the name its title asks for and then writes
+  the new content into it, rather than writing a second file and deleting the
+  first. A save cut short therefore leaves one file, under the new name, still
+  holding the old content — a stale suffix, which the `id` above makes
+  harmless, and which the next save puts right.
 - Frontmatter is strict: unknown fields are rejected rather than silently
   dropped on the next write.
 
@@ -509,10 +514,11 @@ so in a toast and in its footer; `GET /api/tasks` stays an array of what was
 read, because that is what every client parses.
 
 An ID more than one file claims is not a listing that could not be squared with
-the directory but a queue to fix — an interrupted retitle, a file copied by
-hand, two branches merged. Both copies are left out: the ID is what identifies
-a task, so with two files answering to one there is no saying which of them a
-reader means, and showing either would be a guess that hides the other's edits.
+the directory but a queue to fix — two saves of one task landing in the same
+instant, a file copied by hand, two branches merged. Both copies are left out:
+the ID is what identifies a task, so with two files answering to one there is
+no saying which of them a reader means, and showing either would be a guess
+that hides the other's edits.
 `GET /api/status` names the ID and its files in `duplicated`, with the sentence
 a write to that ID is refused with, and `tq list` and `tq ready` say the same
 on stderr and still exit 0. Delete the copy you do not want and the task comes
@@ -587,6 +593,11 @@ that still diffs. A clean checkout needs `bun install` before `make frontend`,
   note is lost outright rather than merged. Within one process, a task's
   read-modify-write is serialised, so concurrent notes all survive. Writes are
   atomic either way.
+- Two processes saving the same task in the same instant can still leave two
+  files claiming its ID — narrowly, in the microsecond between one save taking
+  the name it wants and filling it. The ID is then reported and withheld like
+  any other pair (above), rather than silently lost; delete the copy you do not
+  want and the task comes back.
 - No authentication; the server binds to localhost.
 - Every request scans the task directory, and so does the event ticker while a
   board is connected. Fine at PoC scale.

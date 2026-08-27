@@ -50,6 +50,14 @@ type Store struct {
 	// renames a file from another goroutine and hopes to hit that window
 	// instead is a test that passes or fails by timing.
 	duringScan func()
+
+	// duringUpdate runs inside a save's move window — after the task's file has
+	// been located, before it is moved to the name the save asks for — and is
+	// nil everywhere but a test. It is how the race update retries for is
+	// driven on purpose: the losing writer only exists between those two
+	// moments, and a test that hopes to land another process in there is a test
+	// that passes or fails by timing.
+	duringUpdate func()
 }
 
 // InitStore makes sure the task directory exists and returns a store for it:
@@ -482,10 +490,9 @@ const listAttempts = 3
 // compared with the reading the pass started from; a difference means the
 // snapshot is not of any one moment, and the pass is redone (TQ-0012).
 //
-// An ID claimed by two files is the same signal from the other side. A retitle
-// writes the new file before retiring the old one, so for an instant one task
-// has two files, and a pass whose two directory readings both fall inside that
-// instant sees no change at all — it just holds the task twice. So that is a
+// An ID claimed by two files is the same signal from the other side. A pass
+// whose two directory readings both fall inside a moment when one task has two
+// files sees no change at all — it just holds the task twice. So that is a
 // reason to redo the pass too.
 //
 // What tells that instant from a queue that really does have two files for one
@@ -654,8 +661,8 @@ func duplicatedIDs(names []string) []DuplicatedID {
 }
 
 // sameClaims reports two passes finding the same IDs under the same files,
-// which is how List tells a queue that has two files for one ID from a retitle
-// caught between writing the new file and retiring the old.
+// which is how List tells a queue that has two files for one ID from a
+// directory that held two for an instant while it was being written to.
 func sameClaims(a, b []DuplicatedID) bool {
 	return slices.EqualFunc(a, b, func(x, y DuplicatedID) bool {
 		return x.ID == y.ID && slices.Equal(x.Files, y.Files)
@@ -694,8 +701,8 @@ func (s *Store) scan(names []string) Listing {
 		switch {
 		case errors.Is(err, ErrTaskNotFound):
 			// The file was there when the directory was read and is gone now,
-			// which is what a concurrent write looks like: update writes the
-			// new name and only then retires the old one, and delete unlinks.
+			// which is what a concurrent write looks like: a save moves the
+			// task's file to the name its title asks for, and delete unlinks.
 			// Nothing is broken, so there is nothing to report — reporting it
 			// would put a red toast on the board for an ordinary retitle. The
 			// directory moved, though, and the check in List is what catches
@@ -919,6 +926,12 @@ func (s *Store) Note(id, text string) (task.Task, error) {
 	})
 }
 
+// updateAttempts bounds the retry when another process moves a task's file out
+// from under this one. Every attempt locates the task again, so the loop only
+// runs while something else is actively moving the file; this is a guard
+// against a pathological loop, not an expected path.
+const updateAttempts = 10
+
 func (s *Store) update(t task.Task) (task.Task, error) {
 	current, err := s.locate(t.ID)
 	if err != nil {
@@ -940,60 +953,78 @@ func (s *Store) update(t task.Task) (task.Task, error) {
 		return task.Task{}, err
 	}
 
-	// A retitle moves the task to a new filename, and write replaces whatever
-	// is at it. On a case-insensitive filesystem that name can already be a
-	// directory entry the store does not read, and replacing it would be tq
-	// mutating a path it does not own, silently (TQ-0039). The file the task is
-	// in now is not in the way of itself: a hand-renamed one can be this very
-	// name under another spelling, which is what retireOldFile settles.
-	if name := TaskFileName(t); name != current {
-		if blocking, ok := s.entryInTheWay(name); ok && blocking != current {
-			return task.Task{}, fmt.Errorf("cannot save %s as %s: %s", t.ID, name, inTheWay(blocking))
-		}
-	}
-
-	written, err := s.write(t)
+	name := TaskFileName(t)
+	tmpName, err := s.stage(t)
 	if err != nil {
 		return task.Task{}, err
 	}
-	// A retitled task moves to a new filename; the task itself is now safely
-	// on disk either way, and only the file it used to live in is left.
-	if written != current {
-		if err := retireOldFile(filepath.Join(s.Dir, current), filepath.Join(s.Dir, written)); err != nil {
-			return task.Task{}, fmt.Errorf("saved %s but could not retire %s: %w", written, current, err)
-		}
-	}
-	return t, nil
-}
+	// Gone already after a save that reached the rename below; removing it
+	// again is the failure this ignores.
+	defer func() { _ = os.Remove(tmpName) }()
 
-// retireOldFile disposes of the file a task used to live in, now that it has
-// been written under a new name. Comparing the two names would not do: on a
-// case-insensitive or normalizing filesystem they can be one directory entry,
-// and removing it would delete the task that was just written. Such an entry
-// is renamed into the canonical spelling instead, so a hand-renamed file
-// converges like any other stale name.
-func retireOldFile(oldPath, newPath string) error {
-	// Lstat rather than Stat, to match os.Remove: both act on the directory
-	// entry itself, so a symlink is compared as a symlink and a dangling one
-	// still gets unlinked.
-	oldInfo, err := os.Lstat(oldPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil // another writer already removed it
+	// The task's file is *moved* to the name it now asks for, and only then
+	// replaced. Writing the new name first and removing the old one after is
+	// what made an interrupted retitle leave two files claiming one ID
+	// (TQ-0015): the old name outlived the new one, and locate refuses an ID
+	// two files claim, for good. A move has no such gap — it is atomic, and the
+	// old name goes with it — so a save cut short leaves the task under one
+	// name holding the old content, a stale suffix the next save converges. It
+	// also leaves nothing to do once the content lands, which is why no failure
+	// here can be reported over a change that is already on disk.
+	//
+	// A save that is not a retitle makes the same move, onto the name the file
+	// already has. Renaming a path onto itself succeeds while it is there and
+	// fails when it is not, which is exactly what this has to know: ENOENT is
+	// another writer having moved the task, and the answer is to find it again.
+	//
+	// None of this is a lock, and two processes still race. The move claims a
+	// name, but the content write after it is a rename too, and a rename
+	// creates its destination — so a save whose claim is taken back in that
+	// instant does land a second file for the ID: two 200-trial rounds of two
+	// concurrent `tq update` on one task left 44 and 51, against 62 under the
+	// old order. Closing it needs an exchange syscall the standard library does not
+	// expose, which was weighed and declined for its portability cost; TQ-0040
+	// is what keeps the residue from being silent, and the notes on TQ-0015
+	// carry the reasoning.
+	for attempt := 0; attempt < updateAttempts; attempt++ {
+		if s.duringUpdate != nil {
+			s.duringUpdate()
 		}
-		return err
-	}
-	newInfo, err := os.Lstat(newPath)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
+		// A retitle moves the task to a new filename, and the move replaces
+		// whatever is at it. On a case-insensitive filesystem that name can
+		// already be a directory entry the store does not read, and replacing
+		// it would be tq mutating a path it does not own, silently (TQ-0039).
+		// The file the task is in now is not in the way of itself: a
+		// hand-renamed one can be this very name under another spelling, and
+		// the move is what settles that.
+		if name != current {
+			if blocking, ok := s.entryInTheWay(name); ok && blocking != current {
+				return task.Task{}, fmt.Errorf("cannot save %s as %s: %s", t.ID, name, inTheWay(blocking))
+			}
 		}
-		return os.Remove(oldPath) // the new file is gone; the old one is stale
+
+		moveErr := os.Rename(filepath.Join(s.Dir, current), filepath.Join(s.Dir, name))
+		if moveErr == nil {
+			// The name is this call's, so the content lands on a file rather
+			// than making one — as far as anything holds between two lines.
+			if err := os.Rename(tmpName, filepath.Join(s.Dir, name)); err != nil {
+				return task.Task{}, err
+			}
+			return t, nil
+		}
+		if !errors.Is(moveErr, os.ErrNotExist) {
+			return task.Task{}, moveErr
+		}
+		// The file went out from under this call: another writer moved the
+		// task while this one held its old name. That is a race lost, not a
+		// failure — find where the task lives now and move that instead.
+		if current, err = s.locate(t.ID); err != nil {
+			return task.Task{}, err
+		}
 	}
-	if os.SameFile(oldInfo, newInfo) {
-		return os.Rename(oldPath, newPath)
-	}
-	return os.Remove(oldPath)
+	// Nothing has been written: the loop only ever returns here having failed
+	// to claim a name, so the task is on disk exactly as it was.
+	return task.Task{}, fmt.Errorf("could not save %s after %d attempts: another writer keeps moving its file", t.ID, updateAttempts)
 }
 
 // Delete removes a task file.
@@ -1074,23 +1105,9 @@ func (s *Store) stage(t task.Task) (path string, err error) {
 	return tmpName, nil
 }
 
-// write puts a task on disk, replacing whatever was at its filename.
-func (s *Store) write(t task.Task) (string, error) {
-	tmpName, err := s.stage(t)
-	if err != nil {
-		return "", err
-	}
-	name := TaskFileName(t)
-	if err := os.Rename(tmpName, filepath.Join(s.Dir, name)); err != nil {
-		_ = os.Remove(tmpName)
-		return "", err
-	}
-	return name, nil
-}
-
-// writeNew is write for a task that must not exist yet. Linking fails when the
-// name is taken, where renaming would replace the file — and the file it would
-// replace is another task nobody asked to lose.
+// writeNew puts a task on disk under a name that must not exist yet. Linking
+// fails when the name is taken, where renaming would replace the file — and the
+// file it would replace is another task nobody asked to lose.
 func (s *Store) writeNew(t task.Task) (string, error) {
 	tmpName, err := s.stage(t)
 	if err != nil {
@@ -1116,9 +1133,9 @@ func (s *Store) writeNew(t task.Task) (string, error) {
 //
 // Only an entry the store does not read is ever reported by identity. The
 // directory is read a moment after the name was resolved, and a task file can
-// be renamed into that moment — a concurrent retitle writes the new name before
-// retiring the old — so the match by identity can land on a perfectly good task
-// file. That one is in nobody's way: the caller's retry reads the directory
+// be renamed into that moment — a concurrent save moves a task's file to the
+// name its title asks for — so the match by identity can land on a perfectly
+// good task file. That one is in nobody's way: the caller's retry reads the directory
 // again and NextID has it by then, which is what the retry is for. Naming it
 // would fail the write hard, and say of a task file that it is not one.
 func (s *Store) entryInTheWay(name string) (string, bool) {

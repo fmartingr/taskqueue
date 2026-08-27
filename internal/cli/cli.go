@@ -56,12 +56,60 @@ func Run(stdout, stderr io.Writer, dir, version string, args []string) int {
 	return runCLI(&cli{stdout: stdout, stderr: stderr, dir: dir, version: version}, args)
 }
 
+// writeCommands are the commands that put a task file on disk. An interrupt
+// arriving during one of them is held until it returns (see holdSignals). The
+// others have nothing to protect, and serve installs a handler of its own,
+// because it is the one command whose whole job happens after the signal.
+var writeCommands = map[string]bool{
+	"init": true, "add": true, "move": true, "done": true, "update": true, "note": true,
+}
+
 func runCLI(c *cli, args []string) int {
 	if len(args) == 0 {
 		c.usage(c.stderr)
 		return exitError
 	}
+	if writeCommands[args[0]] {
+		return holdSignals(c.stderr, func() int { return dispatch(c, args) })
+	}
+	return dispatch(c, args)
+}
 
+// holdSignals runs a command with SIGINT and SIGTERM held: registering a
+// channel for a signal is what takes the process off Go's default disposition,
+// so a Ctrl-C part-way through a save waits for the save to return instead of
+// killing the process between two of its steps.
+//
+// The exit code is the command's own. A save that finished before the signal
+// was acted on is a save that landed, and saying otherwise would put a failure
+// on stderr and a nonzero code on a file that is on disk — the shape of report
+// TQ-0015 is about. The line only says the interrupt was seen, and only for a
+// command that succeeded: one that failed has said why already, and telling a
+// caller nothing was left half-written reads as a claim about a write.
+//
+// Nothing here is a teardown, and holding is all it does: a command that cannot
+// return — `.tasks` on a stalled network mount is the case — holds the signal
+// with it, and SIGKILL is then the only way out. That is the trade for the
+// cheap version. These commands are one move each and return in milliseconds
+// when the filesystem answers, and it is the move itself that makes an
+// interrupt survivable (TQ-0015); this only keeps one from landing mid-move.
+func holdSignals(stderr io.Writer, run func() int) int {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	code := run()
+	select {
+	case <-signals:
+		if code == exitOK {
+			fmt.Fprintln(stderr, "interrupted: the command had already finished, so nothing was left half-written")
+		}
+	default:
+	}
+	return code
+}
+
+func dispatch(c *cli, args []string) int {
 	switch args[0] {
 	case "init":
 		return c.runInit(args[1:])

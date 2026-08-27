@@ -315,10 +315,10 @@ func TestListSkipsEveryShapeOfBrokenFile(t *testing.T) {
 }
 
 // A name whose file is not there is not a broken file: `tq update --title`
-// writes the new name before retiring the old one, and `tq delete` unlinks, so
-// a scan that caught the old name has nothing to report. A dangling symlink is
-// that state, held still — the directory is not moving, so there is nothing for
-// the consistency check to retry either.
+// moves the task's file to the name its title asks for, and `tq delete`
+// unlinks, so a scan that caught the old name has nothing to report. A dangling
+// symlink is that state, held still — the directory is not moving, so there is
+// nothing for the consistency check to retry either.
 func TestListDoesNotReportAFileThatIsNoLongerThere(t *testing.T) {
 	st := tqtest.NewStore(t)
 	healthy := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "healthy"})
@@ -411,10 +411,10 @@ func TestAListingIsNotShortWhenATaskIsCreatedMidScan(t *testing.T) {
 	}
 }
 
-// A retitle writes the new file before retiring the old one, so for an instant
-// the task has two, and a pass that reads them both holds the task twice. The
-// instant can also fall between both readings of the directory, where the
-// entry set says nothing and only the doubled ID does — that is the case
+// A directory can hold two files for one ID for an instant, and a pass that
+// reads them both holds the task twice. The instant can also fall between both
+// readings of the directory, where the entry set says nothing and only the
+// doubled ID does — that is the case
 // TestARetitleHoldingAWholePassStillGetsItsRetry drives.
 func TestAListingDoesNotHoldATaskTwiceWhileItIsBeingRetitled(t *testing.T) {
 	st := tqtest.NewStore(t)
@@ -1076,89 +1076,152 @@ func names(entries []os.DirEntry) []string {
 	return out
 }
 
-// The aliasing tests above only bite on a folding filesystem, so the decision
-// retireOldFile makes is pinned down here on every platform: hard links give
-// two names for one entry anywhere.
-func TestRetireOldFile(t *testing.T) {
-	write := func(t *testing.T, path string) {
-		t.Helper()
-		if err := os.WriteFile(path, []byte("task"), 0o644); err != nil {
-			t.Fatal(err)
+// ── A save moves the task's file, it does not replace it (TQ-0015) ──────────
+
+// moveTaskFile is another writer moving a task's file, from inside the window
+// where this store has already located it. It is the interleaving that used to
+// leave two files: the save held a name that was no longer there.
+func moveTaskFile(t *testing.T, st *store.Store, id, to string) {
+	t.Helper()
+	current, err := st.Locate(id)
+	if err != nil {
+		t.Fatalf("Locate(%s): %v", id, err)
+	}
+	if err := os.Rename(filepath.Join(st.Dir, current), filepath.Join(st.Dir, to)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// taskFiles is the task directory as a listing test can assert on, temporary
+// files included: a save that left one behind is a save that did not clean up.
+func taskFiles(t *testing.T, st *store.Store) []string {
+	t.Helper()
+	entries, err := os.ReadDir(st.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names(entries)
+}
+
+// The losing half of the race the ticket measured, made deterministic. Two
+// processes share no mutex, so nothing tells the loser it lost except the shape
+// of the write itself: its move finds nothing where it left the task. That is
+// an answer, not a failure — and it is not licence to put the old name back,
+// which is what used to leave two files claiming one ID.
+func TestUpdateRelocatesWhenAnotherWriterMovesTheFile(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Before"})
+
+	stolen := tk.ID + "-stolen.md"
+	moved := false
+	st.DuringUpdate(func() {
+		if moved {
+			return
 		}
+		moved = true
+		moveTaskFile(t, st, tk.ID, stolen)
+	})
+
+	tk.Status = task.StatusInProgress
+	if _, err := st.Update(tk); err != nil {
+		t.Fatalf("Update should have followed the task to its new file: %v", err)
+	}
+	if !moved {
+		t.Fatal("the hook never ran, so this test proved nothing")
 	}
 
-	// The one entry both names resolve to on a folding filesystem, expressed
-	// so that every filesystem can run it: one entry, reached twice.
-	t.Run("a single entry is never removed", func(t *testing.T) {
-		dir := tqtest.Root(t)
-		path := filepath.Join(dir, "task.md")
-		write(t, path)
-		if err := store.RetireOldFile(path, path); err != nil {
-			t.Fatalf("retireOldFile: %v", err)
-		}
-		if _, err := os.Lstat(path); err != nil {
-			t.Errorf("the written task must survive: %v", err)
-		}
+	// One file, and it is the one this save asked for. Two would be the brick:
+	// locate refuses an ID two files claim, and every command for that task
+	// fails from then on.
+	if files := taskFiles(t, st); len(files) != 1 || files[0] != store.TaskFileName(tk) {
+		t.Errorf("directory contains %v, want only %s", files, store.TaskFileName(tk))
+	}
+	reloaded, err := st.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("the task must still be addressable by its ID: %v", err)
+	}
+	if reloaded.Status != task.StatusInProgress {
+		t.Errorf("Status = %q, want %q: the save reported success, so it landed", reloaded.Status, task.StatusInProgress)
+	}
+}
+
+// The bound on that retry, and the promise that goes with running out of it:
+// a save that never claimed a name wrote nothing at all, content and filename
+// alike. The old failure was the opposite — the write landed and the call
+// reported failure anyway, which the HTTP layer turned into a 500 over a
+// change that was on disk.
+func TestUpdateGivesUpWithoutWritingWhenTheFileKeepsMoving(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Before"})
+
+	calls := 0
+	st.DuringUpdate(func() {
+		calls++
+		moveTaskFile(t, st, tk.ID, fmt.Sprintf("%s-moved-%d.md", tk.ID, calls))
 	})
 
-	// Hard links are two entries sharing one file, so the rename POSIX makes
-	// a no-op leaves both. That is the store's loud "claimed by 2 files"
-	// state, which is recoverable; deleting the task would not be.
-	t.Run("hard links keep the written task", func(t *testing.T) {
-		dir := tqtest.Root(t)
-		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
-		write(t, newPath)
-		if err := os.Link(newPath, oldPath); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.RetireOldFile(oldPath, newPath); err != nil {
-			t.Fatalf("retireOldFile: %v", err)
-		}
-		if _, err := os.Lstat(newPath); err != nil {
-			t.Errorf("the written task must survive: %v", err)
-		}
-	})
+	changed := tk
+	changed.Status = task.StatusInProgress
+	_, err := st.Update(changed)
+	if err == nil {
+		t.Fatal("Update should have given up: its file was moved out from under every attempt")
+	}
+	if !strings.Contains(err.Error(), tk.ID) {
+		t.Errorf("Update says %q, want it to name %s", err, tk.ID)
+	}
+	if calls != store.UpdateAttempts {
+		t.Errorf("the move was attempted %d times, want %d", calls, store.UpdateAttempts)
+	}
 
-	t.Run("a genuinely different file is removed", func(t *testing.T) {
-		dir := tqtest.Root(t)
-		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
-		write(t, oldPath)
-		write(t, newPath)
-		if err := store.RetireOldFile(oldPath, newPath); err != nil {
-			t.Fatalf("retireOldFile: %v", err)
-		}
-		if _, err := os.Lstat(oldPath); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("the old file should be gone, got %v", err)
-		}
-		if _, err := os.Lstat(newPath); err != nil {
-			t.Errorf("the written task must survive: %v", err)
-		}
-	})
+	// One file, holding what it held before: no half-written copy, no staged
+	// temporary left behind, and no second claim on the ID.
+	last := fmt.Sprintf("%s-moved-%d.md", tk.ID, calls)
+	if files := taskFiles(t, st); len(files) != 1 || files[0] != last {
+		t.Errorf("directory contains %v, want only %s", files, last)
+	}
+	reloaded, err := st.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("the task must still be addressable by its ID: %v", err)
+	}
+	if reloaded.Status != tk.Status {
+		t.Errorf("Status = %q, want %q: a save that reported failure must not have landed", reloaded.Status, tk.Status)
+	}
+}
 
-	t.Run("a dangling symlink is unlinked", func(t *testing.T) {
-		dir := tqtest.Root(t)
-		oldPath, newPath := filepath.Join(dir, "old.md"), filepath.Join(dir, "new.md")
-		write(t, newPath)
-		if err := os.Symlink(filepath.Join(dir, "gone.md"), oldPath); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.RetireOldFile(oldPath, newPath); err != nil {
-			t.Fatalf("retireOldFile: %v", err)
-		}
-		// Left behind, it would be a second file claiming the same task ID.
-		if _, err := os.Lstat(oldPath); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("the dangling link should be gone, got %v", err)
-		}
-	})
+// What a kill between the move and the write leaves: the file under its new
+// name, still holding the old content. That is a stale title suffix like any
+// other — the ID in the frontmatter is what identifies a task — so the task is
+// readable, addressable, and converges on the next save. The state that used
+// to be left here was two files, which converges on nothing.
+func TestUpdateConvergesAfterAnInterruptedMove(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Before"})
 
-	t.Run("an already removed old file is not an error", func(t *testing.T) {
-		dir := tqtest.Root(t)
-		newPath := filepath.Join(dir, "new.md")
-		write(t, newPath)
-		if err := store.RetireOldFile(filepath.Join(dir, "old.md"), newPath); err != nil {
-			t.Errorf("retireOldFile: %v", err)
-		}
-	})
+	retitled := tk
+	retitled.Title = "After"
+	interrupted := store.TaskFileName(retitled)
+	moveTaskFile(t, st, tk.ID, interrupted)
+
+	if files := taskFiles(t, st); len(files) != 1 || files[0] != interrupted {
+		t.Fatalf("directory contains %v, want only %s", files, interrupted)
+	}
+	halfway, err := st.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("the interrupted task must still be readable: %v", err)
+	}
+	if halfway.Title != "Before" {
+		t.Errorf("Title = %q, want %q: the content had not been written yet", halfway.Title, "Before")
+	}
+
+	if _, err := st.Update(retitled); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if files := taskFiles(t, st); len(files) != 1 || files[0] != interrupted {
+		t.Errorf("directory contains %v, want only %s", files, interrupted)
+	}
+	if reloaded, err := st.Get(tk.ID); err != nil || reloaded.Title != "After" {
+		t.Errorf("Get(%s) = %+v (%v), want the retitle finished", tk.ID, reloaded, err)
+	}
 }
 
 // A queue above a project must not capture it: a developer who once ran tq in
@@ -2120,8 +2183,8 @@ func TestUpdateRefusesToRenameOverAnEntryItDoesNotOwn(t *testing.T) {
 
 // The entry in the way is found by identity, and the directory is read a moment
 // after the name was resolved: a task file written into that moment — a
-// concurrent retitle writes the new name first — can be what the match lands
-// on. That one is in nobody's way, and the retry is what handles it; only an
+// concurrent save moving a task's file to the name its title asks for — can be
+// what the match lands on. That one is in nobody's way, and the retry is what handles it; only an
 // entry the store does not read is worth stopping for.
 //
 // Hard links pin that decision without a race, by giving one file two names.

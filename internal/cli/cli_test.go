@@ -1651,3 +1651,38 @@ func TestCLIAcceptsBacklogAsInbox(t *testing.T) {
 		t.Errorf("move to backlog put the task in %q, want inbox", moved.Status)
 	}
 }
+
+// The commands an interrupt is held through are the ones that put a file on
+// disk, and they have to be commands the CLI actually dispatches: a name that
+// has been renamed or dropped leaves a save running unprotected under a set
+// that still reads correctly. serve is deliberately not among them — it
+// installs a handler of its own, because it is the one command whose whole job
+// happens after the signal arrives.
+func TestWriteCommandsAreCommandsTheCLIHas(t *testing.T) {
+	if writeCommands["serve"] {
+		t.Error("serve handles its own signals; holding them for it would take its graceful shutdown away")
+	}
+	for name := range writeCommands {
+		t.Run(name, func(t *testing.T) {
+			tc := newBareCLI(t)
+			tc.run(name)
+			if strings.Contains(tc.stderr.String(), "unknown command") {
+				t.Errorf("%q is held through an interrupt but the CLI does not dispatch it: %s", name, tc.stderr)
+			}
+		})
+	}
+}
+
+// Holding a signal is all holdSignals does: with none to report it is the
+// command it ran, exit code and streams alike. A save that finished is a save
+// that landed, so the code it returns has to be the command's own — saying
+// otherwise is the report for a landed write that TQ-0015 is about.
+func TestHoldSignalsPassesTheCommandThrough(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := holdSignals(&stderr, func() int { return exitTaskNotFound }); code != exitTaskNotFound {
+		t.Errorf("holdSignals = %d, want the command's own %d", code, exitTaskNotFound)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("holdSignals wrote %q with no signal to report", stderr.String())
+	}
+}

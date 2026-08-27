@@ -86,6 +86,59 @@ func TestUpdateRetitlingKeepsTheTaskReachable(t *testing.T) {
 	}
 }
 
+// What a kill part-way through a retitle leaves, driven as a process because a
+// signal is a thing only a process has. A save moves the task's file to the
+// name the new title asks for and only then puts the new content there
+// (TQ-0015), so an interrupt between the two leaves one file, under the new
+// name, still holding the old content: a stale title suffix, which the ID in
+// the frontmatter makes harmless, and which the next save converges. What the
+// old order left instead was two files claiming TQ-0001 and every command for
+// that task failing from then on.
+func TestUpdateSurvivesAnInterruptedRetitle(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "first name")
+
+	// The move without the write that follows it, which is exactly the state a
+	// process killed between the two leaves on disk.
+	const interrupted = "TQ-0001-second-name.md"
+	if err := os.Rename(p.path(".tasks", "TQ-0001-first-name.md"), p.path(".tasks", interrupted)); err != nil {
+		t.Fatal(err)
+	}
+
+	var halfway taskJSON
+	p.mustRun(t, "show", "TQ-0001", "--json").JSON(t, &halfway)
+	if halfway.Title != "first name" {
+		t.Errorf("title = %q, want %q: the content had not been written yet", halfway.Title, "first name")
+	}
+
+	// Success, and silence with it. The step that used to fail *after* the new
+	// content was already on disk — retiring the old file — has no successor:
+	// there is nothing left to do once the content is written, so there is no
+	// longer a way to report failure for a save that landed.
+	if r := p.mustRun(t, "update", "TQ-0001", "--title", "second name"); r.Stderr != "" {
+		t.Errorf("tq update wrote to stderr: %q", r.Stderr)
+	}
+
+	var got taskJSON
+	p.mustRun(t, "show", "TQ-0001", "--json").JSON(t, &got)
+	if got.Title != "second name" {
+		t.Errorf("title = %q, want %q", got.Title, "second name")
+	}
+	entries, err := os.ReadDir(p.path(".tasks"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One entry, so a leftover temporary is a failure here too.
+	if len(entries) != 1 || entries[0].Name() != interrupted {
+		found := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			found = append(found, entry.Name())
+		}
+		t.Errorf(".tasks holds %v, want only %s", found, interrupted)
+	}
+}
+
 // add's remaining flags, none of which had run as a binary.
 func TestAddEveryField(t *testing.T) {
 	t.Parallel()

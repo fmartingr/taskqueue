@@ -78,11 +78,29 @@ frontend`, `make typecheck` or `make dev` will run.
   at, so a difference between the two readings means the pass is redone — three
   attempts, after which the listing says it may not match the directory rather
   than passing for the whole queue (TQ-0012). An ID under two names is the same
-  signal from the other side, because a retitle writes the new file before
-  retiring the old one; a pair two passes at rest both find is a queue to fix
-  rather than a race, and is reported and withheld instead (TQ-0040). Keep both
-  readings: this is a consistency check, not a cache, and nothing survives the
-  call.
+  signal from the other side; a pair two passes at rest both find is a queue to
+  fix rather than a race, and is reported and withheld instead (TQ-0040). Keep
+  both readings: this is a consistency check, not a cache, and nothing survives
+  the call.
+- A save *moves* the task's file to the name its title asks for, and only then
+  writes the new content into it. Never the other way round: writing the new
+  name and removing the old one lets a second writer put its own copy back at
+  the name the first has just removed, and an ID two files claim is one
+  `locate` refuses for good (TQ-0015). A move is atomic and takes the old name
+  with it, so there is nothing left to remove and nothing left to fail once the
+  content is on disk — a save that reports failure has written no new content,
+  and at worst has moved the file to the name it was going to use. The
+  loser of a race gets `ENOENT` from its move, which is it learning where the
+  task went; it locates the task again and moves that instead. This is not a
+  lock and is not meant to be one: two processes share none, the last one still
+  wins, and the content write is itself a rename, which creates its destination
+  — so a save can still land at a name a losing writer freed a microsecond
+  earlier and leave two files: two 200-trial rounds of two concurrent
+  `tq update` on one ID left 44 and 51, against 62 before the change. Closing
+  that needs an exchange syscall
+  the standard library does not expose, declined for its portability cost; the
+  notes on TQ-0015 carry the reasoning, and TQ-0040 is what keeps the residue
+  from being silent.
 - The one thing the server keeps between requests are the two change
   fingerprints behind `/api/events` (TQ-0033): the names, sizes and modification
   times of the task directory, hashed, and the same reading of `.taskqueue.yaml`
@@ -150,10 +168,10 @@ frontend`, `make typecheck` or `make dev` will run.
 - An ID more than one file claims is withheld from a listing, both copies, and
   reported in `Listing.Duplicated` — the same channel again (TQ-0040). An ID
   appears in a listing once or not at all, which is what lets every caller
-  index by it. `List` tells that from a retitle caught between writing the new
-  file and retiring the old by looking again: the pair is redone, and one that
-  two passes at rest both find is reported rather than retried. A pair only
-  ever seen while the directory was moving is withheld too — the ID rule is
+  index by it. `List` tells that from a directory that held two for an instant
+  by looking again: the pair is redone, and one that two passes at rest both
+  find is reported rather than retried. A pair only ever seen while the
+  directory was moving is withheld too — the ID rule is
   absolute — but the listing says `Incomplete` about it rather than naming
   files to delete. The sentence it is reported with is `locate`'s, composed in
   `duplicateClaim` so that a listing and a refused write cannot say different

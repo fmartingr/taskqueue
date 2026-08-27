@@ -78,6 +78,12 @@ whole string, so `tq list --label component/backend` takes the whole key.
   under the bullet, which is what keeps a multi-line note inside its note.
 - A task is *ready* when it is neither done nor in-progress and every task in
   `depends_on` exists and is done. A missing dependency blocks it.
+- IDs are sequential but not contiguous. A number a task still lists in
+  `depends_on` is never handed to a new task, so removing a file by hand —
+  an `rm`, a revert, a merge — leaves a gap rather than a number the next
+  `tq add` recycles into every dependency that pointed at the task that
+  went. The gap is not something to fix, and the dependency stays missing,
+  which is what keeps the dependent blocked.
 - `--json` prints JSON to stdout and nothing else; errors go to stderr.
 - A task file's extension is a lowercase `.md`, and only that. A file named
   `TQ-0001-fix-bug.MD` is not a task file: tq does not read it, list it,

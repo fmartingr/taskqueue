@@ -694,7 +694,14 @@ func (s *Store) scan(names []string) Listing {
 	if s.duringScan != nil {
 		s.duringScan()
 	}
+	return s.readTasks(names)
+}
 
+// readTasks is the reading itself, without the window List's tests drive. It is
+// split out because NextID reads the files too — it has to see depends_on — and
+// a create is not an attempt at a listing: firing the hook from one would make
+// a test that files a task from inside the window re-enter its own hook.
+func (s *Store) readTasks(names []string) Listing {
 	listing := Listing{Tasks: make([]task.Task, 0, len(names))}
 	for _, name := range names {
 		t, err := s.readFile(name)
@@ -1039,27 +1046,102 @@ func (s *Store) Delete(id string) error {
 	return os.Remove(filepath.Join(s.Dir, name))
 }
 
-// NextID returns the next sequential task ID. Two processes creating a task at
-// exactly the same time can race for the same ID; that is a documented PoC
-// limitation rather than an oversight.
+// NextID returns the next task ID free to hand out: one past the highest number
+// a task file claims, advanced again past any number a task still names in
+// depends_on.
+//
+// That second half is what stops a removed task's number coming back around.
+// There is no `tq delete` and no DELETE route, so a task is removed by an `rm`,
+// a revert or a merge — and removing the newest one leaves its number the
+// highest that is free. Handed straight to the next create, it re-binds every
+// dangling depends_on to a task that has nothing to do with the one that went:
+// a prerequisite that was never met reads as done, `tq ready` offers the
+// dependent as available work, and nothing says a word (TQ-0016). So a
+// referenced number is stepped over, silently and successfully. The cost is a
+// gap in the sequence, which nothing reads anything into — an ID identifies a
+// task, it does not count them.
+//
+// A number nothing points at is still recycled, and that is deliberate: with no
+// stale reference to re-bind, it is a new task under an old number and no reader
+// can tell it from any other.
+//
+// Seeing depends_on means reading the files and not just their names, so a
+// create costs a pass over the whole queue. That is the price of the rule, paid
+// where it is cheapest: creates are rare, and every listing already reads every
+// file.
+//
+// A file that will not parse keeps its depends_on to itself, so a reference
+// inside one reserves nothing, and that is the accepted residue. Nothing is
+// offered on the strength of such a file — it is withheld from every listing
+// and reported instead, `tq ready` never proposes it and `tq show` refuses it —
+// but the damage is still reachable in one order: the same merge that leaves
+// the conflict markers removes the task the dependency named, a create takes
+// the freed number while the file is unreadable, and the dependency binds to it
+// when the conflict is resolved. Closing that would mean guessing which
+// `TQ-####` in a file that failed to parse was a dependency and which was
+// prose, so the answer is the loud report and not a guess.
+//
+// A file two task files claim is the other way round: it is withheld from the
+// listing but read here, because it parses and the dependencies in it are real.
+//
+// Two processes creating a task at exactly the same time can still race for the
+// same ID; that is a documented PoC limitation rather than an oversight.
 func (s *Store) NextID() (string, error) {
+	// One reading of the directory, split two ways. A number is taken by any
+	// entry answering to a task file's name, a directory included: such an entry
+	// is not a task and nothing else in the store looks at it, but a create
+	// handed its number can never link the name, and would spend every retry
+	// deriving that same number (TQ-0039). The files to read are the other half,
+	// and those are task files only — os.ReadFile on a directory is an error,
+	// and a directory is not a queue's broken file to report.
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {
 		return "", err
 	}
 
 	highest := 0
+	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		id, ok := taskFileID(entry.Name())
 		if !ok {
 			continue
 		}
-		n, err := strconv.Atoi(strings.TrimPrefix(id, "TQ-"))
-		if err == nil && n > highest {
+		if n, err := strconv.Atoi(strings.TrimPrefix(id, "TQ-")); err == nil && n > highest {
 			highest = n
 		}
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
 	}
-	return fmt.Sprintf("TQ-%04d", highest+1), nil
+
+	// Matched as the whole ID rather than as a number, because that is how a
+	// dependency is matched everywhere else: IndexTasks keys by the string, so a
+	// `TQ-2` names no task tq would ever write and there is nothing for it to
+	// re-bind to. Only the exact spelling this returns can.
+	//
+	// The loop is bounded by the references themselves — each step past one
+	// crosses it off, and every number above the highest file is otherwise free.
+	referenced := s.referencedIDs(names)
+	for n := highest + 1; ; n++ {
+		id := fmt.Sprintf("TQ-%04d", n)
+		if _, taken := referenced[id]; !taken {
+			return id, nil
+		}
+	}
+}
+
+// referencedIDs is every task ID the named files list in depends_on, whether or
+// not a task by that ID is among them. The dangling ones are the point: a
+// reference with nothing behind it is exactly what a recycled number would bind
+// itself to.
+func (s *Store) referencedIDs(names []string) map[string]struct{} {
+	referenced := make(map[string]struct{})
+	for _, t := range s.readTasks(names).Tasks {
+		for _, dep := range t.DependsOn {
+			referenced[dep] = struct{}{}
+		}
+	}
+	return referenced
 }
 
 // write renders the task and replaces the destination file atomically, so a

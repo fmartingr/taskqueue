@@ -406,6 +406,51 @@ func TestReadyFollowsDependencies(t *testing.T) {
 	}
 }
 
+// The reproduction TQ-0016 was filed with, run the way it happens: `rm` and
+// then `tq add`. There is no tq delete and no DELETE route, so a raw file
+// operation is the only way a task is ever removed — an rm, a revert, a branch
+// merge — which makes this the real user path and not a contrived one.
+//
+// It is here rather than only in the store because every step of the damage is
+// something the binary printed: the new task's ID, `tq show` calling a
+// dependency done, and `tq ready` offering work whose prerequisite never
+// happened.
+func TestAnIDATaskDependsOnIsNotRecycledAfterTheFileIsRemoved(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "Real task one", "--status", "todo")
+	p.mustRun(t, "add", "Real task two")
+	p.mustRun(t, "update", "TQ-0001", "--add-dependency", "TQ-0002")
+
+	removed := p.path(".tasks", "TQ-0002-real-task-two.md")
+	if err := os.Remove(removed); err != nil {
+		t.Fatalf("removing %s: %v", removed, err)
+	}
+
+	var filed taskJSON
+	p.mustRun(t, "add", "Buy milk", "--status", "done", "--json").JSON(t, &filed)
+	if filed.ID == "TQ-0002" {
+		t.Fatalf("tq add gave the new task TQ-0002, the number TQ-0001 still depends on")
+	}
+	if filed.ID != "TQ-0003" {
+		t.Errorf("tq add = %q, want TQ-0003", filed.ID)
+	}
+
+	// The dependency is still unmet, so it must still read as unmet.
+	shown := p.mustRun(t, "show", "TQ-0001")
+	if !strings.Contains(shown.Stdout, "TQ-0002 (missing)") {
+		t.Errorf("tq show does not call TQ-0002 missing; it was removed, not finished:\n%s", shown.Stdout)
+	}
+
+	var ready []taskJSON
+	p.mustRun(t, "ready", "--json").JSON(t, &ready)
+	for _, offered := range ready {
+		if offered.ID == "TQ-0001" {
+			t.Errorf("tq ready offers TQ-0001; an agent picking it up believes a prerequisite that never happened")
+		}
+	}
+}
+
 // help and version are commands too, and the exit codes differ between no
 // command and an unknown one.
 func TestHelpAndUsage(t *testing.T) {

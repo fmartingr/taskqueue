@@ -196,6 +196,217 @@ func TestNextIDIsSequential(t *testing.T) {
 	}
 }
 
+// remove takes a task's file out of the directory the way every removal in this
+// project happens: by hand. There is no tq delete and no DELETE route, so an
+// `rm`, a revert or a merge is the only path, and it is exactly the path that
+// leaves the highest number free with dependencies still pointing at it.
+func remove(t *testing.T, st *store.Store, of task.Task) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(st.Dir, store.TaskFileName(of))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The bug itself. Removing the newest task frees its number, and handing that
+// number to the next create re-points the dependency at a task that has nothing
+// to do with the one that went — so a prerequisite nobody met reads as met
+// (TQ-0016).
+func TestANumberATaskStillDependsOnIsNotHandedOut(t *testing.T) {
+	st := tqtest.NewStore(t)
+	dependent := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Real task one", Status: "todo"})
+	prerequisite := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Real task two"})
+	if _, err := st.Patch(dependent.ID, task.TaskPatch{DependsOn: &[]string{prerequisite.ID}}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	remove(t, st, prerequisite)
+
+	filed := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Buy milk", Status: "done"})
+	if filed.ID == prerequisite.ID {
+		t.Fatalf("Create() = %s, the number %s still depends on: an unrelated task must not inherit a dependency", filed.ID, dependent.ID)
+	}
+	if filed.ID != "TQ-0003" {
+		t.Errorf("Create() = %q, want TQ-0003: the referenced number is stepped over, not counted from", filed.ID)
+	}
+
+	// The point of stepping over it: the dependency stays unmet, so the
+	// dependent is still blocked rather than being offered as available work.
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	columns, err := st.Columns()
+	if err != nil {
+		t.Fatalf("Columns: %v", err)
+	}
+	index := task.IndexTasks(listing.Tasks)
+	blocked, ok := index[dependent.ID]
+	if !ok {
+		t.Fatalf("List() = %+v, want it to hold %s", listing.Tasks, dependent.ID)
+	}
+	if task.IsReady(blocked, index, columns) {
+		t.Errorf("%s is ready, want it blocked: %s was never done, it was removed", dependent.ID, prerequisite.ID)
+	}
+}
+
+// A whole run of removed tasks is still referenced, so the search does not stop
+// at the first free-looking number.
+func TestEveryReferencedNumberInARowIsSteppedOver(t *testing.T) {
+	st := tqtest.NewStore(t)
+	dependent := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Depends on both"})
+	first := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "First prerequisite"})
+	second := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Second prerequisite"})
+	if _, err := st.Patch(dependent.ID, task.TaskPatch{DependsOn: &[]string{first.ID, second.ID}}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	remove(t, st, first)
+	remove(t, st, second)
+
+	filed := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Unrelated"})
+	if filed.ID != "TQ-0004" {
+		t.Errorf("Create() = %q, want TQ-0004: both %s and %s are still spoken for", filed.ID, first.ID, second.ID)
+	}
+}
+
+// The other side of the rule, and the reason it is a skip rather than a
+// high-water mark: a number nothing points at has no stale reference to
+// re-bind, so recycling it is invisible and is left alone.
+func TestANumberNothingDependsOnIsStillRecycled(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Keep me"})
+	newest := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Remove me"})
+	remove(t, st, newest)
+
+	filed := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Take the number"})
+	if filed.ID != newest.ID {
+		t.Errorf("Create() = %q, want %q reused: nothing pointed at it, so there was nothing to protect", filed.ID, newest.ID)
+	}
+}
+
+// A dependency is matched as a whole string everywhere else — IndexTasks keys
+// by it — so a reference tq would never write matches nothing and reserves
+// nothing. Skipping on the number instead would burn TQ-0002 for a `TQ-2` that
+// could never have bound to it.
+func TestAReferenceSpelledUnlikeAnIDReservesNothing(t *testing.T) {
+	st := tqtest.NewStore(t)
+	only := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Odd reference"})
+	if _, err := st.Patch(only.ID, task.TaskPatch{DependsOn: &[]string{"TQ-2"}}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+
+	next, err := st.NextID()
+	if err != nil {
+		t.Fatalf("NextID: %v", err)
+	}
+	if next != "TQ-0002" {
+		t.Errorf("NextID() = %q, want TQ-0002: TQ-2 is not the ID any task would be given, so nothing could bind to it", next)
+	}
+}
+
+// A task withheld from the listing as one of two files claiming an ID is still
+// read here: it parses, and the dependencies in it are real. Withholding it
+// from the listing is about which of two files a reader means — it says nothing
+// about whether the pointer inside them could re-bind.
+func TestAReferenceInsideADuplicatedTaskStillReservesItsNumber(t *testing.T) {
+	st := tqtest.NewStore(t)
+	dependent := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Doubled"})
+	prerequisite := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Removed"})
+	if _, err := st.Patch(dependent.ID, task.TaskPatch{DependsOn: &[]string{prerequisite.ID}}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	remove(t, st, prerequisite)
+	reloaded, err := st.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	duplicate(t, st, reloaded, dependent.ID+"-a-second-file.md")
+
+	next, err := st.NextID()
+	if err != nil {
+		t.Fatalf("NextID: %v", err)
+	}
+	if next != "TQ-0003" {
+		t.Errorf("NextID() = %q, want TQ-0003: %s is spoken for by a file the listing withholds but the store can read", next, prerequisite.ID)
+	}
+}
+
+// The accepted residue, asserted so it is a decision and not a surprise: a file
+// that will not parse keeps its depends_on to itself, so a reference inside one
+// reserves nothing. Nothing is offered on the strength of such a file — it is
+// withheld from every listing and reported instead, tq ready never proposes it
+// and tq show refuses it — but the damage is still reachable in one order: the
+// merge that leaves the conflict markers also removes the task the dependency
+// named, a create takes the freed number while the file is unreadable, and the
+// dependency binds to it when the conflict is resolved. Closing that would mean
+// guessing which TQ-#### in an unparseable file was a dependency and which was
+// prose, so the answer is the loud report and not a guess.
+func TestAReferenceInsideAnUnreadableFileReservesNothing(t *testing.T) {
+	st := tqtest.NewStore(t)
+	dependent := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Half merged", Status: "todo"})
+	prerequisite := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Removed"})
+	if _, err := st.Patch(dependent.ID, task.TaskPatch{DependsOn: &[]string{prerequisite.ID}}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	remove(t, st, prerequisite)
+
+	// The only file that names the removed number, and it will not parse.
+	broken := store.TaskFileName(dependent)
+	if err := os.WriteFile(filepath.Join(st.Dir, broken), []byte("<<<<<<< HEAD\ndepends_on:\n  - "+prerequisite.ID+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	filed := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Buy milk"})
+	if filed.ID != prerequisite.ID {
+		t.Errorf("Create() = %q, want %q: a reference tq cannot read cannot reserve anything, and this is the accepted hole", filed.ID, prerequisite.ID)
+	}
+
+	// What tq does instead is refuse to pass the file off as a task: it is
+	// named, it is not in the listing, and so it is never offered as work.
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listing.Unreadable) != 1 || listing.Unreadable[0].File != broken {
+		t.Fatalf("Unreadable = %+v, want it to name %s: the dependency is only hidden while nobody is told", listing.Unreadable, broken)
+	}
+	if _, held := task.IndexTasks(listing.Tasks)[dependent.ID]; held {
+		t.Errorf("List() holds %s, want it withheld: a task nobody can read is a task nobody can be handed", dependent.ID)
+	}
+}
+
+// A directory answering to a task file's name is not a task and nothing else in
+// the store looks at it, but it does occupy the name — and a create handed its
+// number could never link that name, spending every retry deriving the same one
+// and blaming task IDs for an entry it never mentioned (TQ-0039). So the number
+// counts, even though the entry is never read.
+func TestAnEntryOccupyingATaskFileNameStillTakesItsNumber(t *testing.T) {
+	st := tqtest.NewStore(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Keep me"})
+	if err := os.Mkdir(filepath.Join(st.Dir, "TQ-0002-not-a-task.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	next, err := st.NextID()
+	if err != nil {
+		t.Fatalf("NextID: %v", err)
+	}
+	if next != "TQ-0003" {
+		t.Fatalf("NextID() = %q, want TQ-0003: TQ-0002 is a name a create could never link", next)
+	}
+
+	// And it is never opened: a directory is not a task file the queue is short.
+	filed := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Not a task"})
+	if filed.ID != "TQ-0003" {
+		t.Errorf("Create() = %q, want TQ-0003", filed.ID)
+	}
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listing.Unreadable) != 0 {
+		t.Errorf("Unreadable = %+v, want nothing: a directory is not a broken task file", listing.Unreadable)
+	}
+}
+
 func TestGet(t *testing.T) {
 	st := tqtest.NewStore(t)
 	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Findable", Body: "Body text."})

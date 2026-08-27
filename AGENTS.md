@@ -71,6 +71,20 @@ frontend`, `make typecheck` or `make dev` will run.
 - Do not add a database, an index file, a cache or a filesystem watcher. Markdown
   files are the source of truth and every read hits the disk — that is what makes
   CLI edits visible to a running server.
+- Allocating an ID reads the task *files*, not just their names: the number is
+  one past the highest any directory entry answering to a task file's name
+  claims — a directory included, since a create could never link that name
+  (TQ-0039) — advanced again past any number a task still lists in
+  `depends_on`. Removal is always a raw file operation — there is no `tq delete`
+  — so removing the newest task frees the highest number, and
+  handing it straight to the next create binds every dangling dependency to an
+  unrelated new task (TQ-0016). Do not replace the skip with a high-water mark
+  or any other persisted counter: that is the index file the rule above forbids,
+  and two branches would each bump it and merge back to the same number. A
+  create therefore costs a pass over the queue, which is the accepted price —
+  creates are rare, and every listing already reads every file. A number nothing
+  references is still recycled, deliberately: there is no stale pointer for it
+  to re-bind to.
 - A listing reads the task directory twice: once to learn which files to open,
   and once afterwards to check that the set of them did not change while they
   were being opened. Reading the names and then the files is a TOCTOU, and a

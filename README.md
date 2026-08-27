@@ -458,6 +458,16 @@ Implement authentication using the existing OIDC provider.
   whatever the suffix says, files written before this naming existed keep
   working, and retitling a task renames its file on the next write (Git records
   it as a rename).
+- IDs are sequential but not contiguous. A number is allocated one past the
+  highest a file claims, and then advanced past any number a task still lists
+  in `depends_on`. Removing a task's file is always a raw file operation — an
+  `rm`, a revert, a branch merge, since there is no `tq delete` — and removing
+  the newest task leaves its number the highest free one. Handed to the next
+  `tq add`, it would bind every dependency that pointed at the removed task to
+  an unrelated new one: a prerequisite nobody met would read as done, and
+  `tq ready` would offer the dependent as available work. So the number is
+  skipped, and the gap it leaves is nothing to fix. A number nothing points at
+  is still reused, because there is no stale reference for it to re-bind to.
 - Writes are atomic (write to a temporary file, then rename), so a crash never
   leaves a half-written task behind.
 - A save moves the task's file to the name its title asks for and then writes

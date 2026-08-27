@@ -5416,6 +5416,14 @@ function normalizeContainer(container) {
 if (false) {}
 
 // frontend/api.ts
+class ApiError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
+}
 async function api(path, method = "GET", body) {
   const init = { method };
   if (body !== undefined) {
@@ -5424,7 +5432,7 @@ async function api(path, method = "GET", body) {
   }
   const response = await fetch(path, init);
   if (!response.ok) {
-    throw new Error(await errorMessage(response));
+    throw new ApiError(response.status, await errorMessage(response));
   }
   return await response.json();
 }
@@ -5663,6 +5671,7 @@ function visibleTasks(tasks, filters, columns) {
 
 // frontend/state.ts
 var POLL_INTERVAL_MS = 3000;
+var NOT_FOUND = 404;
 var FALLBACK_PRIORITIES = [
   { name: "urgent", color: "#b42318", display_name: "Urgent" },
   { name: "high", color: "#c2410c", display_name: "High" },
@@ -5708,7 +5717,37 @@ var dragging = ref(null);
 var composing = ref(null);
 var openTaskID = ref(null);
 var creating = ref(false);
-var busy = computed2(() => dragging.value !== null || composing.value !== null || openTaskID.value !== null || creating.value);
+var openTask = ref(null);
+var openTaskMissing = ref(false);
+var asked = 0;
+watch2([tasks, openTaskID], () => {
+  const id = openTaskID.value;
+  asked++;
+  if (id === null) {
+    openTask.value = null;
+    openTaskMissing.value = false;
+    return;
+  }
+  const found = tasks.value.find((task) => task.id === id);
+  if (found) {
+    openTask.value = found;
+    openTaskMissing.value = false;
+    return;
+  }
+  confirmMissing(id, asked);
+}, { immediate: true, flush: "sync" });
+async function confirmMissing(id, ticket) {
+  try {
+    await fetchTask(id);
+    if (ticket === asked)
+      openTaskMissing.value = false;
+  } catch (error) {
+    if (ticket === asked) {
+      openTaskMissing.value = error instanceof ApiError && error.status === NOT_FOUND;
+    }
+  }
+}
+var busy = computed2(() => dragging.value !== null);
 var TOAST_MS = 6000;
 var nextToastID = 0;
 var toasts = ref([]);
@@ -6714,6 +6753,29 @@ var FilterBar_default = /* @__PURE__ */ defineComponent({
 // frontend/components/FilterBar.vue
 var FilterBar_default2 = FilterBar_default;
 
+// frontend/adopt.ts
+function adoptField(taken, local, incoming, focused) {
+  if (incoming === taken)
+    return "unchanged";
+  if (local !== taken)
+    return "keep";
+  return focused ? "defer" : "take";
+}
+var copy = (notes) => notes.map((note) => ({ ...note }));
+function adoptBody(baseline, edited, current, focused) {
+  const notes = mergeNotes(baseline.notes, edited.notes, current.notes);
+  const typed = edited.content !== baseline.content;
+  const keep = typed || focused;
+  return {
+    edited: { content: keep ? edited.content : current.content, notes },
+    baseline: {
+      content: keep ? baseline.content : current.content,
+      notes: copy(current.notes)
+    },
+    content: !keep ? "taken" : typed && current.content !== baseline.content ? "overridden" : "held"
+  };
+}
+
 // frontend/components/NotesPanel.vue?type=script
 var _hoisted_19 = { class: "notes-section" };
 var _hoisted_26 = {
@@ -6741,15 +6803,15 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
     const props = __props;
     const emit2 = __emit;
     const list = ref(null);
-    const editing = ref(-1);
+    const editing = ref(null);
     const editor = ref("");
-    function beginEdit(position) {
-      if (editing.value === position)
+    function beginEdit(note) {
+      if (editing.value === note)
         return;
-      if (editing.value !== -1)
+      if (editing.value !== null)
         commit(editing.value);
-      editing.value = position;
-      editor.value = props.notes[position]?.text ?? "";
+      editing.value = note;
+      editor.value = note.text;
       nextTick(() => {
         const area = list.value?.querySelector("textarea.note-editor");
         if (area instanceof HTMLTextAreaElement) {
@@ -6758,18 +6820,18 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
         }
       });
     }
-    function finish(keep, position) {
-      if (editing.value !== position)
+    function finish(keep, note) {
+      if (editing.value !== note)
         return;
-      editing.value = -1;
+      editing.value = null;
       if (keep)
-        commit(position);
+        commit(note);
     }
-    function commit(position) {
-      editing.value = -1;
+    function commit(note) {
+      editing.value = null;
       const text = editor.value.trim();
-      if (text !== "" && text !== props.notes[position]?.text)
-        emit2("edit", position, text);
+      if (text !== "" && text !== note.text)
+        emit2("edit", note, text);
     }
     function onEnter(event, commit2) {
       if (event.shiftKey)
@@ -6799,20 +6861,20 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
                   class: "ghost icon",
                   title: "Edit this note",
                   "aria-label": "Edit this note",
-                  onMousedown: withModifiers(($event) => beginEdit(position), ["prevent"]),
-                  onClick: ($event) => beginEdit(position)
+                  onMousedown: withModifiers(($event) => beginEdit(note), ["prevent"]),
+                  onClick: ($event) => beginEdit(note)
                 }, " ✎ ", 40, _hoisted_53)
               ]),
-              editing.value === position ? withDirectives((openBlock(), createElementBlock("textarea", {
+              editing.value === note ? withDirectives((openBlock(), createElementBlock("textarea", {
                 key: 0,
                 "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => editor.value = $event),
                 class: "note-editor",
                 rows: "2",
                 onKeydown: [
-                  withKeys(($event) => onEnter($event, () => finish(true, position)), ["enter"]),
-                  withKeys(withModifiers(($event) => finish(false, position), ["prevent"]), ["esc"])
+                  withKeys(($event) => onEnter($event, () => finish(true, note)), ["enter"]),
+                  withKeys(withModifiers(($event) => finish(false, note), ["prevent"]), ["esc"])
                 ],
-                onBlur: ($event) => finish(true, position)
+                onBlur: ($event) => finish(true, note)
               }, null, 40, _hoisted_63)), [
                 [vModelText, editor.value]
               ]) : (openBlock(), createElementBlock("p", _hoisted_73, toDisplayString(note.text), 1))
@@ -6850,10 +6912,17 @@ var _hoisted_27 = {
   id: "task-dialog-id",
   class: "task-id"
 };
-var _hoisted_36 = { class: "grid" };
-var _hoisted_45 = ["value"];
-var _hoisted_54 = ["value", "title"];
-var _hoisted_64 = ["hidden"];
+var _hoisted_36 = ["hidden"];
+var _hoisted_45 = ["hidden"];
+var _hoisted_54 = { class: "grid" };
+var _hoisted_64 = ["value"];
+var _hoisted_74 = ["value", "title"];
+var _hoisted_82 = ["hidden"];
+var _hoisted_92 = { class: "dialog-footer" };
+var _hoisted_10 = {
+  id: "task-timestamps",
+  class: "timestamps"
+};
 var TaskDialog_default = /* @__PURE__ */ defineComponent({
   __name: "TaskDialog",
   props: {
@@ -6878,19 +6947,72 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
     const content = ref(opened.content);
     const notes = ref(opened.notes.map((note) => ({ ...note })));
     const noteDraft = ref("");
-    const stale2 = [priority.value];
-    const priorityChoices = computed2(() => priorityOptions(priorities.value, stale2));
-    const pending = pendingDependencies(props.task, index.value, columns.value);
-    const timestamps = `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`;
+    const kept = ref([priority.value]);
+    watch2(priority, (value) => {
+      if (!kept.value.includes(value))
+        kept.value = [...kept.value, value];
+    });
+    const priorityChoices = computed2(() => priorityOptions(priorities.value, kept.value));
+    const pending = computed2(() => pendingDependencies(props.task, index.value, columns.value));
+    const timestamps = computed2(() => `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`);
     onMounted(() => dialog.value?.showModal());
+    function field(label, id, local, from) {
+      return { label, id, local, from, taken: from(props.task) };
+    }
+    const fields = [
+      field("Title", "task-title", title, (task) => task.title),
+      field("Status", "task-status", status, (task) => task.status),
+      field("Priority", "task-priority", priority, (task) => task.priority || defaultPriority(priorities.value)),
+      field("Assignee", "task-assignee", assignee, (task) => task.assignee ?? ""),
+      field("Labels", "task-labels", labelList, (task) => (task.labels ?? []).join(", ")),
+      field("Depends on", "task-depends-on", dependsOn, (task) => (task.depends_on ?? []).join(", "))
+    ];
+    const changed = ref([]);
+    function report(label, withheld) {
+      if (changed.value.includes(label) === withheld)
+        return;
+      changed.value = withheld ? [...changed.value, label] : changed.value.filter((named) => named !== label);
+    }
+    function focused(id) {
+      return document.activeElement?.id === id;
+    }
+    function adopt(task, caret = true) {
+      for (const entry of fields) {
+        const incoming = entry.from(task);
+        switch (adoptField(entry.taken, entry.local.value, incoming, caret && focused(entry.id))) {
+          case "take":
+            entry.local.value = incoming;
+            entry.taken = incoming;
+            report(entry.label, false);
+            break;
+          case "keep":
+            report(entry.label, true);
+            break;
+          case "unchanged":
+            report(entry.label, false);
+            break;
+        }
+      }
+      const adoption = adoptBody(baseline.value, { content: content.value, notes: notes.value }, splitBody(task.body ?? ""), caret && focused("task-body"));
+      content.value = adoption.edited.content;
+      notes.value = adoption.edited.notes;
+      baseline.value = adoption.baseline;
+      report("Body", adoption.content === "overridden");
+    }
+    watch2(() => props.task, (task) => adopt(task));
+    let refocus;
+    function onFocusOut() {
+      clearTimeout(refocus);
+      refocus = setTimeout(() => adopt(props.task), 0);
+    }
+    onBeforeUnmount(() => clearTimeout(refocus));
     function dismiss() {
       dialog.value?.close();
     }
     async function buildPatch() {
-      const current = splitBody((await fetchTask(props.task.id)).body ?? "");
-      const merged = mergeBody(baseline.value, { content: content.value, notes: notes.value }, current);
-      if (merged.outcome === "conflict")
-        return null;
+      adopt(props.task, false);
+      const opened2 = baseline.value;
+      const edited = { content: content.value, notes: notes.value };
       const patch = {
         title: title.value,
         status: status.value,
@@ -6899,6 +7021,10 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
         labels: splitList(labelList.value),
         depends_on: splitList(dependsOn.value)
       };
+      const current = splitBody((await fetchTask(props.task.id)).body ?? "");
+      const merged = mergeBody(opened2, edited, current);
+      if (merged.outcome === "conflict")
+        return null;
       if (merged.outcome === "write")
         patch.body = merged.body;
       return patch;
@@ -6911,6 +7037,9 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
       content.value = written.content;
       notes.value = written.notes.map((note) => ({ ...note }));
       baseline.value = { content: written.content, notes: written.notes.map((note) => ({ ...note })) };
+      for (const entry of fields)
+        entry.taken = entry.local.value;
+      changed.value = [];
     }
     async function save() {
       try {
@@ -6945,10 +7074,8 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
         toast(`Could not add a note to ${props.task.id}: ${describe(error)}`);
       }
     }
-    function editNote(position, text) {
-      const note = notes.value[position];
-      if (note)
-        note.text = text;
+    function editNote(note, text) {
+      note.text = text;
     }
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("dialog", {
@@ -6961,7 +7088,8 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
         createBaseVNode("form", {
           id: "task-form",
           method: "dialog",
-          onSubmit: withModifiers(save, ["prevent"])
+          onSubmit: withModifiers(save, ["prevent"]),
+          onFocusout: onFocusOut
         }, [
           createBaseVNode("header", _hoisted_110, [
             createBaseVNode("span", _hoisted_27, toDisplayString(__props.task.id), 1),
@@ -6973,6 +7101,16 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
               onClick: dismiss
             }, " ✕ ")
           ]),
+          createBaseVNode("p", {
+            id: "task-gone",
+            class: "dialog-note gone",
+            hidden: !unref(openTaskMissing)
+          }, toDisplayString(__props.task.id) + " is no longer in the queue — it may have been deleted. Copy anything you still need here: a save has nothing left to write to. ", 9, _hoisted_36),
+          createBaseVNode("p", {
+            id: "task-changed",
+            class: "dialog-note",
+            hidden: changed.value.length === 0
+          }, " Changed on disk while you were editing: " + toDisplayString(changed.value.join(", ")) + ". Your text was kept. ", 9, _hoisted_45),
           createBaseVNode("label", null, [
             _cache[9] || (_cache[9] = createTextVNode(" Title ", -1)),
             withDirectives(createBaseVNode("input", {
@@ -6985,7 +7123,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
               [vModelText, title.value]
             ])
           ]),
-          createBaseVNode("div", _hoisted_36, [
+          createBaseVNode("div", _hoisted_54, [
             createBaseVNode("label", null, [
               _cache[10] || (_cache[10] = createTextVNode(" Status ", -1)),
               withDirectives(createBaseVNode("select", {
@@ -6997,7 +7135,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                   return openBlock(), createElementBlock("option", {
                     key: column.name,
                     value: column.name
-                  }, toDisplayString(column.display_name), 9, _hoisted_45);
+                  }, toDisplayString(column.display_name), 9, _hoisted_64);
                 }), 128))
               ], 512), [
                 [vModelSelect, status.value]
@@ -7015,7 +7153,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                     key: option.name,
                     value: option.name,
                     title: option.configured ? option.name : `${option.name} — not in the project's priority set`
-                  }, toDisplayString(option.display), 9, _hoisted_54);
+                  }, toDisplayString(option.display), 9, _hoisted_74);
                 }), 128))
               ], 512), [
                 [vModelSelect, priority.value]
@@ -7063,8 +7201,8 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
           createBaseVNode("p", {
             id: "task-blocked",
             class: "blocked-note",
-            hidden: unref(pending).length === 0
-          }, toDisplayString(unref(pending).length === 0 ? "" : `Blocked by ${unref(pending).join(", ")}`), 9, _hoisted_64),
+            hidden: pending.value.length === 0
+          }, toDisplayString(pending.value.length === 0 ? "" : `Blocked by ${pending.value.join(", ")}`), 9, _hoisted_82),
           createBaseVNode("label", null, [
             _cache[15] || (_cache[15] = createTextVNode(" Body (Markdown) ", -1)),
             withDirectives(createBaseVNode("textarea", {
@@ -7084,11 +7222,8 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
             onEdit: editNote,
             onAppend: append
           }, null, 8, ["draft", "notes"]),
-          createBaseVNode("footer", { class: "dialog-footer" }, [
-            createBaseVNode("span", {
-              id: "task-timestamps",
-              class: "timestamps"
-            }, toDisplayString(timestamps)),
+          createBaseVNode("footer", _hoisted_92, [
+            createBaseVNode("span", _hoisted_10, toDisplayString(timestamps.value), 1),
             _cache[16] || (_cache[16] = createBaseVNode("span", { class: "spacer" }, null, -1)),
             createBaseVNode("button", {
               type: "button",
@@ -7142,7 +7277,6 @@ var _hoisted_37 = { id: "status-line" };
 var App_default = /* @__PURE__ */ defineComponent({
   __name: "App",
   setup(__props) {
-    const open = computed2(() => tasks.value.find((task) => task.id === openTaskID.value));
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock(Fragment, null, [
         createBaseVNode("header", _hoisted_112, [
@@ -7160,9 +7294,13 @@ var App_default = /* @__PURE__ */ defineComponent({
           createBaseVNode("span", _hoisted_37, toDisplayString(unref(statusLine)), 1)
         ]),
         createVNode(Toasts_default2),
-        open.value ? (openBlock(), createBlock(TaskDialog_default2, {
-          key: 0,
-          task: open.value,
+        createCommentVNode(` Keyed by the task: \`openTask\` is a ref rather than a find, so it could be
+       pointed straight at another task without passing through nothing, and an
+       instance reused across that switch would keep the first task's fields and
+       save them onto the second. `),
+        unref(openTask) ? (openBlock(), createBlock(TaskDialog_default2, {
+          key: unref(openTask).id,
+          task: unref(openTask),
           onClose: _cache[1] || (_cache[1] = ($event) => openTaskID.value = null)
         }, null, 8, ["task"])) : createCommentVNode("v-if", true),
         unref(creating) ? (openBlock(), createBlock(CreateDialog_default2, {

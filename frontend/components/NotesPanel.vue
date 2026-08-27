@@ -24,23 +24,32 @@ import type { Note } from "../notes";
 
 const props = defineProps<{ notes: Note[]; draft: string }>();
 const emit = defineEmits<{
-  /** The user finished editing the note at this position. */
-  edit: [position: number, text: string];
+  /** The user finished editing this note. */
+  edit: [note: Note, text: string];
   "update:draft": [value: string];
   append: [];
 }>();
 
 const list = ref<HTMLUListElement | null>(null);
-/** The note being edited, or -1. */
-const editing = ref(-1);
+/**
+ * The note being edited, or null.
+ *
+ * The note itself rather than its position in the list. The list is live while
+ * the dialog is open — it takes in whatever the file holds (TQ-0084) — so a
+ * position is a name that can come to mean a different note between one
+ * keystroke and the next, and the edit would be committed onto that one. The
+ * merge hands an edited note back unchanged, so its identity is the one thing
+ * an adoption cannot move.
+ */
+const editing = ref<Note | null>(null);
 const editor = ref("");
 
-function beginEdit(position: number): void {
-  if (editing.value === position) return;
+function beginEdit(note: Note): void {
+  if (editing.value === note) return;
   // An edit already in progress is kept, the way losing focus keeps it.
-  if (editing.value !== -1) commit(editing.value);
-  editing.value = position;
-  editor.value = props.notes[position]?.text ?? "";
+  if (editing.value !== null) commit(editing.value);
+  editing.value = note;
+  editor.value = note.text;
 
   void nextTick(() => {
     const area = list.value?.querySelector("textarea.note-editor");
@@ -52,27 +61,27 @@ function beginEdit(position: number): void {
 }
 
 /**
- * Ends the edit of the note at `position` — Enter and losing focus keep it,
- * Escape drops it — and either way the change is written with the dialog's
- * Save, like every other field.
+ * Ends the edit of one note — Enter and losing focus keep it, Escape drops it —
+ * and either way the change is written with the dialog's Save, like every other
+ * field.
  *
- * The position matters, and is the other half of the TQ-0027 fix: swapping the
+ * Which note matters, and is the other half of the TQ-0027 fix: swapping the
  * textarea back out for its paragraph blurs it, and that blur arrives *after*
  * the edit has already moved to another note. Acting on it would close the
  * editor that was just opened, which is the same "nothing happened" the
  * detached button used to produce.
  */
-function finish(keep: boolean, position: number): void {
-  if (editing.value !== position) return;
-  editing.value = -1;
-  if (keep) commit(position);
+function finish(keep: boolean, note: Note): void {
+  if (editing.value !== note) return;
+  editing.value = null;
+  if (keep) commit(note);
 }
 
 /** Hands an edit back to the dialog, unless it is empty or unchanged. */
-function commit(position: number): void {
-  editing.value = -1;
+function commit(note: Note): void {
+  editing.value = null;
   const text = editor.value.trim();
-  if (text !== "" && text !== props.notes[position]?.text) emit("edit", position, text);
+  if (text !== "" && text !== note.text) emit("edit", note, text);
 }
 
 /**
@@ -103,20 +112,20 @@ function onEnter(event: KeyboardEvent, commit: () => void): void {
             class="ghost icon"
             title="Edit this note"
             aria-label="Edit this note"
-            @mousedown.prevent="beginEdit(position)"
-            @click="beginEdit(position)"
+            @mousedown.prevent="beginEdit(note)"
+            @click="beginEdit(note)"
           >
             ✎
           </button>
         </div>
         <textarea
-          v-if="editing === position"
+          v-if="editing === note"
           v-model="editor"
           class="note-editor"
           rows="2"
-          @keydown.enter="onEnter($event, () => finish(true, position))"
-          @keydown.esc.prevent="finish(false, position)"
-          @blur="finish(true, position)"
+          @keydown.enter="onEnter($event, () => finish(true, note))"
+          @keydown.esc.prevent="finish(false, note)"
+          @blur="finish(true, note)"
         ></textarea>
         <p v-else class="note-text">{{ note.text }}</p>
       </li>

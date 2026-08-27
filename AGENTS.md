@@ -32,7 +32,8 @@ internal/fsx/      Atomic file write, shared by the two generators
 internal/tqtest/   Test fixtures shared across packages
 internal/integration/ Tests that drive the compiled binary (build tag)
 frontend/          main.ts, components/ (.vue), state.ts, api.ts, board.ts,
-                   notes.ts, format.ts, index.html, style.css, build.ts (Bun)
+                   notes.ts, adopt.ts, format.ts, index.html, style.css,
+                   build.ts (Bun)
 browser/           Tests that drive the board in a real Chromium (bun test)
 ```
 
@@ -63,7 +64,7 @@ frontend`, `make typecheck` or `make dev` will run.
 - Run `make typecheck` and `make frontend` after frontend changes, and commit
   the `public/` output; add `make test-frontend` when the change touches logic
   that is unit-tested (the pure helpers in `frontend/`, currently `notes.ts`,
-  `board.ts` and `format.ts`). `bun build` strips types without checking them, so nothing else
+  `board.ts`, `adopt.ts` and `format.ts`). `bun build` strips types without checking them, so nothing else
   in the pipeline sees a type error.
 - Run `make test-browser` after changes to the components, the board's markup or
   its styles. It needs a Chromium: `make browser-install` puts one in the cache.
@@ -230,12 +231,15 @@ frontend`, `make typecheck` or `make dev` will run.
 `go test ./...` covers frontmatter parsing/rendering, the store, dependency/ready
 logic, the CLI (through `runCLI`, without spawning a binary) and the HTTP API
 (through `httptest`). Frontend logic that is pure — the notes split/join/merge in
-`frontend/notes.ts`, and the indexing, dependency and filter rules in
-`frontend/board.ts` — has `bun test` unit tests next to it
-(`make test-frontend`). Those two files know nothing about Vue, which
+`frontend/notes.ts`, the indexing, dependency and filter rules in
+`frontend/board.ts`, and what an open dialog does with a task that changed under
+it in `frontend/adopt.ts` — has `bun test` unit tests next to it
+(`make test-frontend`). Those files know nothing about Vue, which
 is what keeps the components down to rendering and events; `board.ts`'s
 `isReady` is checked against the same cases as `task.IsReady`, since the two are
-separate implementations of one rule.
+separate implementations of one rule, and `adopt.test.ts` drives `adoptBody` and
+`mergeBody` in sequence, which is the only place the live adoption and the
+save-time merge are proved to agree on one snapshot.
 
 A bare `t.TempDir()` is not an isolation barrier: discovery walks up out of it,
 and `TQ_DIR` in a developer's shell points the whole suite at their real queue
@@ -266,8 +270,9 @@ that only shows up in a compiled binary belongs there rather than in a unit test
 `make test-browser` is the layer above that, and the only one that sees a DOM:
 `bun test` drives a real Chromium through `playwright-core` against a real `tq
 serve`, one temp project per test on a port the OS picks. It covers what only a
-browser can show — native drag and drop, `<dialog>`, focus and blur, and the
-poll standing down while the user is working. It is also the migration's
+browser can show — native drag and drop, `<dialog>`, focus and blur, a refresh
+standing down for a drag, and an open dialog taking in a change to its own task
+without disturbing what is under the caret. It is also the migration's
 acceptance signal: it drives the real binary, so it should never need to know
 how the page is built, and a test that has to change is a behaviour change.
 `playwright-core` stays test-only — the only things under `node_modules/` that

@@ -69,8 +69,9 @@ test("saving the dialog keeps the notes written while it was open", async () => 
   const board = await dialogWithNotes("the note the dialog opened with");
   const { project, server, page, id } = board;
 
-  // The poll stands down while the dialog is open, so the board cannot know
-  // about these. Saving a body captured at open time is what erased them.
+  // The dialog now takes these into its panel as they land (TQ-0084), but the
+  // merge is what has to keep them: saving a body captured at open time is
+  // what erased them, and nothing about adopting one makes it safe to write.
   project.mustRun("note", id, "--", "written by an agent");
   project.mustRun("note", id, "--", "and another one");
 
@@ -229,7 +230,9 @@ test("a save that never touched the body leaves an edit made to it alone", async
   const board = await dialogWithBody("## Finding\n\nAs filed.");
   const { project, server, page, id } = board;
 
-  // The poll stands down while the dialog is open, so the board cannot know.
+  // The textarea is untouched, so the dialog adopts this — and moves its
+  // baseline with it, which is what stops the save below reading the adoption
+  // as a second edit of the content half (TQ-0084).
   await reviseBody(board, id, "## Finding\n\nRevised by an agent.");
 
   await page.selectOption("#task-priority", "urgent");

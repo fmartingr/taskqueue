@@ -9,6 +9,11 @@
  * board and would otherwise have taken the half-typed title away. Here the
  * textarea is mounted for as long as the composer is open, so a re-render
  * cannot touch it — and the caret and the selection stay where they were.
+ *
+ * That is what lets the board stay live while a composer is open (TQ-0084).
+ * Its column keys its cards by ID and this composer sits outside that list, so
+ * a refresh patches the cards around it and never remounts it. Nothing else
+ * protects the draft: the guard that used to freeze the board for it is gone.
  */
 import { onMounted, ref } from "vue";
 

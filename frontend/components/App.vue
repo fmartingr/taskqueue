@@ -6,17 +6,18 @@
  * state theirs: closing one throws its fields away, and opening one starts from
  * the task (or from the project's defaults) rather than from whatever the last
  * open left behind.
+ *
+ * The task dialog is mounted on `openTask`, which state.ts holds rather than
+ * derives, so a refresh that no longer lists the task cannot unmount the dialog
+ * and throw away what was being typed in it. The dialog says the task is gone
+ * itself.
  */
-import { computed } from "vue";
-
-import { creating, openTaskID, statusLine, tasks } from "../state";
+import { creating, openTask, openTaskID, statusLine } from "../state";
 import Board from "./Board.vue";
 import CreateDialog from "./CreateDialog.vue";
 import FilterBar from "./FilterBar.vue";
 import TaskDialog from "./TaskDialog.vue";
 import Toasts from "./Toasts.vue";
-
-const open = computed(() => tasks.value.find((task) => task.id === openTaskID.value));
 </script>
 
 <template>
@@ -34,6 +35,10 @@ const open = computed(() => tasks.value.find((task) => task.id === openTaskID.va
 
   <Toasts />
 
-  <TaskDialog v-if="open" :task="open" @close="openTaskID = null" />
+  <!-- Keyed by the task: `openTask` is a ref rather than a find, so it could be
+       pointed straight at another task without passing through nothing, and an
+       instance reused across that switch would keep the first task's fields and
+       save them onto the second. -->
+  <TaskDialog v-if="openTask" :key="openTask.id" :task="openTask" @close="openTaskID = null" />
   <CreateDialog v-if="creating" @close="creating = false" />
 </template>

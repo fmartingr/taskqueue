@@ -411,6 +411,23 @@ button.ghost {
   color: var(--text);
 }
 
+/* What the dialog says about its own task moving on disk underneath it: a field
+   it kept out of the way of an edit, or a task that has left the queue. Quiet
+   on purpose — nothing here is an error, and the board behind the dialog is
+   live, so this is the ordinary case rather than the alarming one. */
+.dialog-note {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dialog-note.gone {
+  color: var(--blocked);
+}
+
 .dialog .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

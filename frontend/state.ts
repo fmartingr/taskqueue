@@ -2,8 +2,8 @@
  * The board's shared state.
  *
  * Everything a component cannot own alone lives here: the tasks, the filter
- * bar, the project's vocabularies, and the four flags that say the user is in
- * the middle of something. Anything a single component *can* own — a composer's
+ * bar, the project's vocabularies, and the flags that say the user is in the
+ * middle of something. Anything a single component *can* own — a composer's
  * draft, a note being edited, the fields of an open dialog — deliberately does
  * not, because that is the state the old imperative board had to keep in a
  * global just to stop a re-render from taking it away.
@@ -15,10 +15,12 @@
 import { computed, reactive, ref, watch } from "vue";
 
 import {
+  ApiError,
   createTask,
   describe,
   fetchConfig,
   fetchStatus,
+  fetchTask,
   fetchTasks,
   patchTask,
   type DuplicatedID,
@@ -38,6 +40,10 @@ import {
 } from "./board";
 
 export const POLL_INTERVAL_MS = 3000;
+
+/** The one status code the board reads rather than just repeats: it is how a
+ *  task that has left the queue is told from a server that went quiet. */
+const NOT_FOUND = 404;
 
 /**
  * The built-in vocabulary, mirroring internal/config/priorities.go. It stands
@@ -160,14 +166,90 @@ export const composing = ref<Status | null>(null);
 export const openTaskID = ref<string | null>(null);
 export const creating = ref(false);
 
-/** The poll stands down for any of it, so the board never moves under a hand. */
-export const busy = computed(
-  () =>
-    dragging.value !== null ||
-    composing.value !== null ||
-    openTaskID.value !== null ||
-    creating.value,
+/**
+ * The open task as the board last saw it, and whether the listing still has it.
+ *
+ * Held rather than derived straight from the listing, which is what the dialog
+ * used to be found in. A refresh that no longer carries the task — it was
+ * deleted, or the scan came back a task short (TQ-0012) — would unmount the
+ * dialog and take an unsaved edit with it, and that is the one thing a refresh
+ * under an open dialog must never do (TQ-0084). So the dialog stays on the last
+ * version the board saw, and `openTaskMissing` is what lets it say the task is
+ * gone rather than letting Save fail with a 404 — but only once the task's own
+ * endpoint has confirmed it, since a listing can leave a task out for reasons
+ * that have nothing to do with it (see confirmMissing).
+ */
+export const openTask = ref<Task | null>(null);
+export const openTaskMissing = ref(false);
+
+/** Rises with every listing that changes the question, so a confirmation that
+ *  resolves after the board has moved on can be recognised and dropped. */
+let asked = 0;
+
+watch(
+  [tasks, openTaskID],
+  () => {
+    const id = openTaskID.value;
+    asked++;
+    if (id === null) {
+      openTask.value = null;
+      openTaskMissing.value = false;
+      return;
+    }
+    const found = tasks.value.find((task) => task.id === id);
+    if (found) {
+      openTask.value = found;
+      openTaskMissing.value = false;
+      return;
+    }
+    void confirmMissing(id, asked);
+  },
+  // Synchronously, so the dialog mounts on the click that opened it rather than
+  // a tick later — the render that reads `openTask` is the very next thing to
+  // happen after `openTaskID` is set.
+  { immediate: true, flush: "sync" },
 );
+
+/**
+ * Asks the task's own endpoint whether it has really left the queue.
+ *
+ * A listing without it is not proof of anything. The store returns a short one
+ * rather than pretend it read the whole directory (TQ-0012), leaves out a file
+ * it could not parse (TQ-0011) and both copies of an ID two files claim
+ * (TQ-0040) — and an agent writing to the open task passes through all three.
+ * A lookup by ID sees past every one of them, so the listing raises the
+ * question and this answers it, and the dialog says nothing in between.
+ *
+ * Only a plain "no such task" counts. A server that could not be reached at all
+ * says nothing about whether the task is still there, and claiming it was
+ * deleted over a dropped connection is the alarming version of being stale.
+ */
+async function confirmMissing(id: string, ticket: number): Promise<void> {
+  try {
+    await fetchTask(id);
+    if (ticket === asked) openTaskMissing.value = false;
+  } catch (error) {
+    if (ticket === asked) {
+      openTaskMissing.value = error instanceof ApiError && error.status === NOT_FOUND;
+    }
+  }
+}
+
+/**
+ * Whether a refresh has to wait.
+ *
+ * A drag and nothing else. Everything else the user can be in the middle of
+ * happens in a layer *above* the board — a dialog over a backdrop, a composer
+ * whose textarea a re-render leaves mounted — and nothing moves under their
+ * hand when a card appears behind one. A native drag genuinely cannot survive a
+ * re-render: the element under the pointer would be replaced mid-gesture and
+ * the drop would land nowhere.
+ *
+ * It used to cover the composer and both dialogs too, which froze the board for
+ * as long as a modal was open — minutes, while an agent worked — and kept the
+ * open task from ever hearing that it had changed (TQ-0084).
+ */
+export const busy = computed(() => dragging.value !== null);
 
 // ── Toasts ──────────────────────────────────────────────────────
 
@@ -438,7 +520,7 @@ export async function start(): Promise<void> {
 }
 
 /**
- * What the stream asked for while the user was in the middle of something.
+ * What the stream asked for while a card was in the air.
  *
  * The poll drops these — it simply skips its turn — because another one is
  * three seconds away. The stream has no next turn: it speaks when something

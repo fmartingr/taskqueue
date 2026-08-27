@@ -94,12 +94,13 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
   priority, assignee, label, or "ready only".
 - Cards show a blocked marker while a dependency is unfinished or missing.
 - The board is live: the server watches the queue and pushes, so a task an agent
-  creates or moves appears within about half a second, without a reload. A change
-  that arrives while you are mid-drag or have a dialog open is held and applied
-  the moment you are done, rather than moving the board under your hand. If the
-  stream cannot be opened the board falls back to a three second poll and the
-  footer says `polling`, so slower updates are always visible rather than
-  silent.
+  creates or moves appears within about half a second, without a reload. It stays
+  live while a dialog or a composer is open — an open task even picks up notes an
+  agent writes to it, and follows the file for every field you have not typed in,
+  saying so rather than overwriting one you have. Only a drag holds a change back,
+  until the card lands. If the stream cannot be opened the board falls back to a
+  three second poll and the footer says `polling`, so slower updates are always
+  visible rather than silent.
 
 ## The agent workflow
 

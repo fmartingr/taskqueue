@@ -24,6 +24,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -171,6 +172,20 @@ export class Project {
   add(title: string, ...flags: string[]): string {
     const created = this.mustRun("add", title, "--status", "todo", "--json", ...flags);
     return (JSON.parse(created.stdout) as { id: string }).id;
+  }
+
+  /**
+   * Takes a task out of the queue by deleting its file.
+   *
+   * There is no `tq delete`, and there does not need to be: a task can leave a
+   * queue by being deleted with the rest of a branch, or moved out of it by
+   * hand, and a board with the file open in a dialog still has to cope.
+   */
+  remove(id: string): void {
+    const dir = join(this.dir, ".tasks");
+    const file = readdirSync(dir).find((name) => name.startsWith(`${id}-`) && name.endsWith(".md"));
+    if (file === undefined) throw new Error(`no task file for ${id} in ${dir}`);
+    rmSync(join(dir, file));
   }
 
   /** Reads the tasks straight from the API, which is what "the move reached the
@@ -427,6 +442,13 @@ export const card = (id: string) => `.card[data-id="${id}"]`;
 
 /** The card for a task, but only while it sits in a given column. */
 export const cardIn = (status: string, id: string) => `.column[data-status="${status}"] ${card(id)}`;
+
+/** The centre of an element, in page coordinates, for driving the mouse. */
+export async function centre(page: Page, selector: string): Promise<{ x: number; y: number }> {
+  const box = await page.locator(selector).boundingBox();
+  if (!box) throw new Error(`${selector} has no box to aim at`);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
 
 /** The IDs currently rendered in a column, top to bottom. */
 export async function idsIn(page: Page, status: string): Promise<string[]> {

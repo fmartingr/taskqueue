@@ -8,7 +8,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { POLL_INTERVAL_MS, card, cardIn, idsIn, useBoard } from "./harness";
+import { POLL_INTERVAL_MS, card, cardIn, centre, idsIn, useBoard } from "./harness";
 
 const openBoard = useBoard();
 
@@ -35,10 +35,11 @@ test("a move made on the CLI reaches the board", async () => {
   await page.waitForSelector(cardIn("in-progress", id), BEFORE_A_POLL);
 });
 
-// The poll skips its turn when the user is busy, because another turn is three
-// seconds away. The stream has no next turn — it speaks only when something
-// changed — so a signal that arrives mid-drag has to be held, not dropped.
-test("a change that arrives while a dialog is open is applied when it closes", async () => {
+// A dialog is a layer *above* the board rather than a hand on it: nothing moves
+// under the user when a card appears behind a backdrop, and a modal can stay
+// open for minutes while an agent works. So the board keeps up underneath one,
+// and the dialog stays exactly where it was (TQ-0084).
+test("a change that arrives while a dialog is open is applied while it is open", async () => {
   let open = "";
   const { page, project } = await openBoard((project) => {
     open = project.add("The task being looked at");
@@ -48,16 +49,37 @@ test("a change that arrives while a dialog is open is applied when it closes", a
   await page.waitForSelector("#task-dialog[open]");
 
   const arrived = project.add("Filed while the dialog was open");
-  // The board must not move under the open dialog.
-  await page.waitForTimeout(1000);
-  expect(await idsIn(page, "todo")).toEqual([open]);
-
-  await page.click("#task-dialog [data-close='task-dialog'].close");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
-
-  // And the moment it closes, the held change lands — again inside one poll,
-  // so this is the queue draining rather than the fallback catching up.
   await page.waitForSelector(card(arrived), BEFORE_A_POLL);
+
+  // The board moved; the dialog did not, and is still open on its own task.
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
+  expect(await page.textContent("#task-dialog-id")).toBe(open);
+  expect(await idsIn(page, "todo")).toEqual([open, arrived]);
+});
+
+// The one guard left. A native drag cannot survive a re-render: the element
+// under the pointer would be replaced mid-gesture, and the drop would land on
+// nothing. The stream has no next turn — it speaks only when something changed
+// — so the signal is held rather than dropped, and lands on the drop.
+test("a change that arrives mid-drag is held until the card lands", async () => {
+  let dragged = "";
+  const { page, project } = await openBoard((project) => {
+    dragged = project.add("Held in the air");
+  });
+
+  const from = await centre(page, card(dragged));
+  const to = await centre(page, ".column[data-status='in-progress']");
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+
+  const arrived = project.add("Arrived mid-drag");
+  await page.waitForTimeout(1000);
+  expect(await page.$(card(arrived))).toBeNull();
+
+  await page.mouse.up();
+  await page.waitForSelector(cardIn("in-progress", dragged), BEFORE_A_POLL);
+  await page.waitForSelector(cardIn("todo", arrived), BEFORE_A_POLL);
 });
 
 test("the footer says nothing about polling while the stream is up", async () => {

@@ -1,16 +1,16 @@
 /**
  * The poll. `frontend/state.ts` refreshes the board every few seconds so that
- * work an agent does on the CLI shows up on its own, and stands down while the
- * user is dragging, composing or has a dialog open, so the board never moves
- * under their hands.
+ * work an agent does on the CLI shows up on its own, and stands down for a drag
+ * and nothing else — a dialog and a composer are layers above the board, and
+ * the board keeping up underneath one moves nothing under the user's hands
+ * (TQ-0084).
  *
  * These are the slow tests in the suite: proving that something does *not*
  * happen means outlasting the interval it would have happened in.
  */
 
 import { expect, test } from "bun:test";
-import type { Page } from "playwright-core";
-import { POLL_INTERVAL_MS, card, cardIn, idsIn, useBoard, type OpenBoard } from "./harness";
+import { POLL_INTERVAL_MS, card, cardIn, centre, idsIn, useBoard, type OpenBoard } from "./harness";
 
 const useBoardFor = useBoard();
 
@@ -31,13 +31,6 @@ const openBoard: OpenBoard = (seed) =>
 const AFTER_A_POLL = POLL_INTERVAL_MS + 750;
 /** How long to wait for something the poll is expected to bring in. */
 const WITHIN_A_POLL = { timeout: POLL_INTERVAL_MS * 3 };
-
-/** The centre of an element, in page coordinates, for driving the mouse. */
-async function centre(page: Page, selector: string): Promise<{ x: number; y: number }> {
-  const box = await page.locator(selector).boundingBox();
-  if (!box) throw new Error(`${selector} has no box to aim at`);
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
 
 test("a task the CLI creates appears on the board without a reload", async () => {
   const { project, page } = await openBoard();
@@ -61,7 +54,7 @@ test("a move the CLI makes is picked up by the poll", async () => {
   expect(await idsIn(page, "todo")).toEqual([]);
 });
 
-test("the poll stands down while the composer is open, and catches up after it", async () => {
+test("the poll fills the board in under an open composer, draft intact", async () => {
   const { project, page } = await openBoard();
 
   await page.click(".column[data-status='todo'] .composer-open");
@@ -70,18 +63,16 @@ test("the poll stands down while the composer is open, and catches up after it",
   await page.fill(input, "half-typed draft");
 
   const id = project.add("Arrived while composing");
-  await page.waitForTimeout(AFTER_A_POLL);
-
-  // The board did not move: the card is not there and the draft is intact.
-  expect(await page.$(card(id))).toBeNull();
-  expect(await page.inputValue(input)).toBe("half-typed draft");
-
-  // Closing the composer lets the next poll through.
-  await page.press(input, "Escape");
   await page.waitForSelector(cardIn("todo", id), WITHIN_A_POLL);
+
+  // The composer's guard used to be what protected this. What protects it now
+  // is that the column keys its cards and the composer sits outside that list,
+  // so a refresh patches around it rather than remounting it.
+  expect(await page.inputValue(input)).toBe("half-typed draft");
+  expect(await page.evaluate(() => document.activeElement?.className)).toBe("composer-input");
 });
 
-test("the poll stands down while the task dialog is open, and catches up after it", async () => {
+test("the poll fills the board in under an open task dialog, edit intact", async () => {
   let open = "";
   const { project, page } = await openBoard((p) => {
     open = p.add("Open me");
@@ -92,28 +83,23 @@ test("the poll stands down while the task dialog is open, and catches up after i
   await page.fill("#task-title", "an unsaved edit");
 
   const id = project.add("Arrived while the dialog was open");
-  await page.waitForTimeout(AFTER_A_POLL);
-
-  expect(await page.$(card(id))).toBeNull();
-  expect(await page.inputValue("#task-title")).toBe("an unsaved edit");
-
-  await page.click("#task-dialog [data-close='task-dialog'].close");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
   await page.waitForSelector(cardIn("todo", id), WITHIN_A_POLL);
+
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
+  expect(await page.inputValue("#task-title")).toBe("an unsaved edit");
 });
 
-test("the poll stands down while the create dialog is open", async () => {
+test("the poll fills the board in behind the create dialog", async () => {
   const { project, page } = await openBoard();
 
   await page.click("#new-task");
   await page.waitForSelector("#create-dialog[open]");
 
+  // The create dialog has no task on disk and nothing to adopt: all it asks of
+  // a refresh is that the board behind it keeps up and the dialog stays open.
   const id = project.add("Arrived while creating");
-  await page.waitForTimeout(AFTER_A_POLL);
-  expect(await page.$(card(id))).toBeNull();
-
-  await page.click("#create-dialog [data-close='create-dialog'].close");
   await page.waitForSelector(cardIn("todo", id), WITHIN_A_POLL);
+  expect(await page.$("#create-dialog[open]")).not.toBeNull();
 });
 
 test("the poll stands down mid-drag, and the drop still lands", async () => {

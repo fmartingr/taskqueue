@@ -73,6 +73,23 @@ export interface ProjectConfig {
   columns: ColumnSet;
 }
 
+/**
+ * An answer the server refused with, carrying the status alongside its sentence.
+ *
+ * The sentence is what a toast says, and for almost every caller that is the
+ * whole of it. The status is for the one question text cannot answer honestly:
+ * "is this task gone, or could I simply not reach the server" (TQ-0084).
+ */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const init: RequestInit = { method };
   if (body !== undefined) {
@@ -82,7 +99,7 @@ export async function api<T>(path: string, method = "GET", body?: unknown): Prom
 
   const response = await fetch(path, init);
   if (!response.ok) {
-    throw new Error(await errorMessage(response));
+    throw new ApiError(response.status, await errorMessage(response));
   }
   return (await response.json()) as T;
 }

@@ -1,14 +1,14 @@
 ---
 id: TQ-0088
 title: Removing a column silently rewrites the tasks left in it, one edit at a time
-status: in-progress
+status: done
 priority: high
 labels:
   - bug
   - component/store
   - component/config
 created: 2026-08-27T22:25:46+02:00
-updated: 2026-08-28T12:47:48+02:00
+updated: 2026-08-28T12:48:28+02:00
 ---
 
 ## Decision

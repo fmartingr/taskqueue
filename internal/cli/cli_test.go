@@ -20,8 +20,6 @@ import (
 
 	"github.com/fmartingr/taskqueue/internal/guide"
 	"net/http"
-	"syscall"
-	"time"
 )
 
 // testVersion stands in for the string the build stamps on the binary.
@@ -1432,15 +1430,25 @@ func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 	if !strings.Contains(out, "Include it in your preferred agent context file") {
 		t.Errorf("init should say what to do with the guide, got %q", out)
 	}
+	if !strings.Contains(out, "\nStart the board with:\n\n    tq serve\n") {
+		t.Errorf("init should say how to start the board, got %q", out)
+	}
+	if want := "http://" + defaultHost + ":" + defaultPort; !strings.Contains(out, want) {
+		t.Errorf("init should name the default board address %q, got %q", want, out)
+	}
 
 	// Re-running refreshes without reporting spurious writes, but still names
-	// the guide — the file that references it may not exist yet.
+	// the guide — the file that references it may not exist yet — and still
+	// says how to start the board.
 	out = tc.mustRun("init")
 	if strings.Contains(out, "Wrote ") {
 		t.Errorf("nothing should be rewritten on a second init, got %q", out)
 	}
 	if !strings.Contains(out, pointer) {
 		t.Errorf("the second init should still name the guide, got %q", out)
+	}
+	if !strings.Contains(out, "\nStart the board with:\n\n    tq serve\n") {
+		t.Errorf("the second init should still say how to start the board, got %q", out)
 	}
 }
 
@@ -1453,18 +1461,7 @@ func TestCLIServePrintsTheAddressItActuallyGot(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- tc.run("serve", "--port", "0") }()
 
-	var line string
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if s := tc.stdout.String(); strings.Contains(s, "http://") {
-			line = strings.SplitN(s, "\n", 2)[0]
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if line == "" {
-		t.Fatalf("no banner within the deadline; stderr = %q", tc.stderr)
-	}
+	line := awaitBanner(t, tc)
 	if strings.Contains(line, ":0") {
 		t.Errorf("banner = %q, want the port the listener got, not the one requested", line)
 	}
@@ -1479,14 +1476,7 @@ func TestCLIServePrintsTheAddressItActuallyGot(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	if p, err := os.FindProcess(os.Getpid()); err == nil {
-		_ = p.Signal(syscall.SIGTERM)
-	}
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("serve did not shut down")
-	}
+	stopServe(t, done)
 }
 
 // The terminator's guarantee has to hold for every argument after it, not just

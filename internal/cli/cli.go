@@ -181,9 +181,9 @@ Usage:
 Commands:
   init                            Create the queue in the current directory:
                                   %s, the %s directory, and the
-                                  agent guide (%s); prints where
-                                  the guide is, to reference from your own
-                                  AGENTS.md/CLAUDE.md
+                                  agent guide (%s); prints how to
+                                  start the board and where the guide is, to
+                                  reference from your own AGENTS.md/CLAUDE.md
   add <title> [flags]             Create a task
   list [flags]                    List tasks
   show <id> [--json]              Show one task
@@ -381,6 +381,8 @@ func (c *cli) runInit(args []string) int {
 	// guide and leaves the choice of file to the person running it. The path is
 	// absolute because tq does not know which file they will reference it from,
 	// and a relative one would only resolve from the directory tq guessed.
+	fmt.Fprintf(c.stdout, "\nStart the board with:\n\n    tq serve\n\n")
+	fmt.Fprintf(c.stdout, "It listens on http://%s:%s by default (localhost only).\n", defaultHost, defaultPort)
 	fmt.Fprintf(c.stdout, "\nThe agent guide is at:\n\n    %s\n", guide.GuidePath(st))
 	fmt.Fprint(c.stdout, "\nInclude it in your preferred agent context file (AGENTS.md, CLAUDE.md, or\n"+
 		"whatever your tool reads) so agents pick up the task workflow.\n")

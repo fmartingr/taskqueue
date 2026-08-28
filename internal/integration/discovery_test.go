@@ -233,8 +233,9 @@ func TestInitWritesTheMarkerAndTheGuide(t *testing.T) {
 func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 	t.Parallel()
 
-	// stdout carries the guide's path once, in a line a user can act on, and
-	// the invitation to reference it from a file of their choosing.
+	// stdout carries the guide's path once, in a line a user can act on, the
+	// invitation to reference it from a file of their choosing, and how to
+	// start the board.
 	assertPrints := func(t *testing.T, r result, guide string) {
 		t.Helper()
 		if want := "\nThe agent guide is at:\n\n    " + guide + "\n"; !strings.Contains(r.Stdout, want) {
@@ -242,6 +243,12 @@ func TestInitNamesTheGuideByItsAbsolutePath(t *testing.T) {
 		}
 		if !strings.Contains(r.Stdout, "Include it in your preferred agent context file") {
 			t.Errorf("stdout does not say what to do with it:\n%s", r.Stdout)
+		}
+		if !strings.Contains(r.Stdout, "\nStart the board with:\n\n    tq serve\n") {
+			t.Errorf("stdout does not say how to start the board:\n%s", r.Stdout)
+		}
+		if !strings.Contains(r.Stdout, "http://127.0.0.1:7331") {
+			t.Errorf("stdout does not name the default board address:\n%s", r.Stdout)
 		}
 	}
 

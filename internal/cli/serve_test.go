@@ -93,6 +93,7 @@ func TestServeFlagBeatsTheConfig(t *testing.T) {
 	tc := newBareCLI(t)
 	tqtest.WriteConfig(t, tc.root, "version: 1\npath: .tasks\nserver:\n  host: 10.0.0.5\n  port: 7412\n")
 	tc.mustRun("init")
+	tc.reset()
 	t.Setenv("TQ_HOST", "")
 	t.Setenv("TQ_PORT", "")
 
@@ -158,16 +159,20 @@ func TestServeStaysQuietOnLoopback(t *testing.T) {
 }
 
 // awaitBanner waits for the line `tq serve` prints once it is listening.
+// Matching "Serving " is what keeps leftover init output from looking like
+// the banner: init now names the default address as an http:// URL too.
 func awaitBanner(t *testing.T, tc *testCLI) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if s := tc.stdout.String(); strings.Contains(s, "http://") {
-			return strings.SplitN(s, "\n", 2)[0]
+		for _, line := range strings.Split(tc.stdout.String(), "\n") {
+			if strings.HasPrefix(line, "Serving ") && strings.Contains(line, "http://") {
+				return line
+			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("no banner within the deadline; stderr = %q", tc.stderr)
+	t.Fatalf("no banner within the deadline; stderr = %q stdout = %q", tc.stderr, tc.stdout)
 	return ""
 }
 

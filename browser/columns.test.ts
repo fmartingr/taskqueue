@@ -48,7 +48,10 @@ test("the built-in board is five columns, and inbox has replaced backlog", async
   expect(await headings(page)).toEqual(["Inbox", "To do", "In Progress", "Done", "Rejected"]);
 });
 
-test("a task whose column was removed is shown in the first one", async () => {
+// The default column, not the first one: CUSTOM puts `doing` second and marks it
+// default, so a board ordered done-first cannot silently finish a stranded task
+// and unblock whatever depended on it (TQ-0088).
+test("a task whose column was removed is reconciled into the default one", async () => {
   let id = "";
   const { page } = await openBoard((project) => {
     // Filed on the built-in board, which has a done column…
@@ -58,7 +61,7 @@ test("a task whose column was removed is shown in the first one", async () => {
     setBoard(project, CUSTOM);
   });
 
-  await page.waitForSelector(cardIn("spotted", id));
+  await page.waitForSelector(cardIn("doing", id));
 });
 
 test("the status selects offer the project's columns by their display names", async () => {

@@ -58,12 +58,15 @@ const priorityTitle = (option: PriorityOption) =>
 const labelTitle = (name: string, configured: boolean) =>
   configured ? name : `${name} — not in the project's label set`;
 
+/** Clears the search bar too: it is the same filter set, so leaving `text`
+ *  behind would reset the controls and go on hiding tasks. */
 function reset(): void {
   filters.status = "";
   filters.priority = "";
   filters.assignee = "";
   filters.label = "";
   filters.ready = false;
+  filters.text = "";
 }
 </script>
 

@@ -16,6 +16,7 @@ import { creating, openTask, openTaskID, statusLine } from "../state";
 import Board from "./Board.vue";
 import CreateDialog from "./CreateDialog.vue";
 import FilterBar from "./FilterBar.vue";
+import SearchBar from "./SearchBar.vue";
 import TaskDialog from "./TaskDialog.vue";
 import Toasts from "./Toasts.vue";
 </script>
@@ -23,8 +24,9 @@ import Toasts from "./Toasts.vue";
 <template>
   <header class="topbar">
     <h1 class="brand">tq</h1>
-    <FilterBar />
+    <SearchBar />
     <button id="new-task" type="button" class="primary" @click="creating = true">New task</button>
+    <FilterBar />
   </header>
 
   <Board />

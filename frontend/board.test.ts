@@ -43,7 +43,7 @@ function task(id: string, status: Status, ...deps: string[]): Task {
   };
 }
 
-const NO_FILTERS: Filters = { status: "", priority: "", assignee: "", label: "", ready: false };
+const NO_FILTERS: Filters = { status: "", priority: "", assignee: "", label: "", ready: false, text: "" };
 
 const filters = (overrides: Partial<Filters>): Filters => ({ ...NO_FILTERS, ...overrides });
 
@@ -223,6 +223,55 @@ describe("visibleTasks", () => {
 
   test("an empty list stays empty", () => {
     expect(visibleTasks([], filters({ ready: true }), FALLBACK_COLUMNS)).toEqual([]);
+  });
+
+  // The search bar's free text (TQ-0068). It reads three fields and no more:
+  // everything else a task carries has a structured term of its own.
+  describe("free text", () => {
+    const found = [
+      { ...task("TQ-0001", "todo"), title: "Global search bar", body: "Autocomplete on the keys." },
+      { ...task("TQ-0002", "todo"), title: "Push config changes", body: "The board refetches." },
+    ];
+
+    test("matches the title, case-insensitively", () => {
+      expect(visibleTasks(found, filters({ text: "SEARCH" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+      ]);
+    });
+
+    test("matches the id", () => {
+      expect(visibleTasks(found, filters({ text: "tq-0002" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0002",
+      ]);
+    });
+
+    test("matches the body", () => {
+      expect(visibleTasks(found, filters({ text: "refetches" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0002",
+      ]);
+    });
+
+    test("is one phrase, not a set of words", () => {
+      expect(visibleTasks(found, filters({ text: "global search" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+      ]);
+      expect(visibleTasks(found, filters({ text: "search global" }), FALLBACK_COLUMNS)).toEqual([]);
+    });
+
+    test("does not read a status, a label or an assignee", () => {
+      expect(visibleTasks(tasks, filters({ text: "todo" }), FALLBACK_COLUMNS)).toEqual([]);
+      expect(visibleTasks(tasks, filters({ text: "agent-api" }), FALLBACK_COLUMNS)).toEqual([]);
+    });
+
+    test("whitespace alone filters nothing", () => {
+      expect(visibleTasks(found, filters({ text: "   " }), FALLBACK_COLUMNS)).toHaveLength(2);
+    });
+
+    test("it combines with the rest", () => {
+      expect(
+        visibleTasks(found, filters({ text: "board", status: "todo" }), FALLBACK_COLUMNS).map((t) => t.id),
+      ).toEqual(["TQ-0002"]);
+    });
   });
 });
 

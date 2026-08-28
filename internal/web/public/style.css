@@ -67,12 +67,77 @@ body {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
+/* The search bar takes the first row beside the brand; the filter bar it writes
+   into takes a row of its own below, which is what flex-basis: 100% forces. */
 .filters {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 12px;
-  flex: 1;
+  flex: 1 1 100%;
+}
+
+.search {
+  position: relative;
+  flex: 1 1 320px;
+  min-width: 220px;
+}
+
+.search-field {
+  width: 100%;
+}
+
+.search-input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+.search-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.search-option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.search-option.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.search-option-label {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+.search-option-detail {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.search-option.active .search-option-detail {
+  color: inherit;
+  opacity: 0.8;
 }
 
 label {

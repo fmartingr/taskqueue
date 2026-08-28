@@ -5651,9 +5651,10 @@ function priorityOptions(priorities, extras) {
   return [...options, ...unknown.map((name) => ({ name, display: name, configured: false }))];
 }
 function visibleTasks(tasks, filters, columns) {
-  const { status, priority, assignee, label, ready } = filters;
+  const { status, priority, assignee, label, ready, text } = filters;
   const index = indexTasks(tasks);
   const matches = (haystack, needle) => haystack.toLowerCase().includes(needle.trim().toLowerCase());
+  const wanted = (text ?? "").trim().toLowerCase();
   return tasks.filter((task) => {
     if (status && task.status !== status)
       return false;
@@ -5665,8 +5666,13 @@ function visibleTasks(tasks, filters, columns) {
       return false;
     if (ready && !isReady(task, index, columns))
       return false;
+    if (wanted && !carriesText(task, wanted))
+      return false;
     return true;
   });
+}
+function carriesText(task, wanted) {
+  return [task.id, task.title, task.body].some((field) => (field ?? "").toLowerCase().includes(wanted));
 }
 
 // frontend/state.ts
@@ -5684,7 +5690,8 @@ var filters = reactive({
   priority: "",
   assignee: "",
   label: "",
-  ready: false
+  ready: false,
+  text: ""
 });
 var labels = ref({});
 var priorities = ref(FALLBACK_PRIORITIES);
@@ -6688,6 +6695,7 @@ var FilterBar_default = /* @__PURE__ */ defineComponent({
       filters.assignee = "";
       filters.label = "";
       filters.ready = false;
+      filters.text = "";
     }
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("div", _hoisted_18, [
@@ -6796,6 +6804,326 @@ var FilterBar_default = /* @__PURE__ */ defineComponent({
 // frontend/components/FilterBar.vue
 var FilterBar_default2 = FilterBar_default;
 
+// frontend/search.ts
+var VALUE_KEYS = ["status", "priority", "label", "assignee"];
+var SEARCH_KEYS = [...VALUE_KEYS, "ready"];
+var KEY_HINTS = {
+  status: "column",
+  priority: "level",
+  label: "whole label",
+  assignee: "substring",
+  ready: "unblocked only"
+};
+var READY = "ready";
+var TRUE_WORDS = new Set(["", "true", "yes", "y", "1", "on"]);
+var NO_FILTERS = {
+  status: "",
+  priority: "",
+  assignee: "",
+  label: "",
+  ready: false,
+  text: ""
+};
+function isSearchKey(name) {
+  return SEARCH_KEYS.includes(name);
+}
+function unquote(text) {
+  return text.replaceAll('"', "");
+}
+function splitAt(raw) {
+  let quoted = false;
+  for (let at = 0;at < raw.length; at++) {
+    const character = raw[at];
+    if (character === '"')
+      quoted = !quoted;
+    else if (character === "=" && !quoted)
+      return at;
+  }
+  return -1;
+}
+function isQuoted(raw) {
+  return raw.startsWith('"');
+}
+function readToken(query, start2, end) {
+  const raw = query.slice(start2, end);
+  const at = splitAt(raw);
+  if (at > 0) {
+    const key = unquote(raw.slice(0, at)).toLowerCase();
+    if (isSearchKey(key))
+      return { start: start2, end, raw, key, value: unquote(raw.slice(at + 1)) };
+  }
+  if (!isQuoted(raw) && raw.toLowerCase() === READY) {
+    return { start: start2, end, raw, key: READY, value: "true" };
+  }
+  return { start: start2, end, raw, key: "", value: unquote(raw) };
+}
+function tokenize(query) {
+  const tokens = [];
+  let start2 = -1;
+  let quoted = false;
+  for (let at = 0;at <= query.length; at++) {
+    const character = query[at];
+    if (character === '"')
+      quoted = !quoted;
+    const boundary = at === query.length || !quoted && /\s/.test(character ?? "");
+    if (boundary) {
+      if (start2 >= 0)
+        tokens.push(readToken(query, start2, at));
+      start2 = -1;
+      continue;
+    }
+    if (start2 < 0)
+      start2 = at;
+  }
+  return tokens;
+}
+function parseReady(value) {
+  return TRUE_WORDS.has(value.trim().toLowerCase());
+}
+function parseQuery(query) {
+  const filters2 = { ...NO_FILTERS };
+  const text = [];
+  for (const token of tokenize(query)) {
+    switch (token.key) {
+      case "":
+        if (token.value !== "")
+          text.push(token.value);
+        break;
+      case "ready":
+        filters2.ready = parseReady(token.value);
+        break;
+      default:
+        filters2[token.key] = token.value;
+    }
+  }
+  filters2.text = text.join(" ");
+  return filters2;
+}
+function quoteValue(value) {
+  const clean = unquote(value);
+  return clean === "" || /\s/.test(clean) ? `"${clean}"` : clean;
+}
+function quoteText(text) {
+  const clean = unquote(text);
+  return tokenize(clean).some((token) => token.key !== "") ? `"${clean}"` : clean;
+}
+function formatQuery(filters2) {
+  const parts = [];
+  const text = filters2.text.trim();
+  if (text !== "")
+    parts.push(quoteText(text));
+  for (const key of VALUE_KEYS) {
+    const value = filters2[key].trim();
+    if (value !== "")
+      parts.push(`${key}=${quoteValue(value)}`);
+  }
+  if (filters2.ready)
+    parts.push(READY);
+  return parts.join(" ");
+}
+function equalFilters(a, b) {
+  return a.status === b.status && a.priority === b.priority && a.assignee === b.assignee && a.label === b.label && a.ready === b.ready && a.text === b.text;
+}
+var READY_OPTIONS = [{ value: "true" }, { value: "false" }];
+function keySuggestions(prefix) {
+  const wanted = unquote(prefix).toLowerCase();
+  return SEARCH_KEYS.filter((key) => key.startsWith(wanted)).map((key) => ({
+    kind: "key",
+    label: key === READY ? key : `${key}=`,
+    detail: KEY_HINTS[key],
+    insert: key === READY ? key : `${key}=`
+  }));
+}
+function valueSuggestions(key, prefix, sources) {
+  const options = key === READY ? READY_OPTIONS : sources[key];
+  const wanted = prefix.trim().toLowerCase();
+  const matches = options.filter((option) => option.value.toLowerCase().includes(wanted) || (option.display ?? "").toLowerCase().includes(wanted));
+  const ranked = [
+    ...matches.filter((option) => option.value.toLowerCase().startsWith(wanted)),
+    ...matches.filter((option) => !option.value.toLowerCase().startsWith(wanted))
+  ];
+  return ranked.map((option) => ({
+    kind: "value",
+    label: option.value,
+    detail: option.display && option.display !== option.value ? option.display : "",
+    insert: `${key}=${quoteValue(option.value)}`
+  }));
+}
+function completeQuery(query, caret, sources) {
+  const position = Math.max(0, Math.min(caret, query.length));
+  const token = tokenize(query).find((candidate) => position >= candidate.start && position <= candidate.end);
+  if (token === undefined) {
+    return { start: position, end: position, suggestions: keySuggestions("") };
+  }
+  const at = splitAt(token.raw);
+  const key = at > 0 ? unquote(token.raw.slice(0, at)).toLowerCase() : "";
+  if (isSearchKey(key)) {
+    return { start: token.start, end: token.end, suggestions: valueSuggestions(key, token.value, sources) };
+  }
+  return { start: token.start, end: token.end, suggestions: keySuggestions(token.raw) };
+}
+function applyCompletion(query, completion, suggestion) {
+  const before = query.slice(0, completion.start);
+  const after = query.slice(completion.end);
+  const finished = !suggestion.insert.endsWith("=");
+  const spaced = finished && !/^\s/.test(after);
+  const inserted = spaced ? `${suggestion.insert} ` : suggestion.insert;
+  return { query: before + inserted + after, caret: before.length + inserted.length };
+}
+
+// frontend/components/SearchBar.vue?type=script
+var _hoisted_19 = { class: "search" };
+var _hoisted_26 = { class: "search-field" };
+var _hoisted_35 = ["value", "aria-expanded", "aria-activedescendant"];
+var _hoisted_44 = {
+  key: 0,
+  id: "search-suggestions",
+  class: "search-menu",
+  role: "listbox"
+};
+var _hoisted_53 = ["id", "aria-selected", "onMousedown", "onMouseenter"];
+var _hoisted_63 = { class: "search-option-label" };
+var _hoisted_73 = {
+  key: 0,
+  class: "search-option-detail"
+};
+var SearchBar_default = /* @__PURE__ */ defineComponent({
+  __name: "SearchBar",
+  setup(__props) {
+    const input = ref(null);
+    const query = ref(formatQuery(filters));
+    const caret = ref(0);
+    const active = ref(0);
+    const focused = ref(false);
+    const dismissed = ref(false);
+    watch2(query, (line) => {
+      const parsed = parseQuery(line);
+      if (equalFilters(parsed, filters))
+        return;
+      Object.assign(filters, parsed);
+    });
+    watch2(filters, () => {
+      if (equalFilters(parseQuery(query.value), filters))
+        return;
+      query.value = formatQuery(filters);
+    });
+    const labelNames = computed2(() => [...new Set([...Object.keys(labels.value), ...labelsInUse(tasks.value)])].filter((name) => name !== "").sort());
+    const assignees = computed2(() => [...new Set(tasks.value.map((task) => task.assignee ?? ""))].filter((name) => name !== "").sort());
+    const sources = computed2(() => ({
+      status: columns.value.map((column) => ({ value: column.name, display: column.display_name })),
+      priority: priorities.value.map((priority) => ({
+        value: priority.name,
+        display: priority.display_name
+      })),
+      label: labelNames.value.map((name) => ({ value: name, display: labelDisplay(name, labels.value) })),
+      assignee: assignees.value.map((name) => ({ value: name }))
+    }));
+    const completion = computed2(() => completeQuery(query.value, caret.value, sources.value));
+    const showing = computed2(() => focused.value && !dismissed.value && completion.value.suggestions.length > 0);
+    watch2(completion, () => {
+      active.value = 0;
+    });
+    function syncCaret() {
+      const field = input.value;
+      if (field)
+        caret.value = field.selectionStart ?? field.value.length;
+    }
+    function onInput(event) {
+      const field = event.target;
+      query.value = field.value;
+      caret.value = field.selectionStart ?? field.value.length;
+      dismissed.value = false;
+    }
+    async function accept(at) {
+      const suggestion = completion.value.suggestions[at];
+      if (suggestion === undefined)
+        return;
+      const next = applyCompletion(query.value, completion.value, suggestion);
+      query.value = next.query;
+      caret.value = next.caret;
+      dismissed.value = false;
+      await nextTick();
+      const field = input.value;
+      if (field === null)
+        return;
+      field.focus();
+      field.setSelectionRange(next.caret, next.caret);
+    }
+    function onKeydown(event) {
+      if (event.key === "Escape") {
+        if (!showing.value)
+          return;
+        dismissed.value = true;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        dismissed.value = false;
+        const count = completion.value.suggestions.length;
+        if (count === 0)
+          return;
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        active.value = (active.value + step + count) % count;
+        return;
+      }
+      if (event.key === "Enter" && showing.value) {
+        event.preventDefault();
+        accept(active.value);
+      }
+    }
+    return (_ctx, _cache) => {
+      return openBlock(), createElementBlock("div", _hoisted_19, [
+        createBaseVNode("label", _hoisted_26, [
+          _cache[2] || (_cache[2] = createTextVNode(" Search ", -1)),
+          createBaseVNode("input", {
+            id: "search-query",
+            ref_key: "input",
+            ref: input,
+            value: query.value,
+            type: "text",
+            role: "combobox",
+            class: "search-input",
+            placeholder: "text, or priority=urgent",
+            autocomplete: "off",
+            spellcheck: "false",
+            "aria-autocomplete": "list",
+            "aria-controls": "search-suggestions",
+            "aria-expanded": showing.value,
+            "aria-activedescendant": showing.value ? `search-option-${active.value}` : undefined,
+            onInput,
+            onKeyup: syncCaret,
+            onClick: syncCaret,
+            onKeydown,
+            onFocus: _cache[0] || (_cache[0] = ($event) => focused.value = true),
+            onBlur: _cache[1] || (_cache[1] = ($event) => focused.value = false)
+          }, null, 40, _hoisted_35)
+        ]),
+        showing.value ? (openBlock(), createElementBlock("ul", _hoisted_44, [
+          (openBlock(true), createElementBlock(Fragment, null, renderList(completion.value.suggestions, (suggestion, at) => {
+            return openBlock(), createElementBlock("li", {
+              id: `search-option-${at}`,
+              key: suggestion.insert,
+              class: normalizeClass(["search-option", { active: at === active.value }]),
+              role: "option",
+              "aria-selected": at === active.value,
+              onMousedown: withModifiers(($event) => accept(at), ["prevent"]),
+              onMouseenter: ($event) => active.value = at
+            }, [
+              createBaseVNode("span", _hoisted_63, toDisplayString(suggestion.label), 1),
+              suggestion.detail ? (openBlock(), createElementBlock("span", _hoisted_73, toDisplayString(suggestion.detail), 1)) : createCommentVNode("v-if", true)
+            ], 42, _hoisted_53);
+          }), 128))
+        ])) : createCommentVNode("v-if", true)
+      ]);
+    };
+  }
+});
+
+// frontend/components/SearchBar.vue
+var SearchBar_default2 = SearchBar_default;
+
 // frontend/adopt.ts
 function adoptField(taken, local, incoming, focused) {
   if (incoming === taken)
@@ -6820,16 +7148,16 @@ function adoptBody(baseline, edited, current, focused) {
 }
 
 // frontend/components/NotesPanel.vue?type=script
-var _hoisted_19 = { class: "notes-section" };
-var _hoisted_26 = {
+var _hoisted_110 = { class: "notes-section" };
+var _hoisted_27 = {
   key: 0,
   class: "notes-empty"
 };
-var _hoisted_35 = { class: "note-head" };
-var _hoisted_44 = { class: "note-time" };
-var _hoisted_53 = ["onMousedown", "onClick"];
-var _hoisted_63 = ["onKeydown", "onBlur"];
-var _hoisted_73 = {
+var _hoisted_36 = { class: "note-head" };
+var _hoisted_45 = { class: "note-time" };
+var _hoisted_54 = ["onMousedown", "onClick"];
+var _hoisted_64 = ["onKeydown", "onBlur"];
+var _hoisted_74 = {
   key: 1,
   class: "note-text"
 };
@@ -6884,7 +7212,7 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
       commit2();
     }
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("section", _hoisted_19, [
+      return openBlock(), createElementBlock("section", _hoisted_110, [
         _cache[4] || (_cache[4] = createBaseVNode("h3", { class: "notes-title" }, "Notes", -1)),
         createBaseVNode("ul", {
           id: "task-notes",
@@ -6892,14 +7220,14 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
           ref: list,
           class: "notes"
         }, [
-          __props.notes.length === 0 ? (openBlock(), createElementBlock("li", _hoisted_26, "No notes yet.")) : createCommentVNode("v-if", true),
+          __props.notes.length === 0 ? (openBlock(), createElementBlock("li", _hoisted_27, "No notes yet.")) : createCommentVNode("v-if", true),
           (openBlock(true), createElementBlock(Fragment, null, renderList(__props.notes, (note, position) => {
             return openBlock(), createElementBlock("li", {
               key: position,
               class: "note"
             }, [
-              createBaseVNode("div", _hoisted_35, [
-                createBaseVNode("time", _hoisted_44, toDisplayString(note.timestamp === "" ? "note" : unref(formatTime)(note.timestamp)), 1),
+              createBaseVNode("div", _hoisted_36, [
+                createBaseVNode("time", _hoisted_45, toDisplayString(note.timestamp === "" ? "note" : unref(formatTime)(note.timestamp)), 1),
                 createBaseVNode("button", {
                   type: "button",
                   class: "ghost icon",
@@ -6907,7 +7235,7 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
                   "aria-label": "Edit this note",
                   onMousedown: withModifiers(($event) => beginEdit(note), ["prevent"]),
                   onClick: ($event) => beginEdit(note)
-                }, " ✎ ", 40, _hoisted_53)
+                }, " ✎ ", 40, _hoisted_54)
               ]),
               editing.value === note ? withDirectives((openBlock(), createElementBlock("textarea", {
                 key: 0,
@@ -6919,9 +7247,9 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
                   withKeys(withModifiers(($event) => finish(false, note), ["prevent"]), ["esc"])
                 ],
                 onBlur: ($event) => finish(true, note)
-              }, null, 40, _hoisted_63)), [
+              }, null, 40, _hoisted_64)), [
                 [vModelText, editor.value]
-              ]) : (openBlock(), createElementBlock("p", _hoisted_73, toDisplayString(note.text), 1))
+              ]) : (openBlock(), createElementBlock("p", _hoisted_74, toDisplayString(note.text), 1))
             ]);
           }), 128))
         ], 512),
@@ -6951,16 +7279,16 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
 var NotesPanel_default2 = NotesPanel_default;
 
 // frontend/components/TaskDialog.vue?type=script
-var _hoisted_110 = { class: "dialog-header" };
-var _hoisted_27 = {
+var _hoisted_111 = { class: "dialog-header" };
+var _hoisted_28 = {
   id: "task-dialog-id",
   class: "task-id"
 };
-var _hoisted_36 = ["hidden"];
-var _hoisted_45 = ["hidden"];
-var _hoisted_54 = { class: "grid" };
-var _hoisted_64 = ["value"];
-var _hoisted_74 = ["value", "title"];
+var _hoisted_37 = ["hidden"];
+var _hoisted_46 = ["hidden"];
+var _hoisted_55 = { class: "grid" };
+var _hoisted_65 = ["value"];
+var _hoisted_75 = ["value", "title"];
 var _hoisted_82 = ["hidden"];
 var _hoisted_92 = { class: "dialog-footer" };
 var _hoisted_10 = {
@@ -7135,8 +7463,8 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
           onSubmit: withModifiers(save, ["prevent"]),
           onFocusout: onFocusOut
         }, [
-          createBaseVNode("header", _hoisted_110, [
-            createBaseVNode("span", _hoisted_27, toDisplayString(__props.task.id), 1),
+          createBaseVNode("header", _hoisted_111, [
+            createBaseVNode("span", _hoisted_28, toDisplayString(__props.task.id), 1),
             createBaseVNode("button", {
               type: "button",
               class: "ghost close",
@@ -7149,12 +7477,12 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
             id: "task-gone",
             class: "dialog-note gone",
             hidden: !unref(openTaskMissing)
-          }, toDisplayString(__props.task.id) + " is no longer in the queue — it may have been deleted. Copy anything you still need here: a save has nothing left to write to. ", 9, _hoisted_36),
+          }, toDisplayString(__props.task.id) + " is no longer in the queue — it may have been deleted. Copy anything you still need here: a save has nothing left to write to. ", 9, _hoisted_37),
           createBaseVNode("p", {
             id: "task-changed",
             class: "dialog-note",
             hidden: changed.value.length === 0
-          }, " Changed on disk while you were editing: " + toDisplayString(changed.value.join(", ")) + ". Your text was kept. ", 9, _hoisted_45),
+          }, " Changed on disk while you were editing: " + toDisplayString(changed.value.join(", ")) + ". Your text was kept. ", 9, _hoisted_46),
           createBaseVNode("label", null, [
             _cache[9] || (_cache[9] = createTextVNode(" Title ", -1)),
             withDirectives(createBaseVNode("input", {
@@ -7167,7 +7495,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
               [vModelText, title.value]
             ])
           ]),
-          createBaseVNode("div", _hoisted_54, [
+          createBaseVNode("div", _hoisted_55, [
             createBaseVNode("label", null, [
               _cache[10] || (_cache[10] = createTextVNode(" Status ", -1)),
               withDirectives(createBaseVNode("select", {
@@ -7179,7 +7507,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                   return openBlock(), createElementBlock("option", {
                     key: column.name,
                     value: column.name
-                  }, toDisplayString(column.display_name), 9, _hoisted_64);
+                  }, toDisplayString(column.display_name), 9, _hoisted_65);
                 }), 128))
               ], 512), [
                 [vModelSelect, status.value]
@@ -7197,7 +7525,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                     key: option.name,
                     value: option.name,
                     title: option.configured ? option.name : `${option.name} — not in the project's priority set`
-                  }, toDisplayString(option.display), 9, _hoisted_74);
+                  }, toDisplayString(option.display), 9, _hoisted_75);
                 }), 128))
               ], 512), [
                 [vModelSelect, priority.value]
@@ -7290,7 +7618,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
 var TaskDialog_default2 = TaskDialog_default;
 
 // frontend/components/Toasts.vue?type=script
-var _hoisted_111 = {
+var _hoisted_112 = {
   id: "toasts",
   class: "toasts",
   "aria-live": "polite"
@@ -7299,7 +7627,7 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
   __name: "Toasts",
   setup(__props) {
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("div", _hoisted_111, [
+      return openBlock(), createElementBlock("div", _hoisted_112, [
         (openBlock(true), createElementBlock(Fragment, null, renderList(unref(toasts), (item) => {
           return openBlock(), createElementBlock("div", {
             key: item.id,
@@ -7315,27 +7643,28 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
 var Toasts_default2 = Toasts_default;
 
 // frontend/components/App.vue?type=script
-var _hoisted_112 = { class: "topbar" };
-var _hoisted_28 = { class: "statusbar" };
-var _hoisted_37 = { id: "status-line" };
+var _hoisted_113 = { class: "topbar" };
+var _hoisted_29 = { class: "statusbar" };
+var _hoisted_38 = { id: "status-line" };
 var App_default = /* @__PURE__ */ defineComponent({
   __name: "App",
   setup(__props) {
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock(Fragment, null, [
-        createBaseVNode("header", _hoisted_112, [
+        createBaseVNode("header", _hoisted_113, [
           _cache[3] || (_cache[3] = createBaseVNode("h1", { class: "brand" }, "tq", -1)),
-          createVNode(FilterBar_default2),
+          createVNode(SearchBar_default2),
           createBaseVNode("button", {
             id: "new-task",
             type: "button",
             class: "primary",
             onClick: _cache[0] || (_cache[0] = ($event) => creating.value = true)
-          }, "New task")
+          }, "New task"),
+          createVNode(FilterBar_default2)
         ]),
         createVNode(Board_default2),
-        createBaseVNode("footer", _hoisted_28, [
-          createBaseVNode("span", _hoisted_37, toDisplayString(unref(statusLine)), 1)
+        createBaseVNode("footer", _hoisted_29, [
+          createBaseVNode("span", _hoisted_38, toDisplayString(unref(statusLine)), 1)
         ]),
         createVNode(Toasts_default2),
         createCommentVNode(` Keyed by the task: \`openTask\` is a ref rather than a find, so it could be

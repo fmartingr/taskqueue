@@ -109,6 +109,12 @@ export interface Filters {
   assignee: string;
   label: string;
   ready: boolean;
+  /**
+   * Free text from the search bar: a substring of the id, the title or the
+   * body. It is a filter like any other rather than a mode of its own, so one
+   * query and the selects above it are the same state — see search.ts.
+   */
+  text: string;
 }
 
 // ── Dependencies ────────────────────────────────────────────────
@@ -395,7 +401,7 @@ export function priorityOptions(priorities: PrioritySet, extras: string[]): Prio
  * it, because readiness depends on the state of the tasks a filter is hiding.
  */
 export function visibleTasks(tasks: Task[], filters: Filters, columns: ColumnSet): Task[] {
-  const { status, priority, assignee, label, ready } = filters;
+  const { status, priority, assignee, label, ready, text } = filters;
   const index = indexTasks(tasks);
 
   // The assignee box is a search field, so it matches substrings: typing
@@ -405,12 +411,29 @@ export function visibleTasks(tasks: Task[], filters: Filters, columns: ColumnSet
   const matches = (haystack: string, needle: string) =>
     haystack.toLowerCase().includes(needle.trim().toLowerCase());
 
+  const wanted = (text ?? "").trim().toLowerCase();
+
   return tasks.filter((task) => {
     if (status && task.status !== status) return false;
     if (priority && task.priority !== priority) return false;
     if (assignee && !matches(task.assignee ?? "", assignee)) return false;
     if (label && !(task.labels ?? []).includes(label)) return false;
     if (ready && !isReady(task, index, columns)) return false;
+    if (wanted && !carriesText(task, wanted)) return false;
     return true;
   });
+}
+
+/**
+ * Whether free text is anywhere in a task the board can see: its id, its title
+ * or its body, matched as one case-insensitive phrase.
+ *
+ * The body is in it because the listing already carries it — the search costs a
+ * pass over strings the board has in hand, and grepping `.tasks` for a word is
+ * how anyone finds a task on the CLI. Everything else a task holds is a
+ * structured term of its own, so nothing here matches a status or a label by
+ * accident.
+ */
+function carriesText(task: Task, wanted: string): boolean {
+  return [task.id, task.title, task.body].some((field) => (field ?? "").toLowerCase().includes(wanted));
 }

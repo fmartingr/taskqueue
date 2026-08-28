@@ -62,12 +62,18 @@ export const FALLBACK_PRIORITIES: PrioritySet = [
 // ── The data ────────────────────────────────────────────────────
 
 export const tasks = ref<Task[]>([]);
+/**
+ * The filter bar and the search bar, which are one thing: the query line parses
+ * into this and formats back out of it, so typing `priority=urgent` moves the
+ * select and moving the select rewrites the query (TQ-0068).
+ */
 export const filters = reactive<Filters>({
   status: "",
   priority: "",
   assignee: "",
   label: "",
   ready: false,
+  text: "",
 });
 
 /** The project's label vocabulary, from GET /api/config. */

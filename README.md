@@ -1,12 +1,17 @@
-# tq — task queue
+<div align="center">
+<h1>tq — task queue</h1>
+<p><img src="frontend/icon.png" width="256" alt="tq"/></p>
+<p>A local-first task manager for agentic software development.</p>
+<blockquote>Markdown on disk, CLI for agents, Kanban for humans.</blockquote>
+</div>
 
-<div align="center"><img src="frontend/icon.png" width="256" alt="tq"/></div>
+## What this is
 
-A local-first task queue for agentic software development.
+`tq` is a local-first task manager for agentic software development. It is the
+shared list of work for coding agents and the humans directing them, kept in
+the same repository as the code.
 
-> Markdown on disk, CLI for agents, Kanban for humans.
-
-## Summary
+## How it works
 
 Every task is a Markdown file with YAML frontmatter inside a `.tasks/` directory
 in your repository. The filesystem is the database: no SQL, no service, no
@@ -79,7 +84,7 @@ the work it describes.
 tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
 ```
 
-- Four columns: `backlog`, `todo`, `in-progress`, `done`.
+- Five columns: `inbox`, `todo`, `in-progress`, `done`, `rejected`.
 - Drag a card between columns to change its status.
 - "+ Add a card" at the bottom of a column files a task straight into it:
   type a title and press Enter (the composer stays open for the next one) or
@@ -242,7 +247,7 @@ what `tq move` takes; `display_name` is only what the board shows.
 
 Two flags define column semantics:
 
-- **`ready: true`** — `tq ready` offers work from here. Left out, a column holds
+- **`consider_ready: true`** — `tq ready` offers work from here. Left out, a column holds
   work that is unsorted, claimed or finished, and is not handed out.
 - **`consider_done: true`** — a dependency parked here counts as
   complete, and `tq done` moves tasks to it. Exactly one column should claim it;
@@ -413,7 +418,7 @@ tq init                            Create .tasks/ and .taskqueue.yaml in the
 tq add <title> [flags]             --priority --assignee --label --depends-on --body --status --json
 tq list [flags]                    --status --priority --label --assignee --json
 tq show <id> [--json]              Frontmatter fields followed by the Markdown body
-tq move <id> <status>              backlog | todo | in-progress | done
+tq move <id> <status>              inbox | todo | in-progress | done | rejected
 tq done <id>                       Shorthand for: tq move <id> done
 tq update <id> [flags]             --title --status --priority --assignee --body
                                    --add-label --remove-label
@@ -602,11 +607,12 @@ make frontend    # rebuild the embedded frontend with Bun
 make build       # frontend + self-contained binary
 ```
 
-Layout — a single `package main` at the repository root, as in
-[terraria-companion](https://git.nakama.town/fmartingr/terraria-companion):
+Layout — one `main` in `cmd/tq` so `go install` names the binary `tq`,
+everything else under `internal/`:
 
 ```text
 cmd/tq/               The binary
+tq.go                 Main() and the version variable
 internal/task/        Task model, validation, filtering, dependencies, notes
 internal/config/      .taskqueue.yaml: the project marker, its loader and the
                       label and priority vocabularies

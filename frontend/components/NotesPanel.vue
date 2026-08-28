@@ -16,11 +16,18 @@
  * button, so Enter in it used to submit the form — saving the dialog and
  * silently discarding what was typed. Enter is handled here, and cancelled, so
  * it can never reach the form.
+ *
+ * TQ-0054: that box is a textarea, like the editor above it and for the same
+ * reason — a note keeps the line breaks it is given, and the guide tells agents
+ * to paste a command into one, so a control that cannot hold a second line made
+ * the multi-line note something only the CLI could write. Enter appends and
+ * Shift+Enter is a newline, exactly as in the editor; a textarea never submits
+ * a form on Enter either way, so TQ-0019 survives the shift.
  */
 import { nextTick, ref } from "vue";
 
 import { formatTime } from "../format";
-import type { Note } from "../notes";
+import { noteLines, type Note } from "../notes";
 
 const props = defineProps<{ notes: Note[]; draft: string }>();
 const emit = defineEmits<{
@@ -77,10 +84,19 @@ function finish(keep: boolean, note: Note): void {
   if (keep) commit(note);
 }
 
-/** Hands an edit back to the dialog, unless it is empty or unchanged. */
+/**
+ * Hands an edit back to the dialog, unless it is empty or unchanged.
+ *
+ * Normalised the way the file will hold it rather than merely trimmed: a
+ * pasted block's shared indent is what makes it one block, and trimming would
+ * take it off the first line alone (TQ-0054). noteLines is also what makes
+ * "unchanged" mean it — the text it returns is what reading the note back out
+ * of the file gives, so an edit that only moved whitespace stays a no-op
+ * rather than becoming a write that changes nothing but the timestamp.
+ */
 function commit(note: Note): void {
   editing.value = null;
-  const text = editor.value.trim();
+  const text = noteLines(editor.value).join("\n");
   if (text !== "" && text !== note.text) emit("edit", note, text);
 }
 
@@ -132,15 +148,15 @@ function onEnter(event: KeyboardEvent, commit: () => void): void {
     </ul>
 
     <div class="note-row">
-      <input
+      <textarea
         id="task-note"
-        type="text"
+        class="note-draft"
+        rows="2"
         placeholder="Append a timestamped note…"
-        autocomplete="off"
         :value="draft"
-        @input="emit('update:draft', ($event.target as HTMLInputElement).value)"
-        @keydown.enter.prevent="emit('append')"
-      />
+        @input="emit('update:draft', ($event.target as HTMLTextAreaElement).value)"
+        @keydown.enter="onEnter($event, () => emit('append'))"
+      ></textarea>
       <button id="task-note-add" type="button" class="ghost" @click="emit('append')">Add note</button>
     </div>
   </section>

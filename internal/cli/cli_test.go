@@ -877,6 +877,23 @@ func TestCLINote(t *testing.T) {
 	}
 }
 
+// A pasted block reaches the file as one block: the command only trims to ask
+// whether there is a note at all, because trimming the text itself would take
+// the shared indent off the first line and leave the rest reading as an
+// indented code block (TQ-0054). task.AppendNote is what normalises it.
+func TestCLINoteKeepsAPastedBlockWhole(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Paste a command", "--body", "Description.")
+
+	tc.mustRun("note", "TQ-0001", "\n    make test\n    make build\n")
+
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "TQ-0001", "--json")
+	if !strings.HasSuffix(tk.Body, " — make test\n  make build") {
+		t.Errorf("the paste lost its shape:\n%q", tk.Body)
+	}
+}
+
 func TestCLINoteLeavesAContentNotesSectionAlone(t *testing.T) {
 	tc := newTestCLI(t)
 	body := "Description.\n\n## Notes\n\nProse that belongs to the task.\n\n## Acceptance criteria\n\n- something"

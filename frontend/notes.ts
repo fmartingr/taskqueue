@@ -30,6 +30,8 @@ const INDENT_PATTERN = /^[ \t]/;
 /** Opens a Markdown list item, so indented lines below it are its content. */
 const LIST_MARKER_PATTERN = /^([-*+]|\d{1,9}[.)])\s/;
 const BULLET_PATTERN = /^[-*]\s+/;
+/** The run of spaces and tabs a line opens with. */
+const INDENT_RUN_PATTERN = /^[ \t]*/;
 /** A bullet tq wrote: "<timestamp> — <text>", once the marker is stripped. */
 const NOTE_PATTERN = /^(\S+)\s+—\s+([\s\S]*)$/;
 /** The indentation a continuation line owes to the bullet it belongs to. */
@@ -246,9 +248,74 @@ function sameNotes(a: Note[], b: Note[]): boolean {
   );
 }
 
+/**
+ * Normalises a note's text into the lines of its bullet: line endings are
+ * unified, trailing whitespace goes, runs of blank lines collapse to one, the
+ * blank lines around the note are dropped, and the indent every line shares is
+ * stripped — the bullet already owes each line two spaces, and a block pasted
+ * with the margin it was copied with would read as an indented code block. What
+ * is left is relative indentation, and it is kept. The first line is stripped
+ * outright: it sits after the timestamp, where an indent cannot be read back.
+ *
+ * This mirrors noteLines in task.go, which `tq note` and POST
+ * /api/tasks/{id}/notes write through, and the two have to agree. The board
+ * re-renders every note when it saves a body, so a rule only one side applied
+ * would make a task's canonical form depend on which surface touched it last,
+ * and every save would land in a diff as whitespace churn (TQ-0054). The cases
+ * both suites check are in internal/task/testdata/notes.json.
+ */
+export function noteLines(text: string): string[] {
+  const lines: string[] = [];
+  let blank = false;
+
+  for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
+    const line = raw.replace(/\r$/, "").replace(/[ \t]+$/, "");
+    if (line === "") {
+      // A blank line only counts once, and never before the first line.
+      blank = lines.length > 0;
+      continue;
+    }
+    if (blank) {
+      lines.push("");
+      blank = false;
+    }
+    lines.push(line);
+  }
+  if (lines.length === 0) return [];
+
+  const indent = commonIndent(lines);
+  const stripped = lines.map((line) => line.slice(indent.length));
+  stripped[0] = stripped[0].replace(INDENT_RUN_PATTERN, "");
+  return stripped;
+}
+
+/**
+ * The run of spaces and tabs every non-blank line opens with. Blank lines are
+ * skipped rather than counted as an empty prefix: a paragraph break carries no
+ * indentation of its own, and letting one answer for the block around it would
+ * flatten exactly the pasted text this is here to keep.
+ */
+function commonIndent(lines: string[]): string {
+  let indent: string | null = null;
+
+  for (const line of lines) {
+    if (line === "") continue;
+    const lead = INDENT_RUN_PATTERN.exec(line)?.[0] ?? "";
+    if (indent === null) {
+      indent = lead;
+      continue;
+    }
+    let shared = 0;
+    while (shared < indent.length && indent[shared] === lead[shared]) shared++;
+    indent = indent.slice(0, shared);
+    if (indent === "") break;
+  }
+  return indent ?? "";
+}
+
 export function formatNote(note: Note): string {
-  const [first = "", ...rest] = trimBlankLines(note.text).split("\n");
-  const head = note.timestamp === "" ? `- ${first.trim()}` : `- ${note.timestamp} — ${first.trim()}`;
+  const [first = "", ...rest] = noteLines(note.text);
+  const head = note.timestamp === "" ? `- ${first}` : `- ${note.timestamp} — ${first}`;
   // Continuation lines are indented so they stay part of their bullet.
-  return [head, ...rest.map((line) => (line.trim() === "" ? "" : CONTINUATION_INDENT + line))].join("\n");
+  return [head, ...rest.map((line) => (line === "" ? "" : CONTINUATION_INDENT + line))].join("\n");
 }

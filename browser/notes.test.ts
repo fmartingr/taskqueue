@@ -135,3 +135,35 @@ test("adding a note through the panel saves pending edits with it", async () => 
   expect(task?.body).toContain("Body typed but not saved yet.");
   expect(task?.body).toContain("appended from the panel");
 });
+
+// ── TQ-0054 ─────────────────────────────────────────────────────
+
+test("a multi-line note can be written in the panel and survives the save", async () => {
+  const { project, server, page, id } = await dialogWithNotes();
+
+  // A block pasted out of a terminal: every line carries the margin it was
+  // copied with, and the margin is what must not reach the file — on top of
+  // the two spaces the bullet already owes, it would read as a code block.
+  await page.fill("#task-note", "    make test\n    make build");
+  await page.click("#task-note-add");
+
+  await page.waitForSelector("#task-notes .note .note-text");
+  expect(await noteTexts(page)).toEqual(["make test\nmake build"]);
+  expect(await page.inputValue("#task-note")).toBe("");
+
+  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  expect(task?.body).toContain(" — make test\n  make build");
+});
+
+test("Shift+Enter in the note field starts a second line instead of appending", async () => {
+  const { page } = await dialogWithNotes();
+
+  await page.fill("#task-note", "first line");
+  await page.press("#task-note", "Shift+Enter");
+  await page.press("#task-note", "s");
+
+  expect(await page.inputValue("#task-note")).toBe("first line\ns");
+  expect(await noteTexts(page)).toEqual([]);
+  // TQ-0019's property, which the textarea inherits: the dialog is still open.
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
+});

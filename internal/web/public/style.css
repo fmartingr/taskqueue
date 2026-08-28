@@ -530,10 +530,11 @@ button.icon:hover {
 
 .note-row {
   display: flex;
+  align-items: flex-start;
   gap: 8px;
 }
 
-.note-row input {
+.note-draft {
   flex: 1;
 }
 

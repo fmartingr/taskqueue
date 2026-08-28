@@ -1,0 +1,80 @@
+{
+  "_comment": [
+    "The one fixture both suites read (TQ-0054). internal/task writes every note",
+    "the CLI and the API append; frontend/notes.ts re-renders the same notes when",
+    "the board saves a body. The two normalise separately, so they can drift, and",
+    "the file is what a drift shows up in: whichever surface touched a task last",
+    "would decide its canonical form, and every save would land in a diff as",
+    "whitespace churn. Go asserts noteBullet against `bullet`, TypeScript asserts",
+    "formatNote against the same string, and both assemble the body around it.",
+    "Add a case here rather than to either suite."
+  ],
+  "timestamp": "2026-08-25T09:42:00+02:00",
+  "cases": [
+    {
+      "name": "a note of one line",
+      "text": "A note.",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — A note."
+    },
+    {
+      "name": "the blank lines around a note are dropped",
+      "text": "\n\n  A note.  \n\n",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — A note."
+    },
+    {
+      "name": "a continuation line is indented under its bullet",
+      "text": "First line\nsecond line",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — First line\n  second line"
+    },
+    {
+      "name": "nesting inside a note is kept",
+      "text": "Findings:\n- one\n  - deeper",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — Findings:\n  - one\n    - deeper"
+    },
+    {
+      "name": "a run of blank lines collapses to one",
+      "text": "para one\n\n\n\npara two",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — para one\n\n  para two"
+    },
+    {
+      "name": "trailing whitespace goes from every line",
+      "text": "trailing   \nspaces  \t",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — trailing\n  spaces"
+    },
+    {
+      "name": "carriage returns are line endings",
+      "text": "line one  \r\n\r\n\r\n\r\nline two\t\n",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — line one\n\n  line two"
+    },
+    {
+      "name": "a uniformly indented paste loses the margin it was copied with",
+      "text": "    make test\n    make build",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — make test\n  make build"
+    },
+    {
+      "name": "a shared margin goes and the indentation under it stays",
+      "text": "    steps:\n      - one\n      - two",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — steps:\n    - one\n    - two"
+    },
+    {
+      "name": "a blank line does not defeat the shared margin",
+      "text": "    para one\n\n    para two",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — para one\n\n  para two"
+    },
+    {
+      "name": "a shared margin of tabs goes too",
+      "text": "\tone\n\ttwo",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — one\n  two"
+    },
+    {
+      "name": "an indent no other line shares is the note's own structure",
+      "text": "Ran:\n\n    tq list --json\n",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — Ran:\n\n      tq list --json"
+    },
+    {
+      "name": "a fenced block inside a note keeps its fences aligned",
+      "text": "  See:\n\n  ```go\n  func x() {}\n  ```",
+      "bullet": "- 2026-08-25T09:42:00+02:00 — See:\n\n  ```go\n  func x() {}\n  ```"
+    }
+  ]
+}

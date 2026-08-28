@@ -1,6 +1,9 @@
 package task
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -291,6 +294,18 @@ func TestAppendNote(t *testing.T) {
 			want: "## Notes\n\n" + note + "line one\n\n  line two",
 		},
 		{
+			name: "a uniformly indented paste loses the margin it was copied with",
+			body: "",
+			text: "    make test\n    make build",
+			want: "## Notes\n\n" + note + "make test\n  make build",
+		},
+		{
+			name: "the indentation under a shared margin survives it",
+			body: "",
+			text: "    steps:\n      - one\n      - two",
+			want: "## Notes\n\n" + note + "steps:\n    - one\n    - two",
+		},
+		{
 			name: "a note that is only whitespace is dropped rather than half-written",
 			body: "Description.",
 			text: "  \n\n\t\n",
@@ -351,6 +366,58 @@ func TestAppendNote(t *testing.T) {
 			t.Errorf("a second notes section was opened:\n%s", got)
 		}
 	})
+}
+
+// TestNoteBulletMatchesTheSharedFixture pins the note format against the file
+// frontend/notes.test.ts reads too.
+//
+// Both surfaces render notes, and until TQ-0054 they rendered them differently:
+// a blank run and a line's trailing whitespace survived a board save and did
+// not survive `tq note`, so the canonical form of a committed file depended on
+// which surface had touched it last. Neither suite could catch that on its own,
+// because they shared no case. This is that case list, and adding to it is how
+// a new rule reaches both.
+func TestNoteBulletMatchesTheSharedFixture(t *testing.T) {
+	var fixture struct {
+		Timestamp string `json:"timestamp"`
+		Cases     []struct {
+			Name   string `json:"name"`
+			Text   string `json:"text"`
+			Bullet string `json:"bullet"`
+		} `json:"cases"`
+	}
+
+	raw, err := os.ReadFile(filepath.Join("testdata", "notes.json"))
+	if err != nil {
+		t.Fatalf("reading the fixture: %v", err)
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("parsing the fixture: %v", err)
+	}
+	ts, err := time.Parse(time.RFC3339, fixture.Timestamp)
+	if err != nil {
+		t.Fatalf("parsing the fixture timestamp: %v", err)
+	}
+	if len(fixture.Cases) == 0 {
+		t.Fatal("the fixture holds no cases")
+	}
+
+	for _, tt := range fixture.Cases {
+		t.Run(tt.Name, func(t *testing.T) {
+			if got := noteBullet(tt.Text, ts); got != tt.Bullet {
+				t.Errorf("noteBullet(%q):\ngot:  %q\nwant: %q", tt.Text, got, tt.Bullet)
+			}
+			// The body the bullet lands in, both ways round, since that is what
+			// the board writes back and what has to come out byte-identical.
+			if got, want := AppendNote("", tt.Text, ts), notesHeading+"\n\n"+tt.Bullet; got != want {
+				t.Errorf("AppendNote into an empty body:\ngot:  %q\nwant: %q", got, want)
+			}
+			want := "Description.\n\n" + notesRule + "\n\n" + notesHeading + "\n\n" + tt.Bullet
+			if got := AppendNote("Description.", tt.Text, ts); got != want {
+				t.Errorf("AppendNote under content:\ngot:  %q\nwant: %q", got, want)
+			}
+		})
+	}
 }
 
 func TestNotesSection(t *testing.T) {

@@ -220,13 +220,15 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	text := strings.TrimSpace(in.Text)
-	if text == "" {
+	// Trimmed to answer "is there a note here at all", and not otherwise — the
+	// indent a pasted block shares is what makes it one block (TQ-0054). What
+	// normalises the text is task.AppendNote, on both surfaces alike.
+	if strings.TrimSpace(in.Text) == "" {
 		writeError(w, http.StatusBadRequest, "validation_error", "note text cannot be empty")
 		return
 	}
 
-	t, err := s.st.Note(r.PathValue("id"), text)
+	t, err := s.st.Note(r.PathValue("id"), in.Text)
 	if err != nil {
 		writeStoreError(w, err)
 		return

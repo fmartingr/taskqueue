@@ -405,8 +405,22 @@ func noteBullet(text string, ts time.Time) string {
 
 // noteLines normalises a note's text into the lines of its bullet: line
 // endings are unified, trailing whitespace goes, runs of blank lines collapse
-// to one, and the blank lines around the note are dropped. The first line is
-// also stripped of its indentation, since it sits after the timestamp.
+// to one, and the blank lines around the note are dropped.
+//
+// The indent every line shares is then stripped, because the bullet already
+// owes each of them two spaces: a block pasted straight out of a terminal
+// arrives with the margin it was copied with, and that margin on top of the
+// bullet's own is what turns a note into an indented code block (TQ-0054).
+// What is left is relative indentation, and it is kept — the shared prefix is
+// the only thing that goes, so a list or a fenced block inside a note still
+// reads as one.
+//
+// The first line is stripped outright, since it sits after the timestamp and
+// has nowhere to show an indent: a bullet's own line cannot open with
+// whitespace and be read back as having any.
+//
+// frontend/notes.ts mirrors this, and internal/task/testdata/notes.json is the
+// fixture the two suites check it against.
 func noteLines(text string) []string {
 	var lines []string
 	blank := false
@@ -421,12 +435,53 @@ func noteLines(text string) []string {
 			lines = append(lines, "")
 			blank = false
 		}
-		if len(lines) == 0 {
-			line = strings.TrimLeft(line, " \t")
-		}
 		lines = append(lines, line)
 	}
+	if len(lines) == 0 {
+		return nil
+	}
+
+	if indent := commonIndent(lines); indent != "" {
+		for i, line := range lines {
+			lines[i] = strings.TrimPrefix(line, indent)
+		}
+	}
+	lines[0] = strings.TrimLeft(lines[0], " \t")
 	return lines
+}
+
+// commonIndent returns the run of spaces and tabs that every non-blank line
+// opens with. Blank lines are skipped rather than counted as an empty prefix:
+// a paragraph break inside a note carries no indentation of its own, and
+// letting one answer for the block around it would flatten exactly the pasted
+// text this is here to keep.
+func commonIndent(lines []string) string {
+	indent, seen := "", false
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		lead := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		if !seen {
+			indent, seen = lead, true
+			continue
+		}
+		if indent = commonPrefix(indent, lead); indent == "" {
+			break
+		}
+	}
+	return indent
+}
+
+// commonPrefix returns the longest byte prefix a and b share.
+func commonPrefix(a, b string) string {
+	n := min(len(a), len(b))
+	for i := range n {
+		if a[i] != b[i] {
+			return a[:i]
+		}
+	}
+	return a[:n]
 }
 
 // TaskPatch is a partial update. Nil pointers mean "leave unchanged", which is

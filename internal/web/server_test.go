@@ -292,6 +292,24 @@ func TestAPIAddNote(t *testing.T) {
 	expectError(t, resp, payload, http.StatusNotFound, "task_not_found")
 }
 
+// The board's note box is a textarea (TQ-0054), so what arrives here can be a
+// pasted block. The handler only trims to ask whether there is a note at all:
+// trimming the text itself would take the shared indent off the first line and
+// leave the rest reading as an indented code block.
+func TestAPIAddNoteKeepsAPastedBlockWhole(t *testing.T) {
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Paste a command"})
+
+	resp, payload := do(t, srv, "POST", "/api/tasks/TQ-0001/notes", `{"text": "\n    make test\n    make build\n"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, payload)
+	}
+	tk := decode[task.Task](t, payload)
+	if !strings.HasSuffix(tk.Body, " — make test\n  make build") {
+		t.Errorf("the paste lost its shape:\n%q", tk.Body)
+	}
+}
+
 func TestAPIStatusAndVersion(t *testing.T) {
 	srv, st := newTestServer(t)
 	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "One"})

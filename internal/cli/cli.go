@@ -748,8 +748,12 @@ func (c *cli) runNote(args []string) int {
 		return code
 	}
 
-	text := strings.TrimSpace(positional[1])
-	if text == "" {
+	// Trimmed to answer "is there a note here at all", and not otherwise: the
+	// indent a pasted block shares is what makes it one block, and trimming it
+	// off the first line alone is what used to leave the rest reading as an
+	// indented code block (TQ-0054). task.AppendNote normalises the text it is
+	// given, surrounding blank lines included.
+	if strings.TrimSpace(positional[1]) == "" {
 		return c.fail(errors.New("note text cannot be empty"))
 	}
 
@@ -757,7 +761,7 @@ func (c *cli) runNote(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := st.Note(positional[0], text)
+	t, err := st.Note(positional[0], positional[1])
 	if err != nil {
 		return c.fail(err)
 	}

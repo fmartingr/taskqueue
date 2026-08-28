@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import {
   formatNote,
   joinBody,
@@ -426,4 +429,41 @@ describe("mergeBody", () => {
   test("an empty body on every side needs no patch", () => {
     expect(mergeBody(body(""), body(""), body(""))).toEqual({ outcome: "unchanged" });
   });
+});
+
+/**
+ * The one fixture Go reads too (TQ-0054).
+ *
+ * Both surfaces render notes — `tq note` and the API through noteBullet in
+ * task.go, the board through formatNote when it saves a body — and until
+ * TQ-0054 they rendered them differently: a blank run and a line's trailing
+ * whitespace survived a board save and did not survive the CLI, so a committed
+ * file's canonical form depended on which surface touched it last. Neither
+ * suite could catch that alone, because they shared no case. Add a case to the
+ * fixture rather than to either suite.
+ */
+describe("the shared note fixture", () => {
+  const fixture = JSON.parse(
+    readFileSync(join(import.meta.dir, "..", "internal", "task", "testdata", "notes.json"), "utf8"),
+  ) as { timestamp: string; cases: { name: string; text: string; bullet: string }[] };
+
+  test("the fixture holds cases", () => {
+    expect(fixture.cases.length).toBeGreaterThan(0);
+  });
+
+  for (const { name, text, bullet } of fixture.cases) {
+    test(name, () => {
+      const note: Note = { timestamp: fixture.timestamp, text };
+      expect(formatNote(note)).toBe(bullet);
+      // The body the bullet lands in, both ways round: this is the half that
+      // has to come out byte-identical to what AppendNote writes.
+      expect(joinBody({ content: "", notes: [note] })).toBe(`## Notes\n\n${bullet}`);
+      expect(joinBody({ content: "Description.", notes: [note] })).toBe(
+        `Description.\n\n---\n\n## Notes\n\n${bullet}`,
+      );
+      // And reading one back and writing it out again moves nothing, which is
+      // what keeps a board save off a note the CLI wrote.
+      expect(joinBody(splitBody(`## Notes\n\n${bullet}`))).toBe(`## Notes\n\n${bullet}`);
+    });
+  }
 });

@@ -5930,6 +5930,7 @@ var HEADING_PATTERN = /^#{1,6}\s/;
 var INDENT_PATTERN = /^[ \t]/;
 var LIST_MARKER_PATTERN = /^([-*+]|\d{1,9}[.)])\s/;
 var BULLET_PATTERN = /^[-*]\s+/;
+var INDENT_RUN_PATTERN = /^[ \t]*/;
 var NOTE_PATTERN = /^(\S+)\s+—\s+([\s\S]*)$/;
 var CONTINUATION_INDENT = "  ";
 function trimBlankLines(text) {
@@ -6042,11 +6043,53 @@ function mergeBody(opened, edited, current) {
 function sameNotes(a, b) {
   return a.length === b.length && a.every((note, i) => note.timestamp === b[i].timestamp && note.text === b[i].text);
 }
+function noteLines(text) {
+  const lines = [];
+  let blank = false;
+  for (const raw of text.replace(/\r\n/g, `
+`).split(`
+`)) {
+    const line = raw.replace(/\r$/, "").replace(/[ \t]+$/, "");
+    if (line === "") {
+      blank = lines.length > 0;
+      continue;
+    }
+    if (blank) {
+      lines.push("");
+      blank = false;
+    }
+    lines.push(line);
+  }
+  if (lines.length === 0)
+    return [];
+  const indent = commonIndent(lines);
+  const stripped = lines.map((line) => line.slice(indent.length));
+  stripped[0] = stripped[0].replace(INDENT_RUN_PATTERN, "");
+  return stripped;
+}
+function commonIndent(lines) {
+  let indent = null;
+  for (const line of lines) {
+    if (line === "")
+      continue;
+    const lead = INDENT_RUN_PATTERN.exec(line)?.[0] ?? "";
+    if (indent === null) {
+      indent = lead;
+      continue;
+    }
+    let shared = 0;
+    while (shared < indent.length && indent[shared] === lead[shared])
+      shared++;
+    indent = indent.slice(0, shared);
+    if (indent === "")
+      break;
+  }
+  return indent ?? "";
+}
 function formatNote(note) {
-  const [first = "", ...rest] = trimBlankLines(note.text).split(`
-`);
-  const head = note.timestamp === "" ? `- ${first.trim()}` : `- ${note.timestamp} — ${first.trim()}`;
-  return [head, ...rest.map((line) => line.trim() === "" ? "" : CONTINUATION_INDENT + line)].join(`
+  const [first = "", ...rest] = noteLines(note.text);
+  const head = note.timestamp === "" ? `- ${first}` : `- ${note.timestamp} — ${first}`;
+  return [head, ...rest.map((line) => line === "" ? "" : CONTINUATION_INDENT + line)].join(`
 `);
 }
 
@@ -6829,7 +6872,8 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
     }
     function commit(note) {
       editing.value = null;
-      const text = editor.value.trim();
+      const text = noteLines(editor.value).join(`
+`);
       if (text !== "" && text !== note.text)
         emit2("edit", note, text);
     }
@@ -6882,14 +6926,14 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
           }), 128))
         ], 512),
         createBaseVNode("div", _hoisted_8, [
-          createBaseVNode("input", {
+          createBaseVNode("textarea", {
             id: "task-note",
-            type: "text",
+            class: "note-draft",
+            rows: "2",
             placeholder: "Append a timestamped note…",
-            autocomplete: "off",
             value: __props.draft,
             onInput: _cache[1] || (_cache[1] = ($event) => emit2("update:draft", $event.target.value)),
-            onKeydown: _cache[2] || (_cache[2] = withKeys(withModifiers(($event) => emit2("append"), ["prevent"]), ["enter"]))
+            onKeydown: _cache[2] || (_cache[2] = withKeys(($event) => onEnter($event, () => emit2("append")), ["enter"]))
           }, null, 40, _hoisted_9),
           createBaseVNode("button", {
             id: "task-note-add",
@@ -7056,8 +7100,8 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
       }
     }
     async function append() {
-      const text = noteDraft.value.trim();
-      if (text === "")
+      const text = noteDraft.value;
+      if (text.trim() === "")
         return;
       try {
         const patch = await buildPatch();

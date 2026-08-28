@@ -299,8 +299,11 @@ async function save(): Promise<void> {
 }
 
 async function append(): Promise<void> {
-  const text = noteDraft.value.trim();
-  if (text === "") return;
+  // Trimmed to answer "is there a note here at all", and not otherwise: the
+  // indent a pasted block shares is what makes it one block, and the store
+  // normalises the text anyway (TQ-0054).
+  const text = noteDraft.value;
+  if (text.trim() === "") return;
 
   try {
     // Pending edits are saved first: appending a note rewrites the body, and

@@ -8,7 +8,7 @@ labels:
   - component/frontend
   - wontfix
 created: 2026-08-26T13:12:58+02:00
-updated: 2026-08-27T16:16:49+02:00
+updated: 2026-08-28T08:56:31+02:00
 ---
 
 ## Finding

@@ -27,15 +27,19 @@ func TestSyncAgentsDocsWritesTheGuide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("guide not written: %v", err)
 	}
+	body := string(guide)
 	for _, want := range []string{
 		"tq ready --json", "tq show <id> --json", "tq move <id> in-progress",
 		"tq note <id>", "tq done <id>", "tq add \"Title\"", "tq list --json",
 		"inbox, todo, in-progress, done, rejected", "urgent, high, normal, low",
-		st.Dir, config.EnvConfigPath, generatedNotice,
+		config.TaskDirName, config.EnvConfigPath, generatedNotice,
 	} {
-		if !strings.Contains(string(guide), want) {
+		if !strings.Contains(body, want) {
 			t.Errorf("guide is missing %q", want)
 		}
+	}
+	if strings.Contains(body, st.Dir) {
+		t.Errorf("guide embeds the absolute checkout path %q", st.Dir)
 	}
 	if len(written) == 0 || written[0] != filepath.Join(st.Dir, AgentsFileName) {
 		t.Errorf("written = %v, want it to start with the guide", written)
@@ -110,6 +114,18 @@ func TestSyncAgentsDocsWritesTheGuideAtTheConfiguredTaskDir(t *testing.T) {
 	if got, want := GuidePath(st), filepath.Join(elsewhere, AgentsFileName); got != want {
 		t.Errorf("GuidePath() = %q, want %q", got, want)
 	}
+
+	guide, err := os.ReadFile(filepath.Join(elsewhere, AgentsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(guide)
+	if !strings.Contains(body, "docs/queue") {
+		t.Errorf("guide does not print the configured path:\n%s", body)
+	}
+	if strings.Contains(body, st.Dir) {
+		t.Errorf("guide embeds the absolute checkout path %q", st.Dir)
+	}
 }
 
 // The path `tq init` prints is the guide's own, absolute, whatever shape the
@@ -180,13 +196,18 @@ func TestGuidePathNamesTheGuideAbsolutely(t *testing.T) {
 }
 
 // This repository's own guide is generated and committed, so a change to
-// taskGuide that nobody regenerated ships a queue documenting a tq that no
-// longer exists — which is the drift generating the file exists to prevent.
+// internal/guide/AGENTS.tmpl.md that nobody regenerated ships a queue documenting
+// a tq that no longer exists — which is the drift generating the file exists
+// to prevent.
 //
 // It is the one test here that reads the repository instead of a fixture, and
 // it only reads: the marker is loaded by its own path rather than by walking,
 // so nothing can put it on a developer's other project. Regenerate with
 // `tq init` at the repository root.
+//
+// The comparison uses the marker's `path`, not the resolved task directory:
+// that absolute path is one checkout, and baking it into the guide is what
+// made this test pass locally and fail on CI (TQ-0089).
 func TestTheCommittedGuideIsCurrent(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -202,13 +223,21 @@ func TestTheCommittedGuideIsCurrent(t *testing.T) {
 	if err != nil {
 		t.Skipf("no committed guide to check: %v", err)
 	}
-	if want := taskGuide(cfg.TaskDir(), cfg.Vocabulary(), cfg.Board()); string(got) != string(want) {
+	want, err := taskGuide(cfg.Path, cfg.Vocabulary(), cfg.Board())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
 		t.Errorf("%s is stale: run `tq init` at %s and commit the result", path, root)
 	}
 }
 
 func TestTaskGuideStatesTheLifecycleAsOrderedSteps(t *testing.T) {
-	guide := string(taskGuide(filepath.Join("project", ".tasks"), task.Priorities{}, task.Columns{}))
+	body, err := taskGuide(filepath.Join("project", ".tasks"), task.Priorities{}, task.Columns{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := string(body)
 
 	// The framing carries as much as the numbering: without these the steps
 	// read as a menu again.

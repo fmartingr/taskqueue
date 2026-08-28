@@ -33,13 +33,13 @@ Use `tq move <id> <status>` for any other transition.
 ## Find things
 
     tq list --json                  every task
-    tq list --status todo --label backend --priority urgent --assignee agent-api
-    ls .tasks | grep auth               filenames carry a slug of the title
-    grep -ril "oidc" .tasks             full-text search across tasks
+    tq list --status todo --label backend --priority {{.ExamplePriority}} --assignee agent-api
+    ls {{.TaskDir}} | grep auth               filenames carry a slug of the title
+    grep -ril "oidc" {{.TaskDir}}             full-text search across tasks
 
 ## Create and change
 
-    tq add "Title" --priority urgent --label backend --depends-on TQ-0002 --body "…"
+    tq add "Title" --priority {{.ExamplePriority}} --label backend --depends-on TQ-0002 --body "…"
 
 A task filed this way lands in the board's default column, which may not
 be one `tq ready` offers — see Statuses below.
@@ -66,7 +66,7 @@ Arguments starting with "-" go after "--": tq note <id> -- "-1 test failing".
 ## Labels
 
 Labels are freeform — `--label` takes any string — but the project declares a
-vocabulary in `.taskqueue.yaml`, and that is the shared one: it is what
+vocabulary in `{{.ConfigFile}}`, and that is the shared one: it is what
 gives a label its colour and display name on the board, and what groups it
 under the part before a `/`. Prefer a label already in the set. A new one is
 accepted everywhere and simply renders neutral, and it shows up as
@@ -80,14 +80,14 @@ whole string, so `tq list --label component/backend` takes the whole key.
 
 ## Rules of the format
 
-- Statuses: inbox, todo, in-progress, done, rejected.
-  The board, left to right, declared by the project in `.taskqueue.yaml`: a
+- Statuses: {{.Statuses}}.
+  The board, left to right, declared by the project in `{{.ConfigFile}}`: a
   status outside it is refused on write. A task filed without one lands in
-  inbox. `tq ready` offers work from todo, and a dependency counts as met
-  once it reaches done.
-- Priorities: urgent, high, normal, low (default: normal).
+  {{.DefaultStatus}}. `tq ready` offers work from {{.Offering}}, and a dependency counts as met
+  once it reaches {{.Satisfying}}.
+- Priorities: {{.Priorities}} (default: {{.DefaultPriority}}).
   Most severe first, and that order is the sort order. Unlike labels this is a
-  closed set, declared by the project in `.taskqueue.yaml`: a value outside it
+  closed set, declared by the project in `{{.ConfigFile}}`: a value outside it
   is refused on write.
 - Notes are the last section of a body, introduced by a `---` rule with a blank
   line above it. A `## Notes` heading anywhere else is ordinary content, so a
@@ -126,12 +126,12 @@ whole string, so `tq list --label component/backend` takes the whole key.
 
 ## Where the tasks live
 
-    .tasks
+    {{.TaskDir}}
 
-The project marker is `.taskqueue.yaml`, and it says where the tasks live:
+The project marker is `{{.ConfigFile}}`, and it says where the tasks live:
 
     version: 1
-    path: .tasks
+    path: {{.TaskDir}}
 
 `path` is resolved against the directory holding that file. The marker is
 the only thing tq looks for: a directory merely named .tasks is not a queue.
@@ -151,8 +151,8 @@ Once a command has found the marker, that file is the whole answer: the board,
 the priorities, the labels, and where the tasks are. Nothing goes the other way,
 so a `path` pointing outside the marker's own directory keeps all of it.
 
-Set `TQ_CONFIG_PATH` to hand tq its marker instead of having it walk for one, for
-every command, `tq init` included. It names a `.taskqueue.yaml` file, not
+Set `{{.EnvConfigPath}}` to hand tq its marker instead of having it walk for one, for
+every command, `tq init` included. It names a `{{.ConfigFile}}` file, not
 a directory, and the tasks are wherever that marker's `path` says — so a
 command run under it works on that whole project, from any directory. A file it
 names that is missing, is a directory, or will not parse is an error.

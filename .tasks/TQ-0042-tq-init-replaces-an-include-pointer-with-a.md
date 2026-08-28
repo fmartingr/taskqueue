@@ -8,7 +8,7 @@ labels:
   - component/cli
   - wontfix
 created: 2026-08-25T13:31:50+02:00
-updated: 2026-08-26T16:29:20+02:00
+updated: 2026-08-28T11:07:34+02:00
 ---
 
 ## Finding
@@ -30,7 +30,7 @@ a plain link that loads nothing.
 Reproduced in this repository, on a clean tree, while working TQ-0041:
 
     $ tq init
-    Task queue already initialized in /Users/fmartingr/Code/task-queue/.tasks
+    Task queue already initialized in .tasks
     Wrote .../.tasks/AGENTS.md
     Wrote .../AGENTS.md
     Wrote .../CLAUDE.md

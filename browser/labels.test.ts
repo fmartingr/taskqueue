@@ -1,15 +1,19 @@
 /**
- * Labels on the board: the chips a card draws, and the grouped filter that
- * chooses between them.
+ * Labels on the board: the chips a card draws, and the search terms that choose
+ * between them.
  *
  * The colours and display names come from the project's `.taskqueue.yaml`, and
  * only a browser can say what the page actually painted — which is why the
  * assertions here read computed styles rather than the data behind them.
+ *
+ * The vocabulary reaches one more place: the search bar's suggestions for
+ * `label=`, which are the only thing left that says what labels exist (TQ-0098).
  */
 
 import { expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Page } from "playwright-core";
 import { card, idsIn, useBoard, type Project } from "./harness";
 
 const openBoard = useBoard();
@@ -45,6 +49,24 @@ async function chips(page: Awaited<ReturnType<typeof openBoard>>["page"], id: st
 /** Replaces the project's vocabulary, before its server starts. */
 function setLabels(project: Project, labels: string): void {
   writeFileSync(join(project.dir, ".taskqueue.yaml"), `version: 1\npath: .tasks\n${labels}`);
+}
+
+/**
+ * What the search bar offers for a key, as the menu draws it.
+ *
+ * A row is one line of text, so a scoped label has to spell out both halves the
+ * chip draws — otherwise the menu would read "Backend" beside a card reading
+ * "Component | Backend".
+ */
+async function suggestions(page: Page, typed: string) {
+  await page.click("#search-query");
+  await page.fill("#search-query", typed);
+  return page.$$eval("#search-suggestions .search-option", (nodes) =>
+    nodes.map((node) => ({
+      value: node.querySelector(".search-option-label")?.textContent ?? "",
+      detail: node.querySelector(".search-option-detail")?.textContent ?? "",
+    })),
+  );
 }
 
 /** A project declaring one flat label and one scoped one. */
@@ -140,7 +162,7 @@ test("a label the project does not declare is accepted and drawn neutral", async
   expect(chip!.background).toBe("rgba(0, 0, 0, 0)");
 });
 
-test("the filter groups labels by prefix and filters on a whole label", async () => {
+test("the search offers every label, spelled out, and filters on a whole one", async () => {
   let backend = "";
   let loose = "";
   const { page } = await openBoard((project) => {
@@ -154,39 +176,27 @@ test("the filter groups labels by prefix and filters on a whole label", async ()
     loose = project.add("Everything else", "--label", "bug");
   });
 
-  // The grouped options: the flat labels first, then one optgroup per prefix.
-  const groups = await page.$$eval("#filter-label optgroup", (nodes) =>
-    nodes.map((node) => ({
-      label: (node as HTMLOptGroupElement).label,
-      options: [...node.querySelectorAll("option")].map((option) => option.value),
-      // An option is one line of text, so it spells out what a chip draws as
-      // two halves — otherwise the bar would read "Backend" beside a chip
-      // reading "Component | Backend".
-      texts: [...node.querySelectorAll("option")].map((option) => option.textContent),
-    })),
-  );
-  expect(groups).toEqual([
-    {
-      label: "component",
-      options: ["component/backend", "component/cli"],
-      texts: ["Component | Backend", "Component | CLI"],
-    },
+  // The whole vocabulary, in one sorted list: the value is what the query takes
+  // and the display name is what the chip would read.
+  expect(await suggestions(page, "label=")).toEqual([
+    { value: "bug", detail: "Bug" },
+    { value: "component/backend", detail: "Component | Backend" },
+    { value: "component/cli", detail: "Component | CLI" },
   ]);
 
-  const flat = await page.$$eval("#filter-label > option", (nodes) =>
-    nodes.map((node) => (node as HTMLOptionElement).value),
-  );
-  expect(flat).toEqual(["", "bug"]);
-
-  await page.selectOption("#filter-label", "component/backend");
+  await page.fill("#search-query", "label=component/backend");
   await page.waitForSelector(card(loose), { state: "detached" });
   expect(await idsIn(page, "todo")).toEqual([backend]);
 
-  await page.selectOption("#filter-label", "");
+  // A label is matched whole, so the half that reads like one selects nothing.
+  await page.fill("#search-query", "label=backend");
+  await page.waitForSelector(card(backend), { state: "detached" });
+
+  await page.fill("#search-query", "");
   await page.waitForSelector(card(loose));
 });
 
-test("a label only a task carries is still filterable, marked as unconfigured", async () => {
+test("a label only a task carries is still offered, and still filters", async () => {
   let improvised = "";
   const { page } = await openBoard((project) => {
     setLabels(project, 'labels:\n  bug:\n    color: "#d73a4a"\n    display_name: Bug\n');
@@ -194,48 +204,41 @@ test("a label only a task carries is still filterable, marked as unconfigured", 
     project.add("Ordinary", "--label", "bug");
   });
 
-  const options = await page.$$eval("#filter-label option", (nodes) =>
-    nodes.map((node) => {
-      const option = node as HTMLOptionElement;
-      return { value: option.value, title: option.title };
-    }),
-  );
-  expect(options.map((option) => option.value)).toEqual(["", "bug", "surprise"]);
-  expect(options.find((option) => option.value === "surprise")?.title).toContain("not in the project's label set");
+  // A label the project does not declare has no display name to show beside it,
+  // and is offered all the same: it still has to be filterable.
+  expect(await suggestions(page, "label=")).toEqual([
+    { value: "bug", detail: "Bug" },
+    { value: "surprise", detail: "" },
+  ]);
 
-  await page.selectOption("#filter-label", "surprise");
+  await page.fill("#search-query", "label=surprise");
+  await page.waitForSelector(card(improvised));
   expect(await idsIn(page, "todo")).toEqual([improvised]);
 });
 
-test("the poll leaves the label filter alone while it has focus", async () => {
+test("a label an agent has just filed turns up in the suggestions", async () => {
   const { project, page } = await openBoard((p) => {
     setLabels(p, 'labels:\n  bug:\n    color: "#d73a4a"\n    display_name: Bug\n');
     p.add("Ordinary", "--label", "bug");
   });
 
-  const values = () =>
-    page.$$eval("#filter-label option", (nodes) => nodes.map((node) => (node as HTMLOptionElement).value));
-  expect(await values()).toEqual(["", "bug"]);
+  const offered = () =>
+    page.$$eval("#search-suggestions .search-option-label", (nodes) =>
+      nodes.map((node) => node.textContent ?? ""),
+    );
 
-  // Focus stands in for an expanded dropdown, which is what a rebuild would
-  // collapse — and which Playwright cannot hold open across an assertion.
-  await page.focus("#filter-label");
+  await page.click("#search-query");
+  await page.fill("#search-query", "label=");
+  expect(await offered()).toEqual(["bug"]);
 
-  // An agent files a task with a label nothing has used yet: the poll picks the
-  // task up, but the option list must not be replaced under the open control.
+  // The menu is a live list, not a snapshot taken when it opened: an agent
+  // files a task carrying a label nothing has used yet, and the board hears
+  // about it with the box still focused.
   project.add("From an agent", "--label", "surprise");
-  await page.waitForSelector(".card", { state: "attached" });
   await page.waitForFunction(
-    () => document.querySelectorAll(".card").length === 2,
+    () => document.querySelectorAll("#search-suggestions .search-option").length === 2,
     undefined,
     { timeout: 10_000 },
   );
-  expect(await values()).toEqual(["", "bug"]);
-
-  // Blurring picks the skipped rebuild back up.
-  await page.locator("#filter-label").blur();
-  await page.waitForFunction(() => document.querySelectorAll("#filter-label option").length === 3, undefined, {
-    timeout: 10_000,
-  });
-  expect(await values()).toEqual(["", "bug", "surprise"]);
+  expect(await offered()).toEqual(["bug", "surprise"]);
 });

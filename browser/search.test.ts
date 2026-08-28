@@ -1,13 +1,16 @@
 /**
- * The search bar, and the one thing only a browser can say about it: that the
- * query line and the filter bar are wired to the same state, in both
- * directions, and that the suggestion menu can be driven from the keyboard.
+ * The search bar: the one control the board is narrowed from (TQ-0098).
  *
- * The query language itself is not the subject — `parseQuery`, `formatQuery`
- * and `completeQuery` are unit-tested in `frontend/search.test.ts` against the
- * same functions the component calls. What is asserted here is what a `v-model`
- * dropped or a keydown swallowed would break and nothing else would see: the
- * caret, the `<input>`'s value, focus leaving the menu on Tab (TQ-0068).
+ * Two things are asserted here. That every field the removed filter bar held a
+ * control for still narrows the board through a term — `status=`, `priority=`,
+ * `label=`, `assignee=` and the bare `ready` — which is what a dropped binding
+ * would break and no other layer would see. And the parts of the box only a
+ * browser has: the caret, the suggestion menu, the keys it answers, focus
+ * leaving it on Tab, and the address bar (TQ-0068).
+ *
+ * The query language itself is not the subject — `parseQuery`, `completeQuery`
+ * and the filter rules are unit-tested in `frontend/search.test.ts` and
+ * `frontend/board.test.ts`, against the same functions the component calls.
  */
 
 import { expect, test } from "bun:test";
@@ -18,30 +21,63 @@ import { cardIn, idsIn, useBoard, type Board, type Project } from "./harness";
 
 const openBoard = useBoard();
 
+/**
+ * How long a count is waited for. Comfortably shorter than the 30s bun gives a
+ * test, which is the point: a wait that outlasts the test is torn down by the
+ * teardown, and takes the file's Chromium — and every test after it — with it.
+ */
 const COUNT_TIMEOUT_MS = 10_000;
 
 interface Seeded {
+  /** Urgent, assigned, labelled, and the only unblocked task in the queue. */
   urgent: string;
-  bug: string;
+  /** In the todo column too, but waiting on the one below. */
+  blocked: string;
+  /** In progress, so neither ready nor in the todo column. */
   claimed: string;
 }
 
-/** Three tasks the query language can tell apart every way it knows how. */
+/**
+ * Three tasks every term can tell apart, on a board of their own, already
+ * showing all three. One board per test: a test that narrows the board would
+ * otherwise be setting up the ones after it.
+ */
 async function openSeeded(): Promise<Board & Seeded> {
   let seeded: Seeded | undefined;
   const board = await openBoard((project: Project) => {
-    const urgent = project.add("Push config changes", "--priority", "urgent", "--assignee", "agent-api");
-    const bug = project.add("Fix the OIDC redirect", "--priority", "high", "--label", "bug");
-    const claimed = project.add("Already moving", "--status", "in-progress", "--assignee", "agent web");
-    seeded = { urgent, bug, claimed };
+    const claimed = project.add("Already moving", "--status", "in-progress", "--assignee", "agent-web");
+    const urgent = project.add(
+      "Push config changes",
+      "--priority", "urgent",
+      "--assignee", "agent-api",
+      "--label", "bug",
+    );
+    const blocked = project.add(
+      "Fix the OIDC redirect",
+      "--priority", "high",
+      "--assignee", "agent-web",
+      "--depends-on", claimed,
+    );
+    seeded = { urgent, blocked, claimed };
   });
   if (seeded === undefined) throw new Error("the board opened without its tasks");
+
+  // Nothing filtered: the footer counts the queue rather than a slice of it,
+  // and waiting for it here is what makes every test below start from a board
+  // that has finished rendering.
   await counts(board.page, "3 tasks");
   return { ...board, ...seeded };
 }
 
-/** The footer is the assertion and the synchronisation at once, as in
- *  filters.test.ts: the count and the columns come off one render. */
+/**
+ * Waits for the footer to say what the board is showing, and says what it read
+ * when it never did.
+ *
+ * It is both the assertion and the synchronisation: the count and the columns
+ * come off the same render, so a footer that has caught up is a board that has.
+ * The wait on its own would report only that it timed out, so a failure falls
+ * through to an ordinary assertion, which names the line the board settled on.
+ */
 async function counts(page: Page, expected: string): Promise<void> {
   await page
     .waitForFunction(
@@ -62,41 +98,84 @@ function options(page: Page): Promise<string[]> {
 }
 
 test("free text narrows the board to what carries it", async () => {
-  const { page, bug } = await openSeeded();
+  const { page, blocked } = await openSeeded();
 
   await page.click("#search-query");
   await page.type("#search-query", "oidc");
   await counts(page, "1 of 3 tasks");
-  expect(await idsIn(page, "todo")).toEqual([bug]);
+  expect(await idsIn(page, "todo")).toEqual([blocked]);
 });
 
-test("a term typed into the query moves the control it stands for", async () => {
-  const { page, urgent } = await openSeeded();
+test("a status term shows one column's work, and the footer says how much", async () => {
+  const { page, urgent, blocked, claimed } = await openSeeded();
+
+  await page.fill("#search-query", "status=todo");
+  await counts(page, "2 of 3 tasks");
+  expect(await idsIn(page, "todo")).toEqual([urgent, blocked]);
+  expect(await idsIn(page, "in-progress")).toEqual([]);
+
+  // Deleting the term is a filter too — it has to put the hidden column back.
+  await page.fill("#search-query", "");
+  await counts(page, "3 tasks");
+  expect(await idsIn(page, "in-progress")).toEqual([claimed]);
+});
+
+test("a priority term narrows the board, and deleting it widens it again", async () => {
+  const { page, urgent, blocked } = await openSeeded();
 
   await page.fill("#search-query", "priority=urgent");
   await counts(page, "1 of 3 tasks");
   expect(await idsIn(page, "todo")).toEqual([urgent]);
-  expect(await page.inputValue("#filter-priority")).toBe("urgent");
 
-  // And back out again: the query is the filter state, so deleting the term
-  // has to clear the select rather than leave the last one standing.
+  // The query *is* the filter state, so deleting the term has to clear it
+  // rather than leave the last one standing.
   await page.fill("#search-query", "");
   await counts(page, "3 tasks");
-  expect(await page.inputValue("#filter-priority")).toBe("");
+  expect(await idsIn(page, "todo")).toEqual([urgent, blocked]);
 });
 
-test("a control moved rewrites the query, so the two never disagree", async () => {
-  const { page, claimed } = await openSeeded();
+test("an assignee term matches a substring of the name", async () => {
+  const { page, urgent, blocked, claimed } = await openSeeded();
 
-  await page.selectOption("#filter-status", "in-progress");
-  await counts(page, "1 of 3 tasks");
-  expect(await page.inputValue("#search-query")).toBe("status=in-progress");
+  await page.fill("#search-query", "assignee=agent-web");
+  await counts(page, "2 of 3 tasks");
+  expect(await idsIn(page, "todo")).toEqual([blocked]);
   expect(await idsIn(page, "in-progress")).toEqual([claimed]);
 
-  // Reset owns the query too: it is one filter set with two editors.
-  await page.click("#filter-reset");
+  // A substring rather than a name: there is no vocabulary of assignees, so
+  // half of one keeps everybody it is half of.
+  await page.fill("#search-query", "assignee=agent");
   await counts(page, "3 tasks");
-  expect(await page.inputValue("#search-query")).toBe("");
+  expect(await idsIn(page, "todo")).toEqual([urgent, blocked]);
+});
+
+test("a label term matches a whole label, not a piece of one", async () => {
+  const { page, urgent } = await openSeeded();
+
+  await page.fill("#search-query", "label=bug");
+  await counts(page, "1 of 3 tasks");
+  expect(await idsIn(page, "todo")).toEqual([urgent]);
+
+  // The board's own label is "bug", and a label is matched whole: "bu" is not
+  // one, however many suggestions it would have offered.
+  await page.fill("#search-query", "label=bu");
+  await counts(page, "0 of 3 tasks");
+});
+
+test("ready leaves the work that is actually offered", async () => {
+  const { page, urgent, blocked } = await openSeeded();
+
+  // Both of the others go: one is in a column that offers no work, the other
+  // is waiting on it.
+  await page.fill("#search-query", "ready");
+  await counts(page, "1 of 3 tasks");
+  expect(await idsIn(page, "todo")).toEqual([urgent]);
+  expect(await idsIn(page, "in-progress")).toEqual([]);
+
+  // Negated, it is the unchecked box: the board is not narrowed by readiness.
+  await page.fill("#search-query", "-ready");
+  await counts(page, "3 tasks");
+  expect(await idsIn(page, "todo")).toEqual([urgent, blocked]);
 });
 
 test("autocomplete offers the keys, then the project's own values", async () => {
@@ -119,7 +198,7 @@ test("autocomplete offers the keys, then the project's own values", async () => 
 });
 
 test("the arrows walk the menu and Escape sends it away without clearing", async () => {
-  const { page, bug } = await openSeeded();
+  const { page, blocked } = await openSeeded();
 
   await page.click("#search-query");
   await page.type("#search-query", "priority=");
@@ -127,7 +206,7 @@ test("the arrows walk the menu and Escape sends it away without clearing", async
   await page.keyboard.press("Enter");
   expect(await page.inputValue("#search-query")).toBe("priority=high ");
   await counts(page, "1 of 3 tasks");
-  expect(await idsIn(page, "todo")).toEqual([bug]);
+  expect(await idsIn(page, "todo")).toEqual([blocked]);
 
   // A prefix narrows the labels, and the one that starts with it leads.
   await page.type("#search-query", "label=bu");
@@ -210,29 +289,32 @@ test("a minus takes tasks away, by word and by term", async () => {
   expect(await idsIn(page, "todo")).toEqual([urgent]);
   expect(await idsIn(page, "in-progress")).toEqual([claimed]);
 
-  // An exclusion no control can hold: the priority select stays on "any" while
-  // the board goes on hiding what the query says to hide.
+  // Back to the whole board first: the exclusion below hides the same card as
+  // the word above, so without a state in between the count could not tell the
+  // second query from the first not having landed yet.
   await page.fill("#search-query", "");
   await counts(page, "3 tasks");
+
+  // An exclusion is the half of the language the filter bar never had: it takes
+  // a value away rather than choosing one.
   await page.fill("#search-query", "-priority=high");
   await counts(page, "2 of 3 tasks");
-  expect(await page.inputValue("#filter-priority")).toBe("");
+  expect(await idsIn(page, "todo")).toEqual([urgent]);
+  expect(await idsIn(page, "in-progress")).toEqual([claimed]);
 
-  // And it survives a control being moved, which rewrites the line.
-  await page.selectOption("#filter-status", "todo");
+  // And it narrows alongside a positive term rather than replacing it.
+  await page.fill("#search-query", "status=todo -priority=high");
   await counts(page, "1 of 3 tasks");
-  expect(await page.inputValue("#search-query")).toBe("status=todo -priority=high");
+  expect(await idsIn(page, "todo")).toEqual([urgent]);
 });
 
-test("a mis-cased value finds its tasks and moves its control", async () => {
+test("a mis-cased value finds its tasks, and the line is left as typed", async () => {
   const { page, urgent } = await openSeeded();
 
   await page.fill("#search-query", "PRIORITY=Urgent");
   await counts(page, "1 of 3 tasks");
   expect(await idsIn(page, "todo")).toEqual([urgent]);
-  // The select follows the project's own spelling…
-  expect(await page.inputValue("#filter-priority")).toBe("urgent");
-  // …and the line is left exactly as it was typed.
+  // Correcting the line under the cursor is the one thing this must not do.
   expect(await page.inputValue("#search-query")).toBe("PRIORITY=Urgent");
 });
 
@@ -250,7 +332,6 @@ test("the query is in the address bar, and a reload comes back to it", async () 
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector(".column");
   expect(await page.inputValue("#search-query")).toBe("priority=urgent");
-  expect(await page.inputValue("#filter-priority")).toBe("urgent");
   await counts(page, "1 of 3 tasks");
   expect(await idsIn(page, "todo")).toEqual([urgent]);
 
@@ -273,10 +354,11 @@ const OWN_VOCABULARY =
   "  - {name: shipped, display_name: Shipped, consider_done: true}\n" +
   'labels:\n  glitch:\n    color: "#d73a4a"\n    display_name: Glitch\n';
 
-test("a query the address carried moves controls the project spells its own way", async () => {
+test("a query the address carried narrows a board the project spells its own way", async () => {
+  let spotted = "";
   const board = await openBoard((project: Project) => {
     writeFileSync(join(project.dir, ".taskqueue.yaml"), `version: 1\npath: .tasks\n${OWN_VOCABULARY}`);
-    project.mustRun("add", "Caught in the act", "--status", "spotted", "--label", "glitch");
+    spotted = project.add("Caught in the act", "--status", "spotted", "--label", "glitch");
     project.mustRun("add", "Already moving", "--status", "doing");
   });
   const { page, server } = board;
@@ -287,33 +369,34 @@ test("a query the address carried moves controls the project spells its own way"
   });
   await page.waitForSelector(".column");
   await counts(page, "1 of 2 tasks");
+  expect(await idsIn(page, "spotted")).toEqual([spotted]);
 
-  // The controls carry the project's spelling, so the bar cannot read "any"
-  // beside a board that is hiding a card…
-  expect(await page.inputValue("#filter-status")).toBe("spotted");
-  expect(await page.inputValue("#filter-label")).toBe("glitch");
-  // …and no duplicate option was invented for the mis-cased value.
-  const labelOptions = await page.$$eval("#filter-label option", (nodes) =>
-    nodes.map((node) => (node as HTMLOptionElement).value),
-  );
-  expect(labelOptions).toEqual(["", "glitch"]);
   // The line itself is untouched: correcting it under the cursor is the one
   // thing this must not do.
   expect(await page.inputValue("#search-query")).toBe("status=SPOTTED label=Glitch");
+
+  // The suggestions are the project's own spelling, and there is one of each:
+  // a mis-cased value in the query invents no second option for itself.
+  await page.click("#search-query");
+  await page.fill("#search-query", "label=");
+  expect(await options(page)).toEqual(["glitch"]);
 });
 
-test("the clear button empties the search and the controls it was setting", async () => {
-  const { page } = await openSeeded();
+test("the clear button empties every term at once", async () => {
+  const { page, urgent, blocked, claimed } = await openSeeded();
 
   expect(await page.$("#search-clear")).toBeNull(); // nothing to clear yet
 
-  await page.fill("#search-query", "priority=urgent");
+  // Every field the filter bar had a control for, set at once.
+  await page.fill("#search-query", "status=todo priority=urgent assignee=agent-api label=bug ready");
   await counts(page, "1 of 3 tasks");
+  expect(await idsIn(page, "todo")).toEqual([urgent]);
 
   await page.click("#search-clear");
   await counts(page, "3 tasks");
   expect(await page.inputValue("#search-query")).toBe("");
-  expect(await page.inputValue("#filter-priority")).toBe("");
+  expect(await idsIn(page, "todo")).toEqual([urgent, blocked]);
+  expect(await idsIn(page, "in-progress")).toEqual([claimed]);
   expect(new URL(page.url()).searchParams.has("q")).toBe(false);
   // It is the search's own affordance, so it leaves the cursor where the work
   // is rather than sending focus back to the page.

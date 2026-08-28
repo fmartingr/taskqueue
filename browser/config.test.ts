@@ -44,10 +44,24 @@ const chips = (page: Awaited<ReturnType<typeof openBoard>>["page"], id: string) 
 const headings = (page: Awaited<ReturnType<typeof openBoard>>["page"]) =>
   page.$$eval(".column h2", (nodes) => nodes.map((node) => (node.textContent ?? "").trim()));
 
-/** The label filter's options, which are the vocabulary plus whatever tasks
- *  carry that it does not declare. */
-const filterOptions = (page: Awaited<ReturnType<typeof openBoard>>["page"]) =>
-  page.$$eval("#filter-label option", (nodes) => nodes.map((node) => (node as HTMLOptionElement).value));
+/**
+ * The labels the search bar offers, which are the vocabulary plus whatever
+ * tasks carry that it does not declare.
+ *
+ * The box is emptied again before the assertion returns: `label=` narrows
+ * nothing, but a query left in the line would be filtering the board every
+ * test after this one looks at.
+ */
+async function offeredLabels(page: Awaited<ReturnType<typeof openBoard>>["page"]): Promise<string[]> {
+  await page.click("#search-query");
+  await page.fill("#search-query", "label=");
+  const names = await page.$$eval("#search-suggestions .search-option-label", (nodes) =>
+    nodes.map((node) => node.textContent ?? ""),
+  );
+  await page.fill("#search-query", "");
+  await page.locator("#search-query").blur();
+  return names;
+}
 
 test("a label recoloured in the marker repaints an open board", async () => {
   let id = "";
@@ -57,7 +71,7 @@ test("a label recoloured in the marker repaints an open board", async () => {
   });
 
   expect(await chips(page, id)).toEqual([{ text: "Bug", background: "rgb(215, 58, 74)" }]);
-  expect(await filterOptions(page)).toEqual(["", "bug"]);
+  expect(await offeredLabels(page)).toEqual(["bug"]);
 
   setConfig(project, GREEN);
 
@@ -69,7 +83,7 @@ test("a label recoloured in the marker repaints an open board", async () => {
   expect(await chips(page, id)).toEqual([{ text: "Defect", background: "rgb(14, 138, 22)" }]);
 
   // And a label the vocabulary gained is offered, though no task carries it.
-  expect(await filterOptions(page)).toEqual(["", "bug", "chore"]);
+  expect(await offeredLabels(page)).toEqual(["bug", "chore"]);
 });
 
 test("a column added to the marker appears without a reload", async () => {
@@ -159,7 +173,7 @@ test("one edit to the marker reaches every connected board", async () => {
 
   for (const page of pages) {
     expect(await chips(page, id)).toEqual([{ text: "Defect", background: "rgb(14, 138, 22)" }]);
-    expect(await filterOptions(page)).toEqual(["", "bug", "chore"]);
+    expect(await offeredLabels(page)).toEqual(["bug", "chore"]);
   }
 });
 

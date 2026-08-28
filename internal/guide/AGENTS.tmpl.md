@@ -39,9 +39,9 @@ Use `tq move <id> <status>` for any other transition.
 
 ## The board's search box
 
-`tq serve` puts one line above the board that holds the same filter set the
-controls below it do: typing into it moves them, and moving one rewrites the
-line. The query lives in the address as `?q=`, so a filtered board is a link,
+`tq serve` puts one line above the board, and it is the only thing that narrows
+it: status, priority, label, assignee, readiness and free text, all in one
+query. The query lives in the address as `?q=`, so a filtered board is a link,
 and `/` puts the cursor in the box.
 
     oidc redirect           every word has to be in the id, title or body

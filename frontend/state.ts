@@ -1,8 +1,8 @@
 /**
  * The board's shared state.
  *
- * Everything a component cannot own alone lives here: the tasks, the filter
- * bar, the project's vocabularies, and the flags that say the user is in the
+ * Everything a component cannot own alone lives here: the tasks, the search,
+ * the project's vocabularies, and the flags that say the user is in the
  * middle of something. Anything a single component *can* own — a composer's
  * draft, a note being edited, the fields of an open dialog — deliberately does
  * not, because that is the state the old imperative board had to keep in a
@@ -63,9 +63,10 @@ export const FALLBACK_PRIORITIES: PrioritySet = [
 
 export const tasks = ref<Task[]>([]);
 /**
- * The filter bar and the search bar, which are one thing: the query line parses
- * into this and formats back out of it, so typing `priority=urgent` moves the
- * select and moving the select rewrites the query (TQ-0068).
+ * What the board is narrowed to, which is a derived value: the search bar is
+ * the only thing that writes it, and what it writes is whatever its query line
+ * parses to (TQ-0098). It is held here rather than in the component because
+ * `visible` below is what the columns and the footer are drawn from.
  */
 export const filters = reactive<Filters>({
   status: "",

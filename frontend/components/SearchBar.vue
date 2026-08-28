@@ -1,17 +1,12 @@
 <script setup lang="ts">
 /**
- * The search bar: one line of text that edits the same filters the bar below it
- * does (TQ-0068).
+ * The search bar: the one line of text the whole board is narrowed from
+ * (TQ-0068, TQ-0098).
  *
- * It complements the filter bar rather than replacing it. Both write into the
- * one `filters` object, so typing `priority=urgent` moves the priority select
- * and clearing that select rewrites the query — there is no second state to
- * fall out of step, and no mode to be in.
- *
- * The query is only reformatted when the two have actually drifted apart, which
- * is what keeps a formatter from rewriting a half-typed term under the cursor.
- * Case alone is not drift: `equalFilters` ignores it, so a hand-typed
- * `status=TODO` moves the select without the line being corrected underneath.
+ * It is the only writer of `filters`, so the line is the input and `filters` is
+ * what it parses to — one state with one editor, and nothing to fall out of step
+ * with. Every field the removed filter bar held a control for is a term here:
+ * `status=`, `priority=`, `label=`, `assignee=` and the bare `ready`.
  *
  * The line is also the address: it is read out of `?q=` on load and written
  * back with `replaceState`, so a filtered board is something to send someone
@@ -27,8 +22,6 @@ import {
   applyCompletion,
   canonicalValues,
   completeQuery,
-  equalFilters,
-  formatQuery,
   parseQuery,
   queryFromURL,
   sameFilters,
@@ -43,7 +36,7 @@ const FOCUS_KEY = "/";
 
 const input = ref<HTMLInputElement | null>(null);
 const menu = ref<HTMLUListElement | null>(null);
-const query = ref(queryFromURL(window.location.href) || formatQuery(filters));
+const query = ref(queryFromURL(window.location.href));
 const caret = ref(0);
 const active = ref(0);
 const focused = ref(false);
@@ -51,8 +44,9 @@ const focused = ref(false);
  *  without the query it was suggesting for being sent away with it. */
 const dismissed = ref(false);
 
-/** Every label the project declares or a task carries — the same two sources
- *  the filter bar's select draws on, so neither offers what the other hides. */
+/** Every label the project declares or a task carries: a configured label
+ *  nothing uses is still part of the vocabulary, and a label in use that
+ *  nothing declares still has to be filterable. */
 const labelNames = computed(() =>
   [...new Set([...Object.keys(labels.value), ...labelsInUse(tasks.value)])]
     .filter((name) => name !== "")
@@ -84,10 +78,18 @@ const sources = computed<Sources>(() => ({
  */
 const parsed = computed(() => canonicalValues(parseQuery(query.value), sources.value));
 
-// `sameFilters` rather than `equalFilters`: the vocabularies arrive after the
-// first parse, so the correction `canonicalValues` makes is usually a change of
-// case and nothing else — and `equalFilters` ignores case, which would leave the
-// select blank beside a board the line is filtering.
+// The one write to `filters`, which is what makes it derived: it ends up
+// holding exactly what `parsed` says, spelling included.
+//
+// `sameFilters` rather than `equalFilters` is what promises that. The
+// vocabularies arrive after the first parse, so the correction `canonicalValues`
+// makes is usually a change of case and nothing else — and `equalFilters`
+// ignores case, so it would call the corrected set equal and skip the write,
+// leaving `filters` on whatever was typed. There is a guard at all because
+// `parsed` is rebuilt whenever the vocabularies move rather than only when the
+// line does, and `parseQuery` hands back fresh `text` and `excluded` arrays each
+// time: unguarded, every listing would write to `filters` for a query nobody
+// touched.
 watch(
   parsed,
   (next) => {
@@ -97,12 +99,7 @@ watch(
   { immediate: true },
 );
 
-watch(filters, () => {
-  if (equalFilters(parseQuery(query.value), filters)) return;
-  query.value = formatQuery(filters);
-});
-
-// The address follows the line, whoever moved it — typing, a select, Reset.
+// The address follows the line — typed, completed or cleared.
 watch(query, (line) => {
   window.history.replaceState(null, "", urlWithQuery(window.location.href, line));
 });
@@ -149,8 +146,8 @@ function focusInput(): void {
 }
 
 /** The × in the box: the search's own affordance, where the hand already is.
- *  The line holds the whole filter set, so emptying it empties the controls
- *  too — the same end as #filter-reset, reached from the other editor. */
+ *  The line holds the whole filter set, so emptying it puts the whole board
+ *  back — every term at once, whatever was narrowing it. */
 function clear(): void {
   query.value = "";
   dismissed.value = false;
@@ -178,7 +175,7 @@ async function accept(at: number): Promise<void> {
 /**
  * The keys the menu owns, and only while it has something to show. Everything
  * else — Tab above all — is left to the browser: this is a suggestion list, not
- * a focus trap, and tabbing out of it has to reach the filter bar.
+ * a focus trap, and tabbing out of it has to reach the rest of the page.
  */
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {

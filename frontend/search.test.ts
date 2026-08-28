@@ -5,7 +5,6 @@ import {
   canonicalValues,
   completeQuery,
   equalFilters,
-  formatQuery,
   parseQuery,
   queryFromURL,
   sameFilters,
@@ -180,13 +179,13 @@ describe("parseQuery", () => {
       ]);
     });
 
-    test("an exclusion does not take the slot the select holds", () => {
+    test("an exclusion does not take the positive slot for its key", () => {
       expect(parseQuery("priority=high -priority=low")).toEqual(
         filters({ priority: "high", excluded: [without("priority", "low")] }),
       );
     });
 
-    test("-ready is ready=false: the control is a checkbox, and has no third state", () => {
+    test("-ready is ready=false: readiness is a yes or a no, with no third state", () => {
       expect(parseQuery("-ready").ready).toBe(false);
       expect(parseQuery("ready -ready").ready).toBe(false);
       expect(parseQuery("-ready=false").ready).toBe(true);
@@ -200,67 +199,6 @@ describe("parseQuery", () => {
       expect(parseQuery("-")).toEqual(NO_FILTERS);
       expect(parseQuery("auth -")).toEqual(filters({ text: [word("auth")] }));
     });
-  });
-});
-
-describe("formatQuery", () => {
-  test("an empty filter set is an empty query", () => {
-    expect(formatQuery(NO_FILTERS)).toBe("");
-  });
-
-  test("writes text first, then the keys in order", () => {
-    const query = formatQuery(
-      filters({
-        text: [word("oidc")],
-        status: "todo",
-        priority: "urgent",
-        label: "bug",
-        ready: true,
-      }),
-    );
-    expect(query).toBe("oidc status=todo priority=urgent label=bug ready");
-  });
-
-  test("writes the exclusions after the keys", () => {
-    expect(
-      formatQuery(filters({ text: [not("done")], priority: "high", excluded: [without("label", "bug")] })),
-    ).toBe("-done priority=high -label=bug");
-  });
-
-  test("quotes a value with spaces in it", () => {
-    expect(formatQuery(filters({ assignee: "agent ui" }))).toBe('assignee="agent ui"');
-    expect(formatQuery(filters({ excluded: [without("assignee", "agent ui")] }))).toBe(
-      '-assignee="agent ui"',
-    );
-  });
-
-  test("quotes text that would read back as something else", () => {
-    expect(formatQuery(filters({ text: [word("ready")] }))).toBe('"ready"');
-    expect(formatQuery(filters({ text: [word("status=todo")] }))).toBe('"status=todo"');
-    expect(formatQuery(filters({ text: [word("-done")] }))).toBe('"-done"');
-    expect(formatQuery(filters({ text: [word("two words")] }))).toBe('"two words"');
-  });
-
-  test("a negated phrase keeps its dash outside the quotes", () => {
-    expect(formatQuery(filters({ text: [not("two words")] }))).toBe('-"two words"');
-    expect(formatQuery(filters({ text: [not("-done")] }))).toBe('-"-done"');
-  });
-
-  test("round-trips every filter set back to itself", () => {
-    const sets = [
-      NO_FILTERS,
-      filters({ status: "todo", ready: true }),
-      filters({ text: [word("two words")], assignee: "agent ui" }),
-      filters({ text: [word("ready")], priority: "urgent" }),
-      filters({ text: [word("status=todo")] }),
-      filters({ label: "component/api", text: [word("oidc"), word("login")] }),
-      filters({ text: [not("done"), word("auth")] }),
-      filters({ text: [not("two words")] }),
-      filters({ text: [word("-done")] }),
-      filters({ excluded: [without("priority", "low"), without("label", "bug")] }),
-      filters({ priority: "high", excluded: [without("priority", "low")] }),
-    ];
-    for (const set of sets) expect(parseQuery(formatQuery(set))).toEqual(set);
   });
 });
 
@@ -309,17 +247,17 @@ describe("NO_FILTERS", () => {
 });
 
 describe("sameFilters", () => {
-  // The other question `equalFilters` does not answer: not "does the line have
-  // to be rewritten" but "does the control have to be moved", and case decides
-  // the second while it must not decide the first.
-  test("a difference of case in a field a select holds is a difference", () => {
+  // The other question `equalFilters` does not answer: not "do these two hide
+  // the same cards" but "is this the same set down to its spelling", which is
+  // what decides whether a correction is written through.
+  test("a difference of case in a canonicalised field is a difference", () => {
     const typed = filters({ status: "TODO" });
     const canonical = filters({ status: "todo" });
     expect(equalFilters(typed, canonical)).toBe(true);
     expect(sameFilters(typed, canonical)).toBe(false);
   });
 
-  test("every field a select holds is compared exactly", () => {
+  test("every field canonicalValues rewrites is compared exactly", () => {
     expect(sameFilters(filters({ priority: "Urgent" }), filters({ priority: "urgent" }))).toBe(false);
     expect(sameFilters(filters({ label: "BUG" }), filters({ label: "bug" }))).toBe(false);
   });
@@ -357,12 +295,12 @@ describe("canonicalValues", () => {
     expect(canonicalValues(parseQuery("assignee=AGENT"), SOURCES).assignee).toBe("AGENT");
   });
 
-  test("what it corrects is not drift, so the line is never rewritten for it", () => {
+  test("what it corrects hides no different cards, but is still a correction", () => {
     const typed = parseQuery("status=TODO");
     const corrected = canonicalValues(typed, SOURCES);
-    // The line stays as typed…
+    // The two narrow the board identically…
     expect(equalFilters(corrected, typed)).toBe(true);
-    // …and the control still moves, which is `sameFilters`' job, not this one.
+    // …and the correction is still written through, which is `sameFilters`' job.
     expect(sameFilters(corrected, typed)).toBe(false);
   });
 });

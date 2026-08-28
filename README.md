@@ -99,12 +99,11 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
   each with a pencil to correct it, and cards show a 💬 count. They are still
   stored as the trailing `## Notes` section of the Markdown file that `tq note`
   writes, so a `## Notes` heading in the body itself stays part of the body.
-- "New task" creates a task; the filter bar narrows the board by status,
-  priority, assignee, label, or "ready only".
-- The search box above the bar is the same filter set written as one line, so
-  typing `priority=urgent` moves the select and moving the select rewrites the
-  line. Press `/` to put the cursor in it, `×` to empty it, the arrows to walk
-  the suggestions and Enter to take one. The query is kept in the address as `?q=`,
+- "New task" creates a task.
+- The search box is the one control the board is narrowed from — status,
+  priority, assignee, label, readiness and free text, all written as one line.
+  Press `/` to put the cursor in it, `×` to empty it, the arrows to walk the
+  suggestions and Enter to take one. The query is kept in the address as `?q=`,
   which is what makes a filtered board a link and what brings it back on a
   reload.
 
@@ -364,8 +363,9 @@ labels:
 
 The key is the label exactly as task frontmatter stores it, and exactly what
 `tq list --label component/backend` takes. A `/` groups labels **for display
-only**, the way GitLab groups scoped labels: the board puts them under a heading
-in the filter bar, and storage stays one flat string.
+only**, the way GitLab groups scoped labels: the board draws a scoped label as
+two halves and the search box spells both out, and storage stays one flat
+string.
 
 The set is a reference, not a restriction. A label outside it is accepted by
 `tq add`, `tq update` and the API alike, and renders in a neutral colour rather

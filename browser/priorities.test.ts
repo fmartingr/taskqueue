@@ -1,6 +1,6 @@
 /**
- * Priorities on the board: the badge a card draws, and the three selects that
- * choose between them.
+ * Priorities on the board: the badge a card draws, the two dialog selects that
+ * choose between them, and the values the search bar offers for `priority=`.
  *
  * These are the closed set labels are not, so the interesting cases are the
  * ones only a browser shows: options built from `.taskqueue.yaml` rather than
@@ -12,6 +12,7 @@
 import { expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Page } from "playwright-core";
 import { card, idsIn, useBoard, type Project } from "./harness";
 
 const openBoard = useBoard();
@@ -39,18 +40,31 @@ async function options(page: Awaited<ReturnType<typeof openBoard>>["page"], sele
   );
 }
 
-test("the selects are built from the project's vocabulary, not the markup", async () => {
+/** The values the search bar offers for a key, with the display name beside
+ *  each — the same vocabulary, reached from the other surface. */
+async function suggestions(page: Page, typed: string) {
+  await page.click("#search-query");
+  await page.fill("#search-query", typed);
+  return page.$$eval("#search-suggestions .search-option", (nodes) =>
+    nodes.map((node) => ({
+      value: node.querySelector(".search-option-label")?.textContent ?? "",
+      detail: node.querySelector(".search-option-detail")?.textContent ?? "",
+    })),
+  );
+}
+
+test("both surfaces are built from the project's vocabulary, not the markup", async () => {
   const { page } = await openBoard((project) => {
     setPriorities(project, CUSTOM);
     project.add("Anything");
   });
 
-  // The filter bar keeps its "any", then offers the configured set in order.
-  expect(await options(page, "#filter-priority")).toEqual([
-    { value: "", text: "any", title: "" },
-    { value: "p0", text: "Critical", title: "p0" },
-    { value: "p1", text: "p1", title: "p1" },
-    { value: "p2", text: "Ordinary", title: "p2" },
+  // The search bar offers the configured set in rank order, most severe first,
+  // with the display name beside the value the query takes.
+  expect(await suggestions(page, "priority=")).toEqual([
+    { value: "p0", detail: "Critical" },
+    { value: "p1", detail: "" },
+    { value: "p2", detail: "Ordinary" },
   ]);
 
   // The create dialog offers the same set, preselected at the configured
@@ -105,11 +119,11 @@ test("filtering by a configured priority hides the rest", async () => {
     ordinary = project.add("Later", "--priority", "p2");
   });
 
-  await page.selectOption("#filter-priority", "p0");
+  await page.fill("#search-query", "priority=p0");
   await page.waitForSelector(card(ordinary), { state: "detached" });
   expect(await idsIn(page, "todo")).toEqual([critical]);
 
-  await page.selectOption("#filter-priority", "");
+  await page.fill("#search-query", "");
   await page.waitForSelector(card(ordinary));
 });
 

@@ -67,16 +67,9 @@ body {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
-/* The search bar takes the first row beside the brand; the filter bar it writes
-   into takes a row of its own below, which is what flex-basis: 100% forces. */
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  flex: 1 1 100%;
-}
-
+/* The search bar shares the top bar with the brand and the New task button, and
+   takes whatever width the two of them leave. It wraps onto a row of its own
+   before it goes below min-width. */
 .search {
   position: relative;
   display: flex;
@@ -100,8 +93,7 @@ body {
 }
 
 /* The × in the box: the search's own affordance, where the hand already is.
-   The line holds the whole filter set, so it empties the bar as Reset does —
-   a second place to do it, not a second scope. */
+   The line holds the whole filter set, so it puts the whole board back. */
 .search-clear {
   position: absolute;
   top: 50%;
@@ -184,16 +176,6 @@ label {
   color: var(--muted);
 }
 
-label.checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  text-transform: none;
-  font-size: 13px;
-  letter-spacing: 0;
-  color: var(--text);
-}
-
 input,
 select,
 textarea {
@@ -203,13 +185,6 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 8px;
-}
-
-input[type="checkbox"] {
-  padding: 0;
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent);
 }
 
 input:focus-visible,

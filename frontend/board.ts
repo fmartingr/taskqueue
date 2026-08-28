@@ -2,7 +2,7 @@
  * The board's decisions, taken away from the DOM.
  *
  * Everything here maps data to data: the task shape the API returns, the
- * dependency lookups the cards need, and the filter bar. The components keep
+ * dependency lookups the cards need, and the filtering. The components keep
  * the fetching, the rendering and the event wiring, so the rules below can be
  * unit-tested with `bun test` and no browser — and no Vue.
  *
@@ -118,9 +118,9 @@ export interface TextTerm {
 /**
  * A value a task must not carry — the `-priority=low` form.
  *
- * A list rather than a slot per key, unlike the positive terms below: the
- * controls hold one value each because a select does, and nothing shows an
- * exclusion at all, so there is no reason to keep only the last one.
+ * A list rather than a slot per key, unlike the positive terms below: there is
+ * one slot per field because the newest thing typed is the one meant, but
+ * excluding two labels at once is a sensible thing to ask for.
  */
 export interface ExcludedTerm {
   key: "status" | "priority" | "assignee" | "label";
@@ -136,8 +136,7 @@ export interface Filters {
   /**
    * Free text from the search bar: words and phrases the id, the title or the
    * body has to carry. It is a filter like any other rather than a mode of its
-   * own, so one query and the selects above it are the same state — see
-   * search.ts.
+   * own — one query line stands for this whole set, see search.ts.
    */
   text: TextTerm[];
   /** What the search bar's `-` terms exclude; nothing else writes to it. */
@@ -206,7 +205,7 @@ export interface LabelHalves {
   value: string;
 }
 
-/** The joiner for a control that has one line of text and no second half. */
+/** The joiner where only one line of text fits, and there is no second half. */
 export const LABEL_JOINER = " | ";
 
 /**
@@ -246,8 +245,9 @@ export function labelHalves(name: string, labels: LabelSet): LabelHalves {
 }
 
 /**
- * What the board shows for a label where only one line of text fits — an
- * <option>, where the two halves a chip draws have to be spelled out.
+ * What the board shows for a label where only one line of text fits — a row of
+ * the search bar's suggestion menu, where the two halves a chip draws have to
+ * be spelled out.
  */
 export function labelDisplay(name: string, labels: LabelSet): string {
   const { scope, value } = labelHalves(name, labels);
@@ -313,44 +313,6 @@ function luminance(color: string): number {
 
 const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 
-export interface GroupedLabel {
-  name: string;
-  display: string;
-  /** False for a label tasks carry that the project does not declare. */
-  configured: boolean;
-}
-
-export interface LabelGroup {
-  /** The prefix before the first separator, or "" for a label without one. */
-  prefix: string;
-  labels: GroupedLabel[];
-}
-
-/**
- * The label list the filter bar offers: everything the project declares plus
- * everything the tasks actually carry, grouped by prefix. Both are needed —
- * a configured label nothing uses is still part of the vocabulary, and a label
- * in use that nothing declares still has to be filterable.
- */
-export function groupLabels(labels: LabelSet, inUse: string[]): LabelGroup[] {
-  const names = [...new Set([...Object.keys(labels), ...inUse])].filter((name) => name !== "").sort();
-
-  const groups = new Map<string, GroupedLabel[]>();
-  for (const name of names) {
-    const at = name.indexOf(LABEL_SEPARATOR);
-    const prefix = at > 0 ? name.slice(0, at) : "";
-    const group = groups.get(prefix) ?? [];
-    group.push({ name, display: labelDisplay(name, labels), configured: isConfigured(name, labels) });
-    groups.set(prefix, group);
-  }
-
-  // Ungrouped labels first — the flat types — then the groups by name, so the
-  // bar reads the same on every render.
-  return [...groups.entries()]
-    .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a < b ? -1 : 1))
-    .map(([prefix, group]) => ({ prefix, labels: group }));
-}
-
 // ── Priorities ──────────────────────────────────────────────────
 
 /**
@@ -401,12 +363,10 @@ export interface PriorityOption {
 }
 
 /**
- * The options a priority select offers: the vocabulary in rank order, then any
- * extra value that has to stay selectable — the priority of the task being
- * edited, or the one the filter bar is on — even though the project has dropped
- * it. Dropping such an option instead would leave the filter bar reading as one
- * priority while the board hid everything, and the task dialog reading as
- * another while its next save rewrote the file.
+ * The options a priority select offers: the vocabulary in rank order, then the
+ * priority of the task being edited, even though the project has dropped it.
+ * Dropping such an option instead would leave the task dialog reading as one
+ * priority while its next save rewrote the file with another.
  */
 export function priorityOptions(priorities: PrioritySet, extras: string[]): PriorityOption[] {
   const options = priorities.map((priority) => ({
@@ -424,8 +384,9 @@ export function priorityOptions(priorities: PrioritySet, extras: string[]): Prio
 // ── Filtering ───────────────────────────────────────────────────
 
 /**
- * Applies the filter bar. It needs the whole task set rather than a slice of
- * it, because readiness depends on the state of the tasks a filter is hiding.
+ * Applies the search bar's filter set. It needs the whole task set rather than
+ * a slice of it, because readiness depends on the state of the tasks a filter
+ * is hiding.
  */
 export function visibleTasks(tasks: Task[], filters: Filters, columns: ColumnSet): Task[] {
   const { status, priority, assignee, label, ready, text, excluded } = filters;
@@ -461,15 +422,15 @@ function isValue(held: string, wanted: string): boolean {
   return held.toLowerCase() === wanted.trim().toLowerCase();
 }
 
-/** The assignee box is a search field, so it matches substrings: typing "agent"
- *  keeps agent-api and agent-ui. */
+/** `assignee=` matches substrings, because a name is not a vocabulary: typing
+ *  `assignee=agent` keeps agent-api and agent-ui. */
 function contains(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.trim().toLowerCase());
 }
 
-/** The label filter is a list of the labels that exist rather than a search
- *  field, so it matches a label whole — which also keeps "component/backend"
- *  from being selected by "backend". */
+/** `label=` names one of the labels that exist rather than searching for text,
+ *  so it matches a label whole — which keeps `label=backend` from selecting
+ *  "component/backend". */
 function carriesLabel(task: Task, wanted: string): boolean {
   return (task.labels ?? []).some((label) => isValue(label, wanted));
 }

@@ -1,10 +1,10 @@
 /**
  * The search bar's query language, taken away from the DOM.
  *
- * One line of text stands for the same thing the filter bar holds: a `Filters`.
- * `parseQuery` reads the line into one, `formatQuery` writes one back out, and
- * the component keeps the two in step — so a query and the selects are never
- * two sources of truth, they are one state with two editors.
+ * One line of text stands for a whole `Filters`: `parseQuery` reads the line
+ * into one, and that is the only direction there is. The line is the input and
+ * the filter set is what it parses to, so there is nothing to keep in step
+ * (TQ-0098).
  *
  * `completeQuery` is the other half: given a caret, it says which slice of the
  * query is being typed and what could go there. The values come from the
@@ -45,7 +45,7 @@ import type { ExcludedTerm, Filters, TextTerm } from "./board";
  */
 export type ValueKey = ExcludedTerm["key"];
 
-/** The keys that take a value, in the order a formatted query lists them. */
+/** The keys that take a value, in the order the suggestion menu offers them. */
 const VALUE_KEYS: readonly ValueKey[] = ["status", "priority", "label", "assignee"];
 
 /** Every key a query can set. `ready` is last because it is the odd one: a
@@ -207,11 +207,10 @@ function parseReady(value: string): boolean {
  * the filter state: deleting `status=todo` has to clear the status filter, not
  * leave the last one standing.
  *
- * A positive key repeated keeps the last one — there is one slot per field, one
- * control per slot, and the newest thing typed is the one meant. Negated keys
- * are a list instead: excluding two labels is a sensible thing to ask for, and
- * no control shows them anyway. An unknown key is not an error: it is free text,
- * so `oidc=` in a title still finds the task.
+ * A positive key repeated keeps the last one — there is one slot per field, and
+ * the newest thing typed is the one meant. Negated keys are a list instead:
+ * excluding two labels at once is a sensible thing to ask for. An unknown key is
+ * not an error: it is free text, so `oidc=` in a title still finds the task.
  *
  * Free text is a term per bare word, all of which have to match — what a search
  * box is expected to do. A quoted run stays one phrase, which is how a phrase is
@@ -249,53 +248,6 @@ function quoteValue(value: string): string {
   return clean === "" || /\s/.test(clean) ? `"${clean}"` : clean;
 }
 
-/** Whether a piece of free text would read back as something other than itself:
- *  a term, a `ready`, a negation, or two words instead of one. */
-function readsAsTerm(clean: string): boolean {
-  if (clean === "" || /\s/.test(clean) || clean.startsWith(NOT)) return true;
-  const at = splitAt(clean);
-  if (at > 0 && isSearchKey(clean.slice(0, at).toLowerCase())) return true;
-  return clean.toLowerCase() === READY;
-}
-
-/** Free text needs quoting only when it would read back as something else. */
-function quoteText(text: string): string {
-  const clean = unquote(text);
-  return readsAsTerm(clean) ? `"${clean}"` : clean;
-}
-
-/**
- * Writes a filter set back out as a query.
- *
- * The canonical order is free text first, then the keys in `SEARCH_KEYS` order,
- * with the exclusions after the key they belong to would have gone. It is only
- * ever reached for by the component when the query and the filters have actually
- * drifted apart — a select moved — so what the user typed is never rewritten
- * under their cursor while they are typing it.
- */
-export function formatQuery(filters: Filters): string {
-  const parts: string[] = [];
-
-  for (const term of filters.text) {
-    const value = term.value.trim();
-    if (value !== "") parts.push((term.negated ? NOT : "") + quoteText(value));
-  }
-
-  for (const key of VALUE_KEYS) {
-    const value = filters[key].trim();
-    if (value !== "") parts.push(`${key}=${quoteValue(value)}`);
-  }
-
-  for (const term of filters.excluded) {
-    const value = term.value.trim();
-    if (value !== "") parts.push(`${NOT}${term.key}=${quoteValue(value)}`);
-  }
-
-  if (filters.ready) parts.push(READY);
-
-  return parts.join(" ");
-}
-
 /** Two values that constrain the board identically. Case is not one of the ways
  *  they can differ, because nothing matches case-sensitively (see board.ts). */
 function sameValue(a: string, b: string): boolean {
@@ -316,8 +268,8 @@ function sameExcluded(a: ExcludedTerm[], b: ExcludedTerm[]): boolean {
   );
 }
 
-/** Whether two filter sets say the same thing — how the component knows the
- *  query and the selects still agree, and that the *line* need not be rewritten. */
+/** Whether two filter sets hide the same cards. Case is not one of the ways
+ *  they can differ, for the reason `sameValue` gives above. */
 export function equalFilters(a: Filters, b: Filters): boolean {
   return (
     sameValue(a.status, b.status) &&
@@ -331,17 +283,16 @@ export function equalFilters(a: Filters, b: Filters): boolean {
 }
 
 /**
- * Whether two filter sets are the same down to the spelling — how the component
- * knows the *controls* need not be moved.
+ * Whether two filter sets are the same down to the spelling — the guard on the
+ * one write the search bar makes to the shared filter set.
  *
- * Two questions, deliberately not one. Whether the line has to be rewritten is
- * `equalFilters` above, and case is not a difference there: correcting one under
- * the cursor is exactly what must not happen. Whether the controls have to be
- * moved is this, and case *is* a difference: a select is an exact list, so a
- * value off by one capital selects nothing and the bar reads "any" beside a
- * board that is hiding cards. Only the fields `canonicalValues` rewrites are
- * compared exactly — a trimmed assignee would otherwise be tidied up under
- * whoever was typing it.
+ * Two predicates, deliberately not one. `equalFilters` above ignores case, which
+ * is right for "do these two hide the same cards" and wrong here: the whole
+ * point of `canonicalValues` is to replace a hand-typed value with the project's
+ * own spelling, and a guard that called the correction equal would skip it and
+ * leave the filter set on what was typed. Only the fields `canonicalValues`
+ * rewrites are compared exactly — a trimmed assignee would otherwise be tidied
+ * up under whoever was typing it.
  */
 export function sameFilters(a: Filters, b: Filters): boolean {
   return equalFilters(a, b) && CANONICAL_KEYS.every((key) => a[key] === b[key]);
@@ -367,7 +318,7 @@ export type Sources = Record<ValueKey, Option[]>;
 const READY_OPTIONS: Option[] = [{ value: "true" }, { value: "false" }];
 
 /**
- * The fields a control offers as an exact list, and so the only ones worth
+ * The fields the project declares an exact list of, and so the only ones worth
  * correcting the case of. The assignee filter is a substring of a freeform name:
  * there is nothing to be canonical about, and rewriting it would tidy up what
  * someone was still typing.
@@ -375,15 +326,11 @@ const READY_OPTIONS: Option[] = [{ value: "true" }, { value: "false" }];
 const CANONICAL_KEYS = ["status", "priority", "label"] as const;
 
 /**
- * Replaces a mis-cased value with the project's own spelling of it.
+ * Replaces a mis-cased value with the project's own spelling of it, so the
+ * filter set holds the vocabulary's own words rather than whatever was typed.
  *
- * Matching ignores case, so `status=TODO` already finds the right tasks — but
- * the select it stands for is an exact list, and would sit blank beside a board
- * it is supposedly filtering.
- *
- * The query line itself is left exactly as typed: `equalFilters` ignores case,
- * so a value corrected here is not drift and the line is not rewritten under the
- * cursor. `sameFilters` is what notices the correction and moves the control.
+ * The query line itself is left exactly as typed: correcting it under the cursor
+ * is the one thing this must not do.
  */
 export function canonicalValues(filters: Filters, sources: Sources): Filters {
   const corrected: Filters = { ...filters };

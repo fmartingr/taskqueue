@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   CHIP_DARK_TEXT,
   CHIP_LIGHT_TEXT,
-  groupLabels,
   indexTasks,
   isConfigured,
   isReady,
@@ -339,8 +338,8 @@ describe("visibleTasks", () => {
     });
   });
 
-  // The `-key=value` half of the same feature: an exclusion the filter bar has
-  // no control for, so the query line is the only thing that holds it.
+  // The `-key=value` half of the same feature: taking a value away rather than
+  // choosing one, which is the half no set of controls ever offered.
   describe("exclusions", () => {
     const excluded = (...terms: ExcludedTerm[]) => filters({ excluded: terms });
 
@@ -488,55 +487,6 @@ describe("labelChip", () => {
   });
 });
 
-describe("groupLabels", () => {
-  test("groups by the prefix before the first slash, ungrouped first", () => {
-    const groups = groupLabels(LABELS, []);
-    expect(groups.map((group) => group.prefix)).toEqual(["", "component"]);
-    expect(groups[0]!.labels.map((label) => label.name)).toEqual(["broken", "bug"]);
-    expect(groups[1]!.labels.map((label) => label.display)).toEqual([
-      "Component | Backend",
-      "Component | Frontend",
-    ]);
-  });
-
-  test("labels in use join their group even when unconfigured", () => {
-    const groups = groupLabels(LABELS, ["component/docs", "loose"]);
-    const component = groups.find((group) => group.prefix === "component")!;
-    expect(component.labels.map((label) => label.name)).toEqual([
-      "component/backend",
-      "component/docs",
-      "component/frontend",
-    ]);
-    expect(component.labels.find((label) => label.name === "component/docs")).toEqual({
-      name: "component/docs",
-      display: "Component | Docs",
-      configured: false,
-    });
-    expect(groups[0]!.labels.map((label) => label.name)).toEqual(["broken", "bug", "loose"]);
-  });
-
-  test("a label in use twice appears once", () => {
-    const groups = groupLabels({}, ["loose", "loose"]);
-    expect(groups).toEqual([{ prefix: "", labels: [{ name: "loose", display: "loose", configured: false }] }]);
-  });
-
-  test("only the first slash groups: the rest is part of the label", () => {
-    const groups = groupLabels({}, ["a/b/c"]);
-    expect(groups).toEqual([
-      { prefix: "a", labels: [{ name: "a/b/c", display: "A | B/C", configured: false }] },
-    ]);
-  });
-
-  test("nothing configured and nothing in use is no groups at all", () => {
-    expect(groupLabels({}, [])).toEqual([]);
-  });
-
-  test("groups come out in a stable order", () => {
-    const groups = groupLabels({ "z/one": { color: "#fff", display_name: "" } }, ["a/two", "m"]);
-    expect(groups.map((group) => group.prefix)).toEqual(["", "a", "z"]);
-  });
-});
-
 describe("labelsInUse", () => {
   test("collects every label on every task, once", () => {
     const tasks = [
@@ -556,7 +506,6 @@ describe("labels that collide with Object.prototype", () => {
   test("are not reported as configured", () => {
     for (const name of inherited) {
       expect(isConfigured(name, LABELS)).toBe(false);
-      expect(groupLabels({}, [name])[0]!.labels[0]).toEqual({ name, display: name, configured: false });
     }
   });
 

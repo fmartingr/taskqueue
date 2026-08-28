@@ -1,17 +1,32 @@
 import { describe, expect, test } from "bun:test";
-import type { Filters } from "./board";
+import type { ExcludedTerm, Filters, TextTerm } from "./board";
 import {
   applyCompletion,
+  canonicalValues,
   completeQuery,
   equalFilters,
   formatQuery,
   parseQuery,
+  queryFromURL,
+  sameFilters,
   tokenize,
+  urlWithQuery,
   NO_FILTERS,
   type Sources,
 } from "./search";
 
-const filters = (overrides: Partial<Filters>): Filters => ({ ...NO_FILTERS, ...overrides });
+const filters = (overrides: Partial<Filters>): Filters => ({
+  ...NO_FILTERS,
+  text: [],
+  excluded: [],
+  ...overrides,
+});
+
+/** One free-text term the query has to find, and one it must not. */
+const word = (value: string): TextTerm => ({ value, negated: false });
+const not = (value: string): TextTerm => ({ value, negated: true });
+
+const without = (key: ExcludedTerm["key"], value: string): ExcludedTerm => ({ key, value });
 
 /** Stands in for a project's vocabularies and the assignees its tasks carry. */
 const SOURCES: Sources = {
@@ -44,7 +59,14 @@ describe("tokenize", () => {
 
   test("a quoted value keeps its spaces", () => {
     expect(tokenize('assignee="agent ui"')).toEqual([
-      { start: 0, end: 19, raw: 'assignee="agent ui"', key: "assignee", value: "agent ui" },
+      {
+        start: 0,
+        end: 19,
+        raw: 'assignee="agent ui"',
+        negated: false,
+        key: "assignee",
+        value: "agent ui",
+      },
     ]);
   });
 
@@ -52,6 +74,18 @@ describe("tokenize", () => {
     const tokens = tokenize('assignee="agent u');
     expect(tokens).toHaveLength(1);
     expect(tokens[0]!.value).toBe("agent u");
+  });
+
+  test("a leading dash is the negation, and a quoted one is a character", () => {
+    expect(tokenize("-done").map((token) => [token.negated, token.key, token.value])).toEqual([
+      [true, "", "done"],
+    ]);
+    expect(tokenize("-priority=low").map((token) => [token.negated, token.key, token.value])).toEqual([
+      [true, "priority", "low"],
+    ]);
+    expect(tokenize('"-done"').map((token) => [token.negated, token.key, token.value])).toEqual([
+      [false, "", "-done"],
+    ]);
   });
 
   test("runs of whitespace are not terms", () => {
@@ -72,7 +106,9 @@ describe("parseQuery", () => {
     );
   });
 
-  test("keys are case-insensitive; values are taken verbatim", () => {
+  test("keys are case-insensitive; values are taken as typed", () => {
+    // The board matches without case (see board.ts), so a value is not
+    // corrected here — the line stays what was typed.
     expect(parseQuery("PRIORITY=Urgent")).toEqual(filters({ priority: "Urgent" }));
   });
 
@@ -85,12 +121,16 @@ describe("parseQuery", () => {
     expect(parseQuery("ready=no").ready).toBe(false);
   });
 
-  test("everything else is free text, joined as one phrase", () => {
-    expect(parseQuery("global search bar").text).toBe("global search bar");
+  test("every bare word is a term of its own, and all of them have to match", () => {
+    expect(parseQuery("global search bar").text).toEqual([word("global"), word("search"), word("bar")]);
+  });
+
+  test("a quoted run stays one phrase", () => {
+    expect(parseQuery('"global search" bar').text).toEqual([word("global search"), word("bar")]);
   });
 
   test("an unknown key is free text, kept whole", () => {
-    expect(parseQuery("owner=nobody")).toEqual(filters({ text: "owner=nobody" }));
+    expect(parseQuery("owner=nobody")).toEqual(filters({ text: [word("owner=nobody")] }));
   });
 
   test("a key with no value is no constraint", () => {
@@ -106,14 +146,60 @@ describe("parseQuery", () => {
   });
 
   test("a quoted term is text, whatever it looks like", () => {
-    expect(parseQuery('"priority=urgent"')).toEqual(filters({ text: "priority=urgent" }));
-    expect(parseQuery('"ready"')).toEqual(filters({ text: "ready" }));
+    expect(parseQuery('"priority=urgent"')).toEqual(filters({ text: [word("priority=urgent")] }));
+    expect(parseQuery('"ready"')).toEqual(filters({ text: [word("ready")] }));
+    expect(parseQuery('"-done"')).toEqual(filters({ text: [word("-done")] }));
   });
 
   test("text and terms mix in any order", () => {
     expect(parseQuery("status=todo oidc ready")).toEqual(
-      filters({ status: "todo", text: "oidc", ready: true }),
+      filters({ status: "todo", text: [word("oidc")], ready: true }),
     );
+  });
+
+  describe("negation", () => {
+    test("a word is excluded", () => {
+      expect(parseQuery("auth -done")).toEqual(filters({ text: [word("auth"), not("done")] }));
+    });
+
+    test("a phrase is excluded whole", () => {
+      expect(parseQuery('-"global search"')).toEqual(filters({ text: [not("global search")] }));
+    });
+
+    test("a key's value is excluded, and several can be", () => {
+      expect(parseQuery("-priority=low -priority=normal")).toEqual(
+        filters({ excluded: [without("priority", "low"), without("priority", "normal")] }),
+      );
+    });
+
+    test("every key can be excluded", () => {
+      expect(parseQuery('-status=done -label=bug -assignee="agent ui"').excluded).toEqual([
+        without("status", "done"),
+        without("label", "bug"),
+        without("assignee", "agent ui"),
+      ]);
+    });
+
+    test("an exclusion does not take the slot the select holds", () => {
+      expect(parseQuery("priority=high -priority=low")).toEqual(
+        filters({ priority: "high", excluded: [without("priority", "low")] }),
+      );
+    });
+
+    test("-ready is ready=false: the control is a checkbox, and has no third state", () => {
+      expect(parseQuery("-ready").ready).toBe(false);
+      expect(parseQuery("ready -ready").ready).toBe(false);
+      expect(parseQuery("-ready=false").ready).toBe(true);
+    });
+
+    test("an unknown key negated is negated free text", () => {
+      expect(parseQuery("-owner=nobody")).toEqual(filters({ text: [not("owner=nobody")] }));
+    });
+
+    test("a lone dash is a negation being typed, not a term", () => {
+      expect(parseQuery("-")).toEqual(NO_FILTERS);
+      expect(parseQuery("auth -")).toEqual(filters({ text: [word("auth")] }));
+    });
   });
 });
 
@@ -124,28 +210,55 @@ describe("formatQuery", () => {
 
   test("writes text first, then the keys in order", () => {
     const query = formatQuery(
-      filters({ text: "oidc", status: "todo", priority: "urgent", label: "bug", ready: true }),
+      filters({
+        text: [word("oidc")],
+        status: "todo",
+        priority: "urgent",
+        label: "bug",
+        ready: true,
+      }),
     );
     expect(query).toBe("oidc status=todo priority=urgent label=bug ready");
   });
 
-  test("quotes a value with spaces in it", () => {
-    expect(formatQuery(filters({ assignee: "agent ui" }))).toBe('assignee="agent ui"');
+  test("writes the exclusions after the keys", () => {
+    expect(
+      formatQuery(filters({ text: [not("done")], priority: "high", excluded: [without("label", "bug")] })),
+    ).toBe("-done priority=high -label=bug");
   });
 
-  test("quotes text that would read back as a term", () => {
-    expect(formatQuery(filters({ text: "ready" }))).toBe('"ready"');
-    expect(formatQuery(filters({ text: "status=todo" }))).toBe('"status=todo"');
+  test("quotes a value with spaces in it", () => {
+    expect(formatQuery(filters({ assignee: "agent ui" }))).toBe('assignee="agent ui"');
+    expect(formatQuery(filters({ excluded: [without("assignee", "agent ui")] }))).toBe(
+      '-assignee="agent ui"',
+    );
+  });
+
+  test("quotes text that would read back as something else", () => {
+    expect(formatQuery(filters({ text: [word("ready")] }))).toBe('"ready"');
+    expect(formatQuery(filters({ text: [word("status=todo")] }))).toBe('"status=todo"');
+    expect(formatQuery(filters({ text: [word("-done")] }))).toBe('"-done"');
+    expect(formatQuery(filters({ text: [word("two words")] }))).toBe('"two words"');
+  });
+
+  test("a negated phrase keeps its dash outside the quotes", () => {
+    expect(formatQuery(filters({ text: [not("two words")] }))).toBe('-"two words"');
+    expect(formatQuery(filters({ text: [not("-done")] }))).toBe('-"-done"');
   });
 
   test("round-trips every filter set back to itself", () => {
     const sets = [
       NO_FILTERS,
       filters({ status: "todo", ready: true }),
-      filters({ text: "two words", assignee: "agent ui" }),
-      filters({ text: "ready", priority: "urgent" }),
-      filters({ text: "status=todo" }),
-      filters({ label: "component/api", text: "oidc login" }),
+      filters({ text: [word("two words")], assignee: "agent ui" }),
+      filters({ text: [word("ready")], priority: "urgent" }),
+      filters({ text: [word("status=todo")] }),
+      filters({ label: "component/api", text: [word("oidc"), word("login")] }),
+      filters({ text: [not("done"), word("auth")] }),
+      filters({ text: [not("two words")] }),
+      filters({ text: [word("-done")] }),
+      filters({ excluded: [without("priority", "low"), without("label", "bug")] }),
+      filters({ priority: "high", excluded: [without("priority", "low")] }),
     ];
     for (const set of sets) expect(parseQuery(formatQuery(set))).toEqual(set);
   });
@@ -154,9 +267,103 @@ describe("formatQuery", () => {
 describe("equalFilters", () => {
   test("compares every field", () => {
     expect(equalFilters(NO_FILTERS, { ...NO_FILTERS })).toBe(true);
-    expect(equalFilters(NO_FILTERS, filters({ text: "a" }))).toBe(false);
+    expect(equalFilters(NO_FILTERS, filters({ text: [word("a")] }))).toBe(false);
     expect(equalFilters(NO_FILTERS, filters({ ready: true }))).toBe(false);
+    expect(equalFilters(NO_FILTERS, filters({ excluded: [without("label", "bug")] }))).toBe(false);
     expect(equalFilters(filters({ status: "todo" }), filters({ status: "done" }))).toBe(false);
+  });
+
+  test("free text is compared in order, sign included", () => {
+    expect(equalFilters(filters({ text: [word("a"), word("b")] }), filters({ text: [word("a")] }))).toBe(
+      false,
+    );
+    expect(equalFilters(filters({ text: [word("a")] }), filters({ text: [not("a")] }))).toBe(false);
+    expect(equalFilters(filters({ text: [word("a")] }), filters({ text: [word("A")] }))).toBe(true);
+  });
+
+  test("case is not a difference, because nothing matches on it", () => {
+    expect(equalFilters(filters({ status: "todo" }), filters({ status: "TODO" }))).toBe(true);
+    expect(
+      equalFilters(
+        filters({ excluded: [without("label", "Bug")] }),
+        filters({ excluded: [without("label", "bug")] }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("NO_FILTERS", () => {
+  test("is frozen, arrays included, so a copy that aliases it cannot be pushed into", () => {
+    expect(Object.isFrozen(NO_FILTERS)).toBe(true);
+    expect(Object.isFrozen(NO_FILTERS.text)).toBe(true);
+    expect(Object.isFrozen(NO_FILTERS.excluded)).toBe(true);
+    expect(() => ({ ...NO_FILTERS }).text.push(word("a"))).toThrow();
+  });
+
+  test("parseQuery hands back arrays of its own", () => {
+    const parsed = parseQuery("");
+    expect(parsed.text).not.toBe(NO_FILTERS.text);
+    expect(parsed.excluded).not.toBe(NO_FILTERS.excluded);
+    expect(Object.isFrozen(parsed.text)).toBe(false);
+  });
+});
+
+describe("sameFilters", () => {
+  // The other question `equalFilters` does not answer: not "does the line have
+  // to be rewritten" but "does the control have to be moved", and case decides
+  // the second while it must not decide the first.
+  test("a difference of case in a field a select holds is a difference", () => {
+    const typed = filters({ status: "TODO" });
+    const canonical = filters({ status: "todo" });
+    expect(equalFilters(typed, canonical)).toBe(true);
+    expect(sameFilters(typed, canonical)).toBe(false);
+  });
+
+  test("every field a select holds is compared exactly", () => {
+    expect(sameFilters(filters({ priority: "Urgent" }), filters({ priority: "urgent" }))).toBe(false);
+    expect(sameFilters(filters({ label: "BUG" }), filters({ label: "bug" }))).toBe(false);
+  });
+
+  test("the assignee is not, because nothing canonicalises it", () => {
+    expect(sameFilters(filters({ assignee: "AGENT" }), filters({ assignee: "agent" }))).toBe(true);
+  });
+
+  test("anything equalFilters calls different is different here too", () => {
+    expect(sameFilters(NO_FILTERS, filters({ ready: true }))).toBe(false);
+    expect(sameFilters(filters({ text: [word("a")] }), filters({ text: [not("a")] }))).toBe(false);
+    expect(sameFilters(NO_FILTERS, filters({}))).toBe(true);
+  });
+
+  test("a correction the vocabularies make is seen, which is the whole point", () => {
+    const typed = parseQuery("status=INBOX label=BUG");
+    const corrected = canonicalValues(typed, SOURCES);
+    expect(equalFilters(corrected, typed)).toBe(true);
+    expect(sameFilters(corrected, typed)).toBe(false);
+    expect([corrected.status, corrected.label]).toEqual(["inbox", "bug"]);
+  });
+});
+
+describe("canonicalValues", () => {
+  test("replaces a mis-cased value with the project's own spelling", () => {
+    const corrected = canonicalValues(parseQuery("status=TODO priority=Urgent label=BUG"), SOURCES);
+    expect([corrected.status, corrected.priority, corrected.label]).toEqual(["todo", "urgent", "bug"]);
+  });
+
+  test("leaves a value the project does not declare alone", () => {
+    expect(canonicalValues(parseQuery("status=Elsewhere"), SOURCES).status).toBe("Elsewhere");
+  });
+
+  test("leaves the assignee alone: it is a substring of a freeform name", () => {
+    expect(canonicalValues(parseQuery("assignee=AGENT"), SOURCES).assignee).toBe("AGENT");
+  });
+
+  test("what it corrects is not drift, so the line is never rewritten for it", () => {
+    const typed = parseQuery("status=TODO");
+    const corrected = canonicalValues(typed, SOURCES);
+    // The line stays as typed…
+    expect(equalFilters(corrected, typed)).toBe(true);
+    // …and the control still moves, which is `sameFilters`' job, not this one.
+    expect(sameFilters(corrected, typed)).toBe(false);
   });
 });
 
@@ -200,6 +407,14 @@ describe("completeQuery", () => {
     ]);
   });
 
+  test("a negation carries its dash into what it suggests", () => {
+    expect(labels("-")).toEqual(["-status=", "-priority=", "-label=", "-assignee=", "-ready"]);
+    expect(labels("-pri")).toEqual(["-priority="]);
+    expect(complete("-priority=ur").suggestions.map((suggestion) => suggestion.insert)).toEqual([
+      "-priority=urgent",
+    ]);
+  });
+
   test("the span it replaces is the whole term the caret is in", () => {
     const completion = complete("oidc status=to ready", 14);
     expect([completion.start, completion.end]).toEqual([5, 14]);
@@ -236,5 +451,33 @@ describe("applyCompletion", () => {
 
   test("bare ready is accepted whole", () => {
     expect(accept("rea")).toEqual({ query: "ready ", caret: 6 });
+  });
+
+  test("a negation keeps its dash all the way through", () => {
+    expect(accept("-pri")).toEqual({ query: "-priority=", caret: 10 });
+    expect(accept("-priority=nor")).toEqual({ query: "-priority=normal ", caret: 17 });
+  });
+});
+
+describe("the address bar", () => {
+  test("reads the query out of a URL", () => {
+    expect(queryFromURL("http://127.0.0.1:7331/?q=priority%3Durgent")).toBe("priority=urgent");
+    expect(queryFromURL("http://127.0.0.1:7331/")).toBe("");
+    expect(queryFromURL("not a url")).toBe("");
+  });
+
+  test("writes it back as a relative reference, keeping whatever else is there", () => {
+    expect(urlWithQuery("http://127.0.0.1:7331/", "status=todo")).toBe("/?q=status%3Dtodo");
+    expect(urlWithQuery("http://127.0.0.1:7331/?tab=2", "oidc")).toBe("/?tab=2&q=oidc");
+  });
+
+  test("an empty query drops the parameter rather than leaving ?q= behind", () => {
+    expect(urlWithQuery("http://127.0.0.1:7331/?q=oidc", "")).toBe("/");
+    expect(urlWithQuery("http://127.0.0.1:7331/?q=oidc&tab=2", "  ")).toBe("/?tab=2");
+  });
+
+  test("round-trips a query with quotes and dashes in it", () => {
+    const query = '-"two words" priority=urgent';
+    expect(queryFromURL("http://x" + urlWithQuery("http://x/", query))).toBe(query);
   });
 });

@@ -73,7 +73,8 @@ export const filters = reactive<Filters>({
   assignee: "",
   label: "",
   ready: false,
-  text: "",
+  text: [],
+  excluded: [],
 });
 
 /** The project's label vocabulary, from GET /api/config. */

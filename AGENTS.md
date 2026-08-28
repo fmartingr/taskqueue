@@ -32,8 +32,8 @@ internal/fsx/      Atomic file write, shared by the two generators
 internal/tqtest/   Test fixtures shared across packages
 internal/integration/ Tests that drive the compiled binary (build tag)
 frontend/          main.ts, components/ (.vue), state.ts, api.ts, board.ts,
-                   notes.ts, adopt.ts, format.ts, index.html, style.css,
-                   build.ts (Bun)
+                   notes.ts, adopt.ts, search.ts, format.ts, index.html,
+                   style.css, build.ts (Bun)
 browser/           Tests that drive the board in a real Chromium (bun test)
 ```
 
@@ -64,7 +64,7 @@ frontend`, `make typecheck` or `make dev` will run.
 - Run `make typecheck` and `make frontend` after frontend changes, and commit
   the `public/` output; add `make test-frontend` when the change touches logic
   that is unit-tested (the pure helpers in `frontend/`, currently `notes.ts`,
-  `board.ts`, `adopt.ts` and `format.ts`). `bun build` strips types without checking them, so nothing else
+  `board.ts`, `adopt.ts`, `search.ts` and `format.ts`). `bun build` strips types without checking them, so nothing else
   in the pipeline sees a type error.
 - Run `make test-browser` after changes to the components, the board's markup or
   its styles. It needs a Chromium: `make browser-install` puts one in the cache.
@@ -294,7 +294,8 @@ frontend`, `make typecheck` or `make dev` will run.
 logic, the CLI (through `runCLI`, without spawning a binary) and the HTTP API
 (through `httptest`). Frontend logic that is pure — the notes split/join/merge in
 `frontend/notes.ts`, the indexing, dependency and filter rules in
-`frontend/board.ts`, and what an open dialog does with a task that changed under
+`frontend/board.ts`, the search bar's query language in `frontend/search.ts`,
+and what an open dialog does with a task that changed under
 it in `frontend/adopt.ts` — has `bun test` unit tests next to it
 (`make test-frontend`). Those files know nothing about Vue, which
 is what keeps the components down to rendering and events; `board.ts`'s

@@ -16,18 +16,37 @@
  *
  * The syntax, in full:
  *
- *   auth                     free text: a substring of the id, title or body
+ *   auth                     free text: a word the id, title or body carries
+ *   auth token               two words, both of which have to be carried
+ *   "auth token"             quoted, so the phrase has to be carried whole
  *   status=todo              a structured term; the key is case-insensitive
  *   assignee="agent api"     double quotes hold a value with spaces in it
  *   ready                    a bare word, the one key that needs no value
  *   ready=false              …and its explicit form
+ *   -auth                    negated: the word must not appear
+ *   -"auth token"            negated phrase
+ *   -priority=low            negated term: that value is excluded
+ *   -ready                   the same as ready=false
  *   "priority=urgent"        quoted, so it is free text rather than a term
+ *   "-auth"                  quoted, so the dash is a character rather than a no
+ *
+ * Values are matched case-insensitively, so a hand-typed `priority=Urgent`
+ * finds what the autocomplete's `priority=urgent` finds.
  */
 
-import type { Filters } from "./board";
+import type { ExcludedTerm, Filters, TextTerm } from "./board";
+
+/**
+ * A key that constrains a field of a task, as opposed to the board's own
+ * readiness rule. Only these can be excluded, since only these have a value.
+ *
+ * Taken from `ExcludedTerm` rather than declared again, so the list below and
+ * what board.ts filters on cannot drift apart.
+ */
+export type ValueKey = ExcludedTerm["key"];
 
 /** The keys that take a value, in the order a formatted query lists them. */
-const VALUE_KEYS = ["status", "priority", "label", "assignee"] as const;
+const VALUE_KEYS: readonly ValueKey[] = ["status", "priority", "label", "assignee"];
 
 /** Every key a query can set. `ready` is last because it is the odd one: a
  *  boolean, and the only key that may be written without a value. */
@@ -47,17 +66,36 @@ export const KEY_HINTS: Record<SearchKey, string> = {
 /** The one key whose value may be left out: `ready` alone means `ready=true`. */
 const READY = "ready";
 
+/** What turns a term into its opposite, written in front of it. */
+export const NOT = "-";
+
 const TRUE_WORDS = new Set(["", "true", "yes", "y", "1", "on"]);
 
-/** A filter set that constrains nothing — what an empty query parses to. */
-export const NO_FILTERS: Filters = {
+/**
+ * A filter set that constrains nothing — what an empty query parses to.
+ *
+ * Frozen, arrays included. It is a shared constant, and `{ ...NO_FILTERS }`
+ * copies the object while *aliasing* the two arrays, so one push into a copy's
+ * `text` would quietly change what "constrains nothing" means everywhere else.
+ * Frozen, that push throws where it is written instead of somewhere else later.
+ */
+export const NO_FILTERS: Readonly<Filters> = Object.freeze({
   status: "",
   priority: "",
   assignee: "",
   label: "",
   ready: false,
-  text: "",
-};
+  text: frozenEmpty<TextTerm>(),
+  excluded: frozenEmpty<ExcludedTerm>(),
+});
+
+/** An empty array nothing can push into, still typed as the mutable array the
+ *  shape asks for — the shape is what every other filter set has to satisfy. */
+function frozenEmpty<T>(): T[] {
+  const empty: T[] = [];
+  Object.freeze(empty);
+  return empty;
+}
 
 /**
  * One whitespace-separated term of a query, and where it sits in the line.
@@ -70,8 +108,10 @@ export interface Token {
   start: number;
   /** One past the last character, so `query.slice(start, end)` is the term. */
   end: number;
-  /** Exactly as typed, quotes included. */
+  /** Exactly as typed, quotes and any leading `-` included. */
   raw: string;
+  /** True when the term opened with an unquoted `-`. */
+  negated: boolean;
   /** The key, lowercased, or "" for free text. */
   key: SearchKey | "";
   /** The value with its quotes removed; the whole term for free text. */
@@ -99,24 +139,33 @@ function splitAt(raw: string): number {
   return -1;
 }
 
-/** Whether a term opens with a quote, the form that makes a key or a bare
- *  `ready` ordinary text again. */
+/** Whether a term opens with a quote, the form that makes a key, a bare `ready`
+ *  or a leading `-` ordinary text again. */
 function isQuoted(raw: string): boolean {
   return raw.startsWith('"');
 }
 
+/** The `-` in front of a term, and the term without it. A quoted term has none:
+ *  `"-x"` searches for a dash, and that is the only way to search for one. */
+function signOf(raw: string): { negated: boolean; body: string } {
+  if (!raw.startsWith(NOT)) return { negated: false, body: raw };
+  return { negated: true, body: raw.slice(NOT.length) };
+}
+
 function readToken(query: string, start: number, end: number): Token {
   const raw = query.slice(start, end);
-  const at = splitAt(raw);
+  const { negated, body } = signOf(raw);
+
+  const at = splitAt(body);
   if (at > 0) {
-    const key = unquote(raw.slice(0, at)).toLowerCase();
-    if (isSearchKey(key)) return { start, end, raw, key, value: unquote(raw.slice(at + 1)) };
+    const key = unquote(body.slice(0, at)).toLowerCase();
+    if (isSearchKey(key)) return { start, end, raw, negated, key, value: unquote(body.slice(at + 1)) };
   }
   // The bare form of the one boolean key. Quoted, it is text like any other.
-  if (!isQuoted(raw) && raw.toLowerCase() === READY) {
-    return { start, end, raw, key: READY, value: "true" };
+  if (!isQuoted(body) && body.toLowerCase() === READY) {
+    return { start, end, raw, negated, key: READY, value: "true" };
   }
-  return { start, end, raw, key: "", value: unquote(raw) };
+  return { start, end, raw, negated, key: "", value: unquote(body) };
 }
 
 /**
@@ -158,29 +207,39 @@ function parseReady(value: string): boolean {
  * the filter state: deleting `status=todo` has to clear the status filter, not
  * leave the last one standing.
  *
- * A key repeated keeps the last one — there is one slot per field, and the
- * newest thing typed is the one meant. An unknown key is not an error: it is
- * free text, so `oidc=` in a title still finds the task. Free text found in
- * several places is joined back with single spaces and matched as one phrase.
+ * A positive key repeated keeps the last one — there is one slot per field, one
+ * control per slot, and the newest thing typed is the one meant. Negated keys
+ * are a list instead: excluding two labels is a sensible thing to ask for, and
+ * no control shows them anyway. An unknown key is not an error: it is free text,
+ * so `oidc=` in a title still finds the task.
+ *
+ * Free text is a term per bare word, all of which have to match — what a search
+ * box is expected to do. A quoted run stays one phrase, which is how a phrase is
+ * asked for now that a space no longer means one.
  */
 export function parseQuery(query: string): Filters {
-  const filters: Filters = { ...NO_FILTERS };
-  const text: string[] = [];
+  const filters: Filters = { ...NO_FILTERS, text: [], excluded: [] };
 
   for (const token of tokenize(query)) {
-    switch (token.key) {
-      case "":
-        if (token.value !== "") text.push(token.value);
-        break;
-      case "ready":
-        filters.ready = parseReady(token.value);
-        break;
-      default:
-        filters[token.key] = token.value;
+    const value = token.value.trim();
+    if (token.key === "") {
+      // An empty term is nothing at all — including the lone `-` that a
+      // negation is halfway through being typed as.
+      if (value !== "") filters.text.push({ value, negated: token.negated });
+      continue;
     }
+    if (token.key === READY) {
+      const on = parseReady(token.value);
+      filters.ready = token.negated ? !on : on;
+      continue;
+    }
+    if (token.negated) {
+      if (value !== "") filters.excluded.push({ key: token.key, value });
+      continue;
+    }
+    filters[token.key] = value;
   }
 
-  filters.text = text.join(" ");
   return filters;
 }
 
@@ -190,46 +249,102 @@ function quoteValue(value: string): string {
   return clean === "" || /\s/.test(clean) ? `"${clean}"` : clean;
 }
 
-/** Free text needs quoting only when it would read back as something else —
- *  a word carrying an `=`, or the bare word `ready`. */
+/** Whether a piece of free text would read back as something other than itself:
+ *  a term, a `ready`, a negation, or two words instead of one. */
+function readsAsTerm(clean: string): boolean {
+  if (clean === "" || /\s/.test(clean) || clean.startsWith(NOT)) return true;
+  const at = splitAt(clean);
+  if (at > 0 && isSearchKey(clean.slice(0, at).toLowerCase())) return true;
+  return clean.toLowerCase() === READY;
+}
+
+/** Free text needs quoting only when it would read back as something else. */
 function quoteText(text: string): string {
   const clean = unquote(text);
-  return tokenize(clean).some((token) => token.key !== "") ? `"${clean}"` : clean;
+  return readsAsTerm(clean) ? `"${clean}"` : clean;
 }
 
 /**
  * Writes a filter set back out as a query.
  *
- * The canonical order is free text first, then the keys in `SEARCH_KEYS` order.
- * It is only ever reached for by the component when the query and the filters
- * have actually drifted apart — a select moved — so what the user typed is
- * never rewritten under their cursor while they are typing it.
+ * The canonical order is free text first, then the keys in `SEARCH_KEYS` order,
+ * with the exclusions after the key they belong to would have gone. It is only
+ * ever reached for by the component when the query and the filters have actually
+ * drifted apart — a select moved — so what the user typed is never rewritten
+ * under their cursor while they are typing it.
  */
 export function formatQuery(filters: Filters): string {
   const parts: string[] = [];
-  const text = filters.text.trim();
-  if (text !== "") parts.push(quoteText(text));
+
+  for (const term of filters.text) {
+    const value = term.value.trim();
+    if (value !== "") parts.push((term.negated ? NOT : "") + quoteText(value));
+  }
 
   for (const key of VALUE_KEYS) {
     const value = filters[key].trim();
     if (value !== "") parts.push(`${key}=${quoteValue(value)}`);
   }
+
+  for (const term of filters.excluded) {
+    const value = term.value.trim();
+    if (value !== "") parts.push(`${NOT}${term.key}=${quoteValue(value)}`);
+  }
+
   if (filters.ready) parts.push(READY);
 
   return parts.join(" ");
 }
 
+/** Two values that constrain the board identically. Case is not one of the ways
+ *  they can differ, because nothing matches case-sensitively (see board.ts). */
+function sameValue(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+function sameText(a: TextTerm[], b: TextTerm[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((term, at) => term.negated === b[at]!.negated && sameValue(term.value, b[at]!.value))
+  );
+}
+
+function sameExcluded(a: ExcludedTerm[], b: ExcludedTerm[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((term, at) => term.key === b[at]!.key && sameValue(term.value, b[at]!.value))
+  );
+}
+
 /** Whether two filter sets say the same thing — how the component knows the
- *  query and the selects still agree, and that neither has to be rewritten. */
+ *  query and the selects still agree, and that the *line* need not be rewritten. */
 export function equalFilters(a: Filters, b: Filters): boolean {
   return (
-    a.status === b.status &&
-    a.priority === b.priority &&
-    a.assignee === b.assignee &&
-    a.label === b.label &&
+    sameValue(a.status, b.status) &&
+    sameValue(a.priority, b.priority) &&
+    sameValue(a.assignee, b.assignee) &&
+    sameValue(a.label, b.label) &&
     a.ready === b.ready &&
-    a.text === b.text
+    sameText(a.text, b.text) &&
+    sameExcluded(a.excluded, b.excluded)
   );
+}
+
+/**
+ * Whether two filter sets are the same down to the spelling — how the component
+ * knows the *controls* need not be moved.
+ *
+ * Two questions, deliberately not one. Whether the line has to be rewritten is
+ * `equalFilters` above, and case is not a difference there: correcting one under
+ * the cursor is exactly what must not happen. Whether the controls have to be
+ * moved is this, and case *is* a difference: a select is an exact list, so a
+ * value off by one capital selects nothing and the bar reads "any" beside a
+ * board that is hiding cards. Only the fields `canonicalValues` rewrites are
+ * compared exactly — a trimmed assignee would otherwise be tidied up under
+ * whoever was typing it.
+ */
+export function sameFilters(a: Filters, b: Filters): boolean {
+  return equalFilters(a, b) && CANONICAL_KEYS.every((key) => a[key] === b[key]);
 }
 
 // ── Autocomplete ────────────────────────────────────────────────
@@ -247,9 +362,37 @@ export interface Option {
  * and the assignees on the tasks themselves. `ready` is the exception, being
  * the one closed set the board owns.
  */
-export type Sources = Record<Exclude<SearchKey, "ready">, Option[]>;
+export type Sources = Record<ValueKey, Option[]>;
 
 const READY_OPTIONS: Option[] = [{ value: "true" }, { value: "false" }];
+
+/**
+ * The fields a control offers as an exact list, and so the only ones worth
+ * correcting the case of. The assignee filter is a substring of a freeform name:
+ * there is nothing to be canonical about, and rewriting it would tidy up what
+ * someone was still typing.
+ */
+const CANONICAL_KEYS = ["status", "priority", "label"] as const;
+
+/**
+ * Replaces a mis-cased value with the project's own spelling of it.
+ *
+ * Matching ignores case, so `status=TODO` already finds the right tasks — but
+ * the select it stands for is an exact list, and would sit blank beside a board
+ * it is supposedly filtering.
+ *
+ * The query line itself is left exactly as typed: `equalFilters` ignores case,
+ * so a value corrected here is not drift and the line is not rewritten under the
+ * cursor. `sameFilters` is what notices the correction and moves the control.
+ */
+export function canonicalValues(filters: Filters, sources: Sources): Filters {
+  const corrected: Filters = { ...filters };
+  for (const key of CANONICAL_KEYS) {
+    corrected[key] =
+      sources[key].find((option) => sameValue(option.value, filters[key]))?.value ?? filters[key];
+  }
+  return corrected;
+}
 
 export interface Suggestion {
   kind: "key" | "value";
@@ -273,17 +416,24 @@ export interface Completion {
   suggestions: Suggestion[];
 }
 
-function keySuggestions(prefix: string): Suggestion[] {
+/** The suggestions carry the `-` of the term being completed, so accepting one
+ *  finishes the negation rather than quietly dropping it. */
+function keySuggestions(prefix: string, sign: string): Suggestion[] {
   const wanted = unquote(prefix).toLowerCase();
   return SEARCH_KEYS.filter((key) => key.startsWith(wanted)).map((key) => ({
     kind: "key" as const,
-    label: key === READY ? key : `${key}=`,
+    label: sign + (key === READY ? key : `${key}=`),
     detail: KEY_HINTS[key],
-    insert: key === READY ? key : `${key}=`,
+    insert: sign + (key === READY ? key : `${key}=`),
   }));
 }
 
-function valueSuggestions(key: SearchKey, prefix: string, sources: Sources): Suggestion[] {
+function valueSuggestions(
+  key: SearchKey,
+  prefix: string,
+  sources: Sources,
+  sign: string,
+): Suggestion[] {
   const options = key === READY ? READY_OPTIONS : sources[key];
   const wanted = prefix.trim().toLowerCase();
   const matches = options.filter(
@@ -302,7 +452,7 @@ function valueSuggestions(key: SearchKey, prefix: string, sources: Sources): Sug
     kind: "value" as const,
     label: option.value,
     detail: option.display && option.display !== option.value ? option.display : "",
-    insert: `${key}=${quoteValue(option.value)}`,
+    insert: `${sign}${key}=${quoteValue(option.value)}`,
   }));
 }
 
@@ -319,15 +469,24 @@ export function completeQuery(query: string, caret: number, sources: Sources): C
     (candidate) => position >= candidate.start && position <= candidate.end,
   );
   if (token === undefined) {
-    return { start: position, end: position, suggestions: keySuggestions("") };
+    return { start: position, end: position, suggestions: keySuggestions("", "") };
   }
 
-  const at = splitAt(token.raw);
-  const key = at > 0 ? unquote(token.raw.slice(0, at)).toLowerCase() : "";
+  // A lone `-` is not a term yet, but it is a negation being typed, so the keys
+  // come up for it with their dash already on.
+  const sign = token.raw.startsWith(NOT) ? NOT : "";
+  const body = token.raw.slice(sign.length);
+
+  const at = splitAt(body);
+  const key = at > 0 ? unquote(body.slice(0, at)).toLowerCase() : "";
   if (isSearchKey(key)) {
-    return { start: token.start, end: token.end, suggestions: valueSuggestions(key, token.value, sources) };
+    return {
+      start: token.start,
+      end: token.end,
+      suggestions: valueSuggestions(key, token.value, sources, sign),
+    };
   }
-  return { start: token.start, end: token.end, suggestions: keySuggestions(token.raw) };
+  return { start: token.start, end: token.end, suggestions: keySuggestions(body, sign) };
 }
 
 /**
@@ -348,4 +507,44 @@ export function applyCompletion(
   const spaced = finished && !/^\s/.test(after);
   const inserted = spaced ? `${suggestion.insert} ` : suggestion.insert;
   return { query: before + inserted + after, caret: before.length + inserted.length };
+}
+
+// ── The address bar ─────────────────────────────────────────────
+
+/**
+ * The query is kept in the URL rather than in storage (TQ-0068): a filtered
+ * board is then something to send someone, and surviving a reload is the same
+ * mechanism rather than a second one. The board has no router, and this is not
+ * the start of one — it is one parameter, read once and written with
+ * `replaceState` so typing does not fill the back button with keystrokes.
+ *
+ * Both halves take and return strings so they stay testable without a browser;
+ * the component is what touches `location` and `history`.
+ */
+export const QUERY_PARAM = "q";
+
+/** The query an address carries, or "" when it carries none. */
+export function queryFromURL(url: string): string {
+  try {
+    return new URL(url).searchParams.get(QUERY_PARAM) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The same address with the query written into it, as the relative reference
+ * `replaceState` wants. An empty query drops the parameter rather than leaving
+ * `?q=` behind, so a board with nothing typed into it has a clean address.
+ */
+export function urlWithQuery(url: string, query: string): string {
+  let next: URL;
+  try {
+    next = new URL(url);
+  } catch {
+    return url;
+  }
+  if (query.trim() === "") next.searchParams.delete(QUERY_PARAM);
+  else next.searchParams.set(QUERY_PARAM, query);
+  return next.pathname + next.search + next.hash;
 }

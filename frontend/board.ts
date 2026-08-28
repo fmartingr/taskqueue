@@ -103,6 +103,30 @@ export interface PriorityDef {
 
 export type PrioritySet = PriorityDef[];
 
+/**
+ * One piece of free text from the search bar: a bare word, or a quoted phrase.
+ *
+ * Every term has to be carried, so `auth token` is two terms and both must be
+ * found — a search box is expected to narrow as words are added. `negated` is
+ * the `-auth` form: the term must not be found.
+ */
+export interface TextTerm {
+  value: string;
+  negated: boolean;
+}
+
+/**
+ * A value a task must not carry — the `-priority=low` form.
+ *
+ * A list rather than a slot per key, unlike the positive terms below: the
+ * controls hold one value each because a select does, and nothing shows an
+ * exclusion at all, so there is no reason to keep only the last one.
+ */
+export interface ExcludedTerm {
+  key: "status" | "priority" | "assignee" | "label";
+  value: string;
+}
+
 export interface Filters {
   status: string;
   priority: string;
@@ -110,11 +134,14 @@ export interface Filters {
   label: string;
   ready: boolean;
   /**
-   * Free text from the search bar: a substring of the id, the title or the
-   * body. It is a filter like any other rather than a mode of its own, so one
-   * query and the selects above it are the same state — see search.ts.
+   * Free text from the search bar: words and phrases the id, the title or the
+   * body has to carry. It is a filter like any other rather than a mode of its
+   * own, so one query and the selects above it are the same state — see
+   * search.ts.
    */
-  text: string;
+  text: TextTerm[];
+  /** What the search bar's `-` terms exclude; nothing else writes to it. */
+  excluded: ExcludedTerm[];
 }
 
 // ── Dependencies ────────────────────────────────────────────────
@@ -401,32 +428,70 @@ export function priorityOptions(priorities: PrioritySet, extras: string[]): Prio
  * it, because readiness depends on the state of the tasks a filter is hiding.
  */
 export function visibleTasks(tasks: Task[], filters: Filters, columns: ColumnSet): Task[] {
-  const { status, priority, assignee, label, ready, text } = filters;
+  const { status, priority, assignee, label, ready, text, excluded } = filters;
   const index = indexTasks(tasks);
 
-  // The assignee box is a search field, so it matches substrings: typing
-  // "agent" keeps agent-api and agent-ui. The label filter is not — it is a
-  // list of the labels that exist — so it matches a label whole, which also
-  // keeps "component/backend" from being selected by "backend".
-  const matches = (haystack: string, needle: string) =>
-    haystack.toLowerCase().includes(needle.trim().toLowerCase());
-
-  const wanted = (text ?? "").trim().toLowerCase();
-
   return tasks.filter((task) => {
-    if (status && task.status !== status) return false;
-    if (priority && task.priority !== priority) return false;
-    if (assignee && !matches(task.assignee ?? "", assignee)) return false;
-    if (label && !(task.labels ?? []).includes(label)) return false;
+    if (status && !isValue(task.status, status)) return false;
+    if (priority && !isValue(task.priority ?? "", priority)) return false;
+    if (assignee && !contains(task.assignee ?? "", assignee)) return false;
+    if (label && !carriesLabel(task, label)) return false;
     if (ready && !isReady(task, index, columns)) return false;
-    if (wanted && !carriesText(task, wanted)) return false;
+
+    for (const term of excluded ?? []) {
+      if (carriesValue(task, term)) return false;
+    }
+    // Every word has to be found, and every negated one must not be: a search
+    // box narrows as words are added rather than looking for the line typed.
+    for (const term of text ?? []) {
+      const wanted = term.value.trim().toLowerCase();
+      if (wanted === "") continue;
+      if (carriesText(task, wanted) === term.negated) return false;
+    }
     return true;
   });
 }
 
 /**
+ * Whether a task's value is the one asked for. Case is ignored throughout:
+ * the query line is hand-typed as often as it is completed, and `priority=Urgent`
+ * finding nothing is a bug rather than a strictness (TQ-0068).
+ */
+function isValue(held: string, wanted: string): boolean {
+  return held.toLowerCase() === wanted.trim().toLowerCase();
+}
+
+/** The assignee box is a search field, so it matches substrings: typing "agent"
+ *  keeps agent-api and agent-ui. */
+function contains(haystack: string, needle: string): boolean {
+  return haystack.toLowerCase().includes(needle.trim().toLowerCase());
+}
+
+/** The label filter is a list of the labels that exist rather than a search
+ *  field, so it matches a label whole — which also keeps "component/backend"
+ *  from being selected by "backend". */
+function carriesLabel(task: Task, wanted: string): boolean {
+  return (task.labels ?? []).some((label) => isValue(label, wanted));
+}
+
+/** Whether a task carries the value an exclusion names, by the same rule the
+ *  positive filter for that key uses. */
+function carriesValue(task: Task, term: ExcludedTerm): boolean {
+  switch (term.key) {
+    case "status":
+      return isValue(task.status, term.value);
+    case "priority":
+      return isValue(task.priority ?? "", term.value);
+    case "assignee":
+      return contains(task.assignee ?? "", term.value);
+    case "label":
+      return carriesLabel(task, term.value);
+  }
+}
+
+/**
  * Whether free text is anywhere in a task the board can see: its id, its title
- * or its body, matched as one case-insensitive phrase.
+ * or its body, matched case-insensitively.
  *
  * The body is in it because the listing already carries it — the search costs a
  * pass over strings the board has in hand, and grepping `.tasks` for a word is

@@ -10,42 +10,46 @@
  *
  * The query is only reformatted when the two have actually drifted apart, which
  * is what keeps a formatter from rewriting a half-typed term under the cursor.
+ * Case alone is not drift: `equalFilters` ignores it, so a hand-typed
+ * `status=TODO` moves the select without the line being corrected underneath.
+ *
+ * The line is also the address: it is read out of `?q=` on load and written
+ * back with `replaceState`, so a filtered board is something to send someone
+ * and a reload keeps what was typed. One parameter, no router.
  *
  * Every rule the line obeys is in search.ts, which knows nothing about Vue and
  * has its own unit tests; what is left here is the input, the menu and the keys.
  */
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { labelDisplay, labelsInUse } from "../board";
 import {
   applyCompletion,
+  canonicalValues,
   completeQuery,
   equalFilters,
   formatQuery,
   parseQuery,
+  queryFromURL,
+  sameFilters,
+  urlWithQuery,
   type Sources,
 } from "../search";
 import { columns, filters, labels, priorities, tasks } from "../state";
 
+/** The one key that puts the cursor here, GitHub style. It is claimed only when
+ *  nothing else is being typed into — see `onShortcut`. */
+const FOCUS_KEY = "/";
+
 const input = ref<HTMLInputElement | null>(null);
-const query = ref(formatQuery(filters));
+const menu = ref<HTMLUListElement | null>(null);
+const query = ref(queryFromURL(window.location.href) || formatQuery(filters));
 const caret = ref(0);
 const active = ref(0);
 const focused = ref(false);
 /** Set by Escape, cleared by the next keystroke: the menu can be sent away
  *  without the query it was suggesting for being sent away with it. */
 const dismissed = ref(false);
-
-watch(query, (line) => {
-  const parsed = parseQuery(line);
-  if (equalFilters(parsed, filters)) return;
-  Object.assign(filters, parsed);
-});
-
-watch(filters, () => {
-  if (equalFilters(parseQuery(query.value), filters)) return;
-  query.value = formatQuery(filters);
-});
 
 /** Every label the project declares or a task carries — the same two sources
  *  the filter bar's select draws on, so neither offers what the other hides. */
@@ -70,6 +74,39 @@ const sources = computed<Sources>(() => ({
   assignee: assignees.value.map((name) => ({ value: name })),
 }));
 
+/**
+ * What the line currently says, in the project's own spelling.
+ *
+ * It depends on the vocabularies as well as the line, which is why it is a
+ * computed rather than something the input handler does once: the board reads
+ * its configuration asynchronously, so a query restored from the address bar is
+ * parsed before there is anything to canonicalise it against.
+ */
+const parsed = computed(() => canonicalValues(parseQuery(query.value), sources.value));
+
+// `sameFilters` rather than `equalFilters`: the vocabularies arrive after the
+// first parse, so the correction `canonicalValues` makes is usually a change of
+// case and nothing else — and `equalFilters` ignores case, which would leave the
+// select blank beside a board the line is filtering.
+watch(
+  parsed,
+  (next) => {
+    if (sameFilters(next, filters)) return;
+    Object.assign(filters, next);
+  },
+  { immediate: true },
+);
+
+watch(filters, () => {
+  if (equalFilters(parseQuery(query.value), filters)) return;
+  query.value = formatQuery(filters);
+});
+
+// The address follows the line, whoever moved it — typing, a select, Reset.
+watch(query, (line) => {
+  window.history.replaceState(null, "", urlWithQuery(window.location.href, line));
+});
+
 const completion = computed(() => completeQuery(query.value, caret.value, sources.value));
 
 const showing = computed(
@@ -78,6 +115,14 @@ const showing = computed(
 
 watch(completion, () => {
   active.value = 0;
+});
+
+/** Keeps the highlighted row on screen: the menu scrolls, and a keyboard
+ *  selection that walks past its edge would otherwise be invisible. */
+watch(active, async (at) => {
+  await nextTick();
+  const row = menu.value?.children[at];
+  if (row instanceof HTMLElement) row.scrollIntoView({ block: "nearest" });
 });
 
 function syncCaret(): void {
@@ -90,6 +135,26 @@ function onInput(event: Event): void {
   query.value = field.value;
   caret.value = field.selectionStart ?? field.value.length;
   dismissed.value = false;
+}
+
+/** Puts the cursor at the end of the line, which is where someone who asked for
+ *  the box wants to carry on typing. */
+function focusInput(): void {
+  const field = input.value;
+  if (field === null) return;
+  field.focus();
+  const end = field.value.length;
+  field.setSelectionRange(end, end);
+  caret.value = end;
+}
+
+/** The × in the box: the search's own affordance, where the hand already is.
+ *  The line holds the whole filter set, so emptying it empties the controls
+ *  too — the same end as #filter-reset, reached from the other editor. */
+function clear(): void {
+  query.value = "";
+  dismissed.value = false;
+  void nextTick(focusInput);
 }
 
 async function accept(at: number): Promise<void> {
@@ -141,12 +206,42 @@ function onKeydown(event: KeyboardEvent): void {
     void accept(active.value);
   }
 }
+
+/** Whether the keystroke is going into something that takes text, in which case
+ *  `/` is a character and nothing else. `isContentEditable` covers a rich editor
+ *  this board does not have yet and would not want to steal a slash from. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
+/**
+ * `/` puts the cursor in the box, from anywhere on the board.
+ *
+ * It stands down for anything that is already taking text — the column
+ * composers, the body and note editors, the dialog fields — and for an open
+ * dialog whatever has focus inside it, because a modal is its own context and a
+ * shortcut that reaches through one is a bug rather than a convenience.
+ */
+function onShortcut(event: KeyboardEvent): void {
+  if (event.key !== FOCUS_KEY || event.isComposing) return;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
+  if (isTyping(event.target)) return;
+  if (document.querySelector("dialog[open]") !== null) return;
+  event.preventDefault();
+  focusInput();
+}
+
+onMounted(() => document.addEventListener("keydown", onShortcut));
+onBeforeUnmount(() => document.removeEventListener("keydown", onShortcut));
 </script>
 
 <template>
   <div class="search">
-    <label class="search-field">
-      Search
+    <label class="search-label" for="search-query">Search</label>
+
+    <div class="search-box">
       <input
         id="search-query"
         ref="input"
@@ -154,7 +249,7 @@ function onKeydown(event: KeyboardEvent): void {
         type="text"
         role="combobox"
         class="search-input"
-        placeholder="text, or priority=urgent"
+        placeholder="text, -not, or priority=urgent  (/)"
         autocomplete="off"
         spellcheck="false"
         aria-autocomplete="list"
@@ -168,9 +263,19 @@ function onKeydown(event: KeyboardEvent): void {
         @focus="focused = true"
         @blur="focused = false"
       />
-    </label>
 
-    <ul v-if="showing" id="search-suggestions" class="search-menu" role="listbox">
+      <button
+        v-if="query !== ''"
+        id="search-clear"
+        type="button"
+        class="search-clear"
+        title="Clear the search"
+        aria-label="Clear the search"
+        @click="clear"
+      >×</button>
+    </div>
+
+    <ul v-if="showing" id="search-suggestions" ref="menu" class="search-menu" role="listbox">
       <li
         v-for="(suggestion, at) in completion.suggestions"
         :id="`search-option-${at}`"

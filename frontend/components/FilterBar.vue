@@ -66,7 +66,8 @@ function reset(): void {
   filters.assignee = "";
   filters.label = "";
   filters.ready = false;
-  filters.text = "";
+  filters.text = [];
+  filters.excluded = [];
 }
 </script>
 

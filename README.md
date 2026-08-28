@@ -101,6 +101,27 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
   writes, so a `## Notes` heading in the body itself stays part of the body.
 - "New task" creates a task; the filter bar narrows the board by status,
   priority, assignee, label, or "ready only".
+- The search box above the bar is the same filter set written as one line, so
+  typing `priority=urgent` moves the select and moving the select rewrites the
+  line. Press `/` to put the cursor in it, `×` to empty it, the arrows to walk
+  the suggestions and Enter to take one. The query is kept in the address as `?q=`,
+  which is what makes a filtered board a link and what brings it back on a
+  reload.
+
+  ```text
+  oidc redirect           every word has to be in the id, title or body
+  "oidc redirect"         quoted, so the phrase has to be there whole
+  -redirect               a word that must not be there
+  status=todo             a term: status, priority, label, assignee, ready
+  -priority=low           a term that must not match; repeatable
+  assignee="agent api"    quotes hold a value with spaces in it
+  ready                   the bare key, and -ready is ready=false
+  "status=todo"           quoted, so the = is just a character
+  ```
+
+  Keys and values are matched without regard to case, the last plain
+  `key=value` for a field is the one that counts, and an unknown key is free
+  text — so `owner=me` searches for that, rather than failing.
 - Cards show a blocked marker while a dependency is unfinished or missing.
 - The board is live: the server watches the queue and pushes, so a task an agent
   creates or moves appears within about half a second, without a reload. It stays

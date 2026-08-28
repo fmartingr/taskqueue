@@ -37,6 +37,25 @@ Use `tq move <id> <status>` for any other transition.
     ls {{.TaskDir}} | grep auth               filenames carry a slug of the title
     grep -ril "oidc" {{.TaskDir}}             full-text search across tasks
 
+## The board's search box
+
+`tq serve` puts one line above the board that holds the same filter set the
+controls below it do: typing into it moves them, and moving one rewrites the
+line. The query lives in the address as `?q=`, so a filtered board is a link,
+and `/` puts the cursor in the box.
+
+    oidc redirect           every word has to be in the id, title or body
+    "oidc redirect"         quoted, so the phrase has to be there whole
+    -redirect               a word that must not be there
+    status=todo             a term: status, priority, label, assignee, ready
+    -priority=low           a term that must not match; repeatable
+    assignee="agent api"    quotes hold a value with spaces in it
+    ready                   the bare key, and -ready is ready=false
+    "status=todo"           quoted, so the = is just a character
+
+Keys and values are matched without regard to case, the last plain `key=value`
+for a field is the one that counts, and an unknown key is free text.
+
 ## Create and change
 
     tq add "Title" --priority {{.ExamplePriority}} --label backend --depends-on TQ-0002 --body "…"

@@ -5651,25 +5651,53 @@ function priorityOptions(priorities, extras) {
   return [...options, ...unknown.map((name) => ({ name, display: name, configured: false }))];
 }
 function visibleTasks(tasks, filters, columns) {
-  const { status, priority, assignee, label, ready, text } = filters;
+  const { status, priority, assignee, label, ready, text, excluded } = filters;
   const index = indexTasks(tasks);
-  const matches = (haystack, needle) => haystack.toLowerCase().includes(needle.trim().toLowerCase());
-  const wanted = (text ?? "").trim().toLowerCase();
   return tasks.filter((task) => {
-    if (status && task.status !== status)
+    if (status && !isValue(task.status, status))
       return false;
-    if (priority && task.priority !== priority)
+    if (priority && !isValue(task.priority ?? "", priority))
       return false;
-    if (assignee && !matches(task.assignee ?? "", assignee))
+    if (assignee && !contains(task.assignee ?? "", assignee))
       return false;
-    if (label && !(task.labels ?? []).includes(label))
+    if (label && !carriesLabel(task, label))
       return false;
     if (ready && !isReady(task, index, columns))
       return false;
-    if (wanted && !carriesText(task, wanted))
-      return false;
+    for (const term of excluded ?? []) {
+      if (carriesValue(task, term))
+        return false;
+    }
+    for (const term of text ?? []) {
+      const wanted = term.value.trim().toLowerCase();
+      if (wanted === "")
+        continue;
+      if (carriesText(task, wanted) === term.negated)
+        return false;
+    }
     return true;
   });
+}
+function isValue(held, wanted) {
+  return held.toLowerCase() === wanted.trim().toLowerCase();
+}
+function contains(haystack, needle) {
+  return haystack.toLowerCase().includes(needle.trim().toLowerCase());
+}
+function carriesLabel(task, wanted) {
+  return (task.labels ?? []).some((label) => isValue(label, wanted));
+}
+function carriesValue(task, term) {
+  switch (term.key) {
+    case "status":
+      return isValue(task.status, term.value);
+    case "priority":
+      return isValue(task.priority ?? "", term.value);
+    case "assignee":
+      return contains(task.assignee ?? "", term.value);
+    case "label":
+      return carriesLabel(task, term.value);
+  }
 }
 function carriesText(task, wanted) {
   return [task.id, task.title, task.body].some((field) => (field ?? "").toLowerCase().includes(wanted));
@@ -5691,7 +5719,8 @@ var filters = reactive({
   assignee: "",
   label: "",
   ready: false,
-  text: ""
+  text: [],
+  excluded: []
 });
 var labels = ref({});
 var priorities = ref(FALLBACK_PRIORITIES);
@@ -6695,7 +6724,8 @@ var FilterBar_default = /* @__PURE__ */ defineComponent({
       filters.assignee = "";
       filters.label = "";
       filters.ready = false;
-      filters.text = "";
+      filters.text = [];
+      filters.excluded = [];
     }
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("div", _hoisted_18, [
@@ -6815,15 +6845,22 @@ var KEY_HINTS = {
   ready: "unblocked only"
 };
 var READY = "ready";
+var NOT = "-";
 var TRUE_WORDS = new Set(["", "true", "yes", "y", "1", "on"]);
-var NO_FILTERS = {
+var NO_FILTERS = Object.freeze({
   status: "",
   priority: "",
   assignee: "",
   label: "",
   ready: false,
-  text: ""
-};
+  text: frozenEmpty(),
+  excluded: frozenEmpty()
+});
+function frozenEmpty() {
+  const empty = [];
+  Object.freeze(empty);
+  return empty;
+}
 function isSearchKey(name) {
   return SEARCH_KEYS.includes(name);
 }
@@ -6844,18 +6881,24 @@ function splitAt(raw) {
 function isQuoted(raw) {
   return raw.startsWith('"');
 }
+function signOf(raw) {
+  if (!raw.startsWith(NOT))
+    return { negated: false, body: raw };
+  return { negated: true, body: raw.slice(NOT.length) };
+}
 function readToken(query, start2, end) {
   const raw = query.slice(start2, end);
-  const at = splitAt(raw);
+  const { negated, body } = signOf(raw);
+  const at = splitAt(body);
   if (at > 0) {
-    const key = unquote(raw.slice(0, at)).toLowerCase();
+    const key = unquote(body.slice(0, at)).toLowerCase();
     if (isSearchKey(key))
-      return { start: start2, end, raw, key, value: unquote(raw.slice(at + 1)) };
+      return { start: start2, end, raw, negated, key, value: unquote(body.slice(at + 1)) };
   }
-  if (!isQuoted(raw) && raw.toLowerCase() === READY) {
-    return { start: start2, end, raw, key: READY, value: "true" };
+  if (!isQuoted(body) && body.toLowerCase() === READY) {
+    return { start: start2, end, raw, negated, key: READY, value: "true" };
   }
-  return { start: start2, end, raw, key: "", value: unquote(raw) };
+  return { start: start2, end, raw, negated, key: "", value: unquote(body) };
 }
 function tokenize(query) {
   const tokens = [];
@@ -6881,60 +6924,99 @@ function parseReady(value) {
   return TRUE_WORDS.has(value.trim().toLowerCase());
 }
 function parseQuery(query) {
-  const filters2 = { ...NO_FILTERS };
-  const text = [];
+  const filters2 = { ...NO_FILTERS, text: [], excluded: [] };
   for (const token of tokenize(query)) {
-    switch (token.key) {
-      case "":
-        if (token.value !== "")
-          text.push(token.value);
-        break;
-      case "ready":
-        filters2.ready = parseReady(token.value);
-        break;
-      default:
-        filters2[token.key] = token.value;
+    const value = token.value.trim();
+    if (token.key === "") {
+      if (value !== "")
+        filters2.text.push({ value, negated: token.negated });
+      continue;
     }
+    if (token.key === READY) {
+      const on = parseReady(token.value);
+      filters2.ready = token.negated ? !on : on;
+      continue;
+    }
+    if (token.negated) {
+      if (value !== "")
+        filters2.excluded.push({ key: token.key, value });
+      continue;
+    }
+    filters2[token.key] = value;
   }
-  filters2.text = text.join(" ");
   return filters2;
 }
 function quoteValue(value) {
   const clean = unquote(value);
   return clean === "" || /\s/.test(clean) ? `"${clean}"` : clean;
 }
+function readsAsTerm(clean) {
+  if (clean === "" || /\s/.test(clean) || clean.startsWith(NOT))
+    return true;
+  const at = splitAt(clean);
+  if (at > 0 && isSearchKey(clean.slice(0, at).toLowerCase()))
+    return true;
+  return clean.toLowerCase() === READY;
+}
 function quoteText(text) {
   const clean = unquote(text);
-  return tokenize(clean).some((token) => token.key !== "") ? `"${clean}"` : clean;
+  return readsAsTerm(clean) ? `"${clean}"` : clean;
 }
 function formatQuery(filters2) {
   const parts = [];
-  const text = filters2.text.trim();
-  if (text !== "")
-    parts.push(quoteText(text));
+  for (const term of filters2.text) {
+    const value = term.value.trim();
+    if (value !== "")
+      parts.push((term.negated ? NOT : "") + quoteText(value));
+  }
   for (const key of VALUE_KEYS) {
     const value = filters2[key].trim();
     if (value !== "")
       parts.push(`${key}=${quoteValue(value)}`);
   }
+  for (const term of filters2.excluded) {
+    const value = term.value.trim();
+    if (value !== "")
+      parts.push(`${NOT}${term.key}=${quoteValue(value)}`);
+  }
   if (filters2.ready)
     parts.push(READY);
   return parts.join(" ");
 }
+function sameValue(a, b) {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+function sameText(a, b) {
+  return a.length === b.length && a.every((term, at) => term.negated === b[at].negated && sameValue(term.value, b[at].value));
+}
+function sameExcluded(a, b) {
+  return a.length === b.length && a.every((term, at) => term.key === b[at].key && sameValue(term.value, b[at].value));
+}
 function equalFilters(a, b) {
-  return a.status === b.status && a.priority === b.priority && a.assignee === b.assignee && a.label === b.label && a.ready === b.ready && a.text === b.text;
+  return sameValue(a.status, b.status) && sameValue(a.priority, b.priority) && sameValue(a.assignee, b.assignee) && sameValue(a.label, b.label) && a.ready === b.ready && sameText(a.text, b.text) && sameExcluded(a.excluded, b.excluded);
+}
+function sameFilters(a, b) {
+  return equalFilters(a, b) && CANONICAL_KEYS.every((key) => a[key] === b[key]);
 }
 var READY_OPTIONS = [{ value: "true" }, { value: "false" }];
-function keySuggestions(prefix) {
+var CANONICAL_KEYS = ["status", "priority", "label"];
+function canonicalValues(filters2, sources) {
+  const corrected = { ...filters2 };
+  for (const key of CANONICAL_KEYS) {
+    corrected[key] = sources[key].find((option) => sameValue(option.value, filters2[key]))?.value ?? filters2[key];
+  }
+  return corrected;
+}
+function keySuggestions(prefix, sign) {
   const wanted = unquote(prefix).toLowerCase();
   return SEARCH_KEYS.filter((key) => key.startsWith(wanted)).map((key) => ({
     kind: "key",
-    label: key === READY ? key : `${key}=`,
+    label: sign + (key === READY ? key : `${key}=`),
     detail: KEY_HINTS[key],
-    insert: key === READY ? key : `${key}=`
+    insert: sign + (key === READY ? key : `${key}=`)
   }));
 }
-function valueSuggestions(key, prefix, sources) {
+function valueSuggestions(key, prefix, sources, sign) {
   const options = key === READY ? READY_OPTIONS : sources[key];
   const wanted = prefix.trim().toLowerCase();
   const matches = options.filter((option) => option.value.toLowerCase().includes(wanted) || (option.display ?? "").toLowerCase().includes(wanted));
@@ -6946,21 +7028,27 @@ function valueSuggestions(key, prefix, sources) {
     kind: "value",
     label: option.value,
     detail: option.display && option.display !== option.value ? option.display : "",
-    insert: `${key}=${quoteValue(option.value)}`
+    insert: `${sign}${key}=${quoteValue(option.value)}`
   }));
 }
 function completeQuery(query, caret, sources) {
   const position = Math.max(0, Math.min(caret, query.length));
   const token = tokenize(query).find((candidate) => position >= candidate.start && position <= candidate.end);
   if (token === undefined) {
-    return { start: position, end: position, suggestions: keySuggestions("") };
+    return { start: position, end: position, suggestions: keySuggestions("", "") };
   }
-  const at = splitAt(token.raw);
-  const key = at > 0 ? unquote(token.raw.slice(0, at)).toLowerCase() : "";
+  const sign = token.raw.startsWith(NOT) ? NOT : "";
+  const body = token.raw.slice(sign.length);
+  const at = splitAt(body);
+  const key = at > 0 ? unquote(body.slice(0, at)).toLowerCase() : "";
   if (isSearchKey(key)) {
-    return { start: token.start, end: token.end, suggestions: valueSuggestions(key, token.value, sources) };
+    return {
+      start: token.start,
+      end: token.end,
+      suggestions: valueSuggestions(key, token.value, sources, sign)
+    };
   }
-  return { start: token.start, end: token.end, suggestions: keySuggestions(token.raw) };
+  return { start: token.start, end: token.end, suggestions: keySuggestions(body, sign) };
 }
 function applyCompletion(query, completion, suggestion) {
   const before = query.slice(0, completion.start);
@@ -6970,43 +7058,49 @@ function applyCompletion(query, completion, suggestion) {
   const inserted = spaced ? `${suggestion.insert} ` : suggestion.insert;
   return { query: before + inserted + after, caret: before.length + inserted.length };
 }
+var QUERY_PARAM = "q";
+function queryFromURL(url) {
+  try {
+    return new URL(url).searchParams.get(QUERY_PARAM) ?? "";
+  } catch {
+    return "";
+  }
+}
+function urlWithQuery(url, query) {
+  let next;
+  try {
+    next = new URL(url);
+  } catch {
+    return url;
+  }
+  if (query.trim() === "")
+    next.searchParams.delete(QUERY_PARAM);
+  else
+    next.searchParams.set(QUERY_PARAM, query);
+  return next.pathname + next.search + next.hash;
+}
 
 // frontend/components/SearchBar.vue?type=script
 var _hoisted_19 = { class: "search" };
-var _hoisted_26 = { class: "search-field" };
+var _hoisted_26 = { class: "search-box" };
 var _hoisted_35 = ["value", "aria-expanded", "aria-activedescendant"];
-var _hoisted_44 = {
-  key: 0,
-  id: "search-suggestions",
-  class: "search-menu",
-  role: "listbox"
-};
-var _hoisted_53 = ["id", "aria-selected", "onMousedown", "onMouseenter"];
-var _hoisted_63 = { class: "search-option-label" };
-var _hoisted_73 = {
+var _hoisted_44 = ["id", "aria-selected", "onMousedown", "onMouseenter"];
+var _hoisted_53 = { class: "search-option-label" };
+var _hoisted_63 = {
   key: 0,
   class: "search-option-detail"
 };
+var FOCUS_KEY = "/";
 var SearchBar_default = /* @__PURE__ */ defineComponent({
   __name: "SearchBar",
   setup(__props) {
     const input = ref(null);
-    const query = ref(formatQuery(filters));
+    const menu = ref(null);
+    const query = ref(queryFromURL(window.location.href) || formatQuery(filters));
     const caret = ref(0);
     const active = ref(0);
     const focused = ref(false);
     const dismissed = ref(false);
-    watch2(query, (line) => {
-      const parsed = parseQuery(line);
-      if (equalFilters(parsed, filters))
-        return;
-      Object.assign(filters, parsed);
-    });
-    watch2(filters, () => {
-      if (equalFilters(parseQuery(query.value), filters))
-        return;
-      query.value = formatQuery(filters);
-    });
     const labelNames = computed2(() => [...new Set([...Object.keys(labels.value), ...labelsInUse(tasks.value)])].filter((name) => name !== "").sort());
     const assignees = computed2(() => [...new Set(tasks.value.map((task) => task.assignee ?? ""))].filter((name) => name !== "").sort());
     const sources = computed2(() => ({
@@ -7018,10 +7112,30 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
       label: labelNames.value.map((name) => ({ value: name, display: labelDisplay(name, labels.value) })),
       assignee: assignees.value.map((name) => ({ value: name }))
     }));
+    const parsed = computed2(() => canonicalValues(parseQuery(query.value), sources.value));
+    watch2(parsed, (next) => {
+      if (sameFilters(next, filters))
+        return;
+      Object.assign(filters, next);
+    }, { immediate: true });
+    watch2(filters, () => {
+      if (equalFilters(parseQuery(query.value), filters))
+        return;
+      query.value = formatQuery(filters);
+    });
+    watch2(query, (line) => {
+      window.history.replaceState(null, "", urlWithQuery(window.location.href, line));
+    });
     const completion = computed2(() => completeQuery(query.value, caret.value, sources.value));
     const showing = computed2(() => focused.value && !dismissed.value && completion.value.suggestions.length > 0);
     watch2(completion, () => {
       active.value = 0;
+    });
+    watch2(active, async (at) => {
+      await nextTick();
+      const row = menu.value?.children[at];
+      if (row instanceof HTMLElement)
+        row.scrollIntoView({ block: "nearest" });
     });
     function syncCaret() {
       const field = input.value;
@@ -7033,6 +7147,20 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
       query.value = field.value;
       caret.value = field.selectionStart ?? field.value.length;
       dismissed.value = false;
+    }
+    function focusInput() {
+      const field = input.value;
+      if (field === null)
+        return;
+      field.focus();
+      const end = field.value.length;
+      field.setSelectionRange(end, end);
+      caret.value = end;
+    }
+    function clear() {
+      query.value = "";
+      dismissed.value = false;
+      nextTick(focusInput);
     }
     async function accept(at) {
       const suggestion = completion.value.suggestions[at];
@@ -7073,10 +7201,33 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
         accept(active.value);
       }
     }
+    function isTyping(target) {
+      if (!(target instanceof HTMLElement))
+        return false;
+      const tag = target.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+    }
+    function onShortcut(event) {
+      if (event.key !== FOCUS_KEY || event.isComposing)
+        return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented)
+        return;
+      if (isTyping(event.target))
+        return;
+      if (document.querySelector("dialog[open]") !== null)
+        return;
+      event.preventDefault();
+      focusInput();
+    }
+    onMounted(() => document.addEventListener("keydown", onShortcut));
+    onBeforeUnmount(() => document.removeEventListener("keydown", onShortcut));
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("div", _hoisted_19, [
-        createBaseVNode("label", _hoisted_26, [
-          _cache[2] || (_cache[2] = createTextVNode(" Search ", -1)),
+        _cache[2] || (_cache[2] = createBaseVNode("label", {
+          class: "search-label",
+          for: "search-query"
+        }, "Search", -1)),
+        createBaseVNode("div", _hoisted_26, [
           createBaseVNode("input", {
             id: "search-query",
             ref_key: "input",
@@ -7085,7 +7236,7 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
             type: "text",
             role: "combobox",
             class: "search-input",
-            placeholder: "text, or priority=urgent",
+            placeholder: "text, -not, or priority=urgent  (/)",
             autocomplete: "off",
             spellcheck: "false",
             "aria-autocomplete": "list",
@@ -7098,9 +7249,25 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
             onKeydown,
             onFocus: _cache[0] || (_cache[0] = ($event) => focused.value = true),
             onBlur: _cache[1] || (_cache[1] = ($event) => focused.value = false)
-          }, null, 40, _hoisted_35)
+          }, null, 40, _hoisted_35),
+          query.value !== "" ? (openBlock(), createElementBlock("button", {
+            key: 0,
+            id: "search-clear",
+            type: "button",
+            class: "search-clear",
+            title: "Clear the search",
+            "aria-label": "Clear the search",
+            onClick: clear
+          }, "×")) : createCommentVNode("v-if", true)
         ]),
-        showing.value ? (openBlock(), createElementBlock("ul", _hoisted_44, [
+        showing.value ? (openBlock(), createElementBlock("ul", {
+          key: 0,
+          id: "search-suggestions",
+          ref_key: "menu",
+          ref: menu,
+          class: "search-menu",
+          role: "listbox"
+        }, [
           (openBlock(true), createElementBlock(Fragment, null, renderList(completion.value.suggestions, (suggestion, at) => {
             return openBlock(), createElementBlock("li", {
               id: `search-option-${at}`,
@@ -7111,11 +7278,11 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
               onMousedown: withModifiers(($event) => accept(at), ["prevent"]),
               onMouseenter: ($event) => active.value = at
             }, [
-              createBaseVNode("span", _hoisted_63, toDisplayString(suggestion.label), 1),
-              suggestion.detail ? (openBlock(), createElementBlock("span", _hoisted_73, toDisplayString(suggestion.detail), 1)) : createCommentVNode("v-if", true)
-            ], 42, _hoisted_53);
+              createBaseVNode("span", _hoisted_53, toDisplayString(suggestion.label), 1),
+              suggestion.detail ? (openBlock(), createElementBlock("span", _hoisted_63, toDisplayString(suggestion.detail), 1)) : createCommentVNode("v-if", true)
+            ], 42, _hoisted_44);
           }), 128))
-        ])) : createCommentVNode("v-if", true)
+        ], 512)) : createCommentVNode("v-if", true)
       ]);
     };
   }
@@ -7157,7 +7324,7 @@ var _hoisted_36 = { class: "note-head" };
 var _hoisted_45 = { class: "note-time" };
 var _hoisted_54 = ["onMousedown", "onClick"];
 var _hoisted_64 = ["onKeydown", "onBlur"];
-var _hoisted_74 = {
+var _hoisted_73 = {
   key: 1,
   class: "note-text"
 };
@@ -7249,7 +7416,7 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
                 onBlur: ($event) => finish(true, note)
               }, null, 40, _hoisted_64)), [
                 [vModelText, editor.value]
-              ]) : (openBlock(), createElementBlock("p", _hoisted_74, toDisplayString(note.text), 1))
+              ]) : (openBlock(), createElementBlock("p", _hoisted_73, toDisplayString(note.text), 1))
             ]);
           }), 128))
         ], 512),
@@ -7288,7 +7455,7 @@ var _hoisted_37 = ["hidden"];
 var _hoisted_46 = ["hidden"];
 var _hoisted_55 = { class: "grid" };
 var _hoisted_65 = ["value"];
-var _hoisted_75 = ["value", "title"];
+var _hoisted_74 = ["value", "title"];
 var _hoisted_82 = ["hidden"];
 var _hoisted_92 = { class: "dialog-footer" };
 var _hoisted_10 = {
@@ -7525,7 +7692,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                     key: option.name,
                     value: option.name,
                     title: option.configured ? option.name : `${option.name} — not in the project's priority set`
-                  }, toDisplayString(option.display), 9, _hoisted_75);
+                  }, toDisplayString(option.display), 9, _hoisted_74);
                 }), 128))
               ], 512), [
                 [vModelSelect, priority.value]

@@ -20,11 +20,13 @@ import {
   priorityOptions,
   FALLBACK_COLUMNS,
   type ColumnSet,
+  type ExcludedTerm,
   type Filters,
   type LabelSet,
   type PrioritySet,
   type Status,
   type Task,
+  type TextTerm,
 } from "./board";
 
 const STAMP = "2026-08-25T09:42:00+02:00";
@@ -43,9 +45,23 @@ function task(id: string, status: Status, ...deps: string[]): Task {
   };
 }
 
-const NO_FILTERS: Filters = { status: "", priority: "", assignee: "", label: "", ready: false, text: "" };
+const NO_FILTERS: Filters = {
+  status: "",
+  priority: "",
+  assignee: "",
+  label: "",
+  ready: false,
+  text: [],
+  excluded: [],
+};
 
 const filters = (overrides: Partial<Filters>): Filters => ({ ...NO_FILTERS, ...overrides });
+
+/** The search bar's free text, as the query language hands it over: one term
+ *  per bare word or quoted phrase, each of which may be a no. */
+const words = (...values: string[]): TextTerm[] => values.map((value) => ({ value, negated: false }));
+const notWords = (...values: string[]): TextTerm[] =>
+  values.map((value) => ({ value, negated: true }));
 
 describe("indexTasks", () => {
   test("keys tasks by ID", () => {
@@ -225,6 +241,27 @@ describe("visibleTasks", () => {
     expect(visibleTasks([], filters({ ready: true }), FALLBACK_COLUMNS)).toEqual([]);
   });
 
+  // A hand-typed value is as ordinary as a completed one, so nothing the query
+  // language sets is matched on case (TQ-0068).
+  describe("case", () => {
+    test("status and priority match whatever the case", () => {
+      expect(visibleTasks(tasks, filters({ status: "TODO" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0002",
+        "TQ-0004",
+      ]);
+      expect(visibleTasks(tasks, filters({ priority: "High" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0002",
+      ]);
+    });
+
+    test("a whole label still matches whole, but not on case", () => {
+      expect(visibleTasks(tasks, filters({ label: "frontend" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0004",
+      ]);
+      expect(visibleTasks(tasks, filters({ label: "front" }), FALLBACK_COLUMNS)).toEqual([]);
+    });
+  });
+
   // The search bar's free text (TQ-0068). It reads three fields and no more:
   // everything else a task carries has a structured term of its own.
   describe("free text", () => {
@@ -234,43 +271,125 @@ describe("visibleTasks", () => {
     ];
 
     test("matches the title, case-insensitively", () => {
-      expect(visibleTasks(found, filters({ text: "SEARCH" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+      expect(visibleTasks(found, filters({ text: words("SEARCH") }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
         "TQ-0001",
       ]);
     });
 
     test("matches the id", () => {
-      expect(visibleTasks(found, filters({ text: "tq-0002" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+      expect(visibleTasks(found, filters({ text: words("tq-0002") }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
         "TQ-0002",
       ]);
     });
 
     test("matches the body", () => {
-      expect(visibleTasks(found, filters({ text: "refetches" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+      expect(visibleTasks(found, filters({ text: words("refetches") }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
         "TQ-0002",
       ]);
     });
 
-    test("is one phrase, not a set of words", () => {
-      expect(visibleTasks(found, filters({ text: "global search" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+    test("every word has to be found, wherever each one is", () => {
+      // "search" is in the title and "keys" in the body: the terms are ANDed
+      // over the task, not over one field.
+      expect(visibleTasks(found, filters({ text: words("search", "keys") }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
         "TQ-0001",
       ]);
-      expect(visibleTasks(found, filters({ text: "search global" }), FALLBACK_COLUMNS)).toEqual([]);
+      expect(visibleTasks(found, filters({ text: words("search", "refetches") }), FALLBACK_COLUMNS)).toEqual([]);
+    });
+
+    test("word order does not matter, but a phrase's does", () => {
+      expect(visibleTasks(found, filters({ text: words("search", "global") }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+      ]);
+      expect(visibleTasks(found, filters({ text: words("global search") }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+      ]);
+      expect(visibleTasks(found, filters({ text: words("search global") }), FALLBACK_COLUMNS)).toEqual([]);
+    });
+
+    test("a negated word hides what carries it", () => {
+      expect(visibleTasks(found, filters({ text: notWords("search") }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0002",
+      ]);
+    });
+
+    test("a yes and a no combine", () => {
+      expect(
+        visibleTasks(
+          found,
+          filters({ text: [...words("the"), ...notWords("search")] }),
+          FALLBACK_COLUMNS,
+        ).map((t) => t.id),
+      ).toEqual(["TQ-0002"]);
     });
 
     test("does not read a status, a label or an assignee", () => {
-      expect(visibleTasks(tasks, filters({ text: "todo" }), FALLBACK_COLUMNS)).toEqual([]);
-      expect(visibleTasks(tasks, filters({ text: "agent-api" }), FALLBACK_COLUMNS)).toEqual([]);
+      expect(visibleTasks(tasks, filters({ text: words("todo") }), FALLBACK_COLUMNS)).toEqual([]);
+      expect(visibleTasks(tasks, filters({ text: words("agent-api") }), FALLBACK_COLUMNS)).toEqual([]);
     });
 
     test("whitespace alone filters nothing", () => {
-      expect(visibleTasks(found, filters({ text: "   " }), FALLBACK_COLUMNS)).toHaveLength(2);
+      expect(visibleTasks(found, filters({ text: words("   ") }), FALLBACK_COLUMNS)).toHaveLength(2);
     });
 
     test("it combines with the rest", () => {
       expect(
-        visibleTasks(found, filters({ text: "board", status: "todo" }), FALLBACK_COLUMNS).map((t) => t.id),
+        visibleTasks(found, filters({ text: words("board"), status: "todo" }), FALLBACK_COLUMNS).map((t) => t.id),
       ).toEqual(["TQ-0002"]);
+    });
+  });
+
+  // The `-key=value` half of the same feature: an exclusion the filter bar has
+  // no control for, so the query line is the only thing that holds it.
+  describe("exclusions", () => {
+    const excluded = (...terms: ExcludedTerm[]) => filters({ excluded: terms });
+
+    test("a status, a priority, a label or an assignee can each be excluded", () => {
+      expect(visibleTasks(tasks, excluded({ key: "status", value: "todo" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+        "TQ-0003",
+      ]);
+      expect(visibleTasks(tasks, excluded({ key: "priority", value: "high" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+        "TQ-0003",
+        "TQ-0004",
+      ]);
+      expect(visibleTasks(tasks, excluded({ key: "label", value: "backend" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0003",
+        "TQ-0004",
+      ]);
+      expect(visibleTasks(tasks, excluded({ key: "assignee", value: "ui" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+        "TQ-0003",
+      ]);
+    });
+
+    test("an exclusion ignores case, like the filter it is the opposite of", () => {
+      expect(visibleTasks(tasks, excluded({ key: "label", value: "FRONTEND" }), FALLBACK_COLUMNS).map((t) => t.id)).toEqual([
+        "TQ-0001",
+        "TQ-0002",
+        "TQ-0003",
+      ]);
+    });
+
+    test("several exclusions all apply", () => {
+      expect(
+        visibleTasks(
+          tasks,
+          excluded({ key: "status", value: "todo" }, { key: "status", value: "done" }),
+          FALLBACK_COLUMNS,
+        ).map((t) => t.id),
+      ).toEqual(["TQ-0003"]);
+    });
+
+    test("an exclusion narrows the filter it sits beside", () => {
+      expect(
+        visibleTasks(
+          tasks,
+          filters({ status: "todo", excluded: [{ key: "label", value: "auth" }] }),
+          FALLBACK_COLUMNS,
+        ).map((t) => t.id),
+      ).toEqual(["TQ-0004"]);
     });
   });
 });

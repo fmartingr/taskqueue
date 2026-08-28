@@ -25,7 +25,7 @@ plain text either way.
                     ←  git diff                          (review, history)
 ```
 
-<div align="center"><a href="screenshots/board-1.png"><img alt="The tq board, serving this repository's own task queue" src="screenshots/board-1.png" width="560" /></a></div>
+<div align="center"><a href="screenshots/board-1.png"><img alt="The tq board, serving this repository's own task queue" src="screenshots/board-1.png" width="720" /></a></div>
 
 ## Install
 

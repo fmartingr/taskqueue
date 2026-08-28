@@ -1,14 +1,14 @@
 ---
 id: TQ-0092
 title: The browser harness leaks what it creates and hides its own failures
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - tests
   - component/ci
 created: 2026-08-28T12:57:54+02:00
-updated: 2026-08-28T12:57:54+02:00
+updated: 2026-08-28T23:20:32+02:00
 ---
 
 ## Finding
@@ -82,3 +82,43 @@ the build failure), **5** (bound `browser.close()`).
 
 Found across several code review passes during TQ-0080; every measurement above
 was taken on this machine.
+
+---
+
+## Notes
+
+- 2026-08-28T23:20:05+02:00 — All six fixed in browser/harness.ts, plus one the measurements uncovered.
+
+  Timeouts (6): lowered Playwright's rather than raising bun's. PAGE_TIMEOUT_MS
+  20s, TEST_TIMEOUT_MS unchanged at 30s, both pinned so no library default can
+  swap the order back. Raising bun's to 60s was tried first and reverted: it
+  made failures legible but doubled what a wedged file costs, since bun's clock
+  is also what every test pays once its browser is gone (one file went from 4.5
+  to 9 minutes). 20s is above every deliberate wait in the suite.
+
+  Leak counts, whole temp directory, name-level diff over a full run: 680
+  tq-browser-bin-*, 204 tq-browser-log-*, 412 project dirs before; a full
+  make test-browser now adds zero of any kind, on eight consecutive runs
+  including ones with 1, 4, 5, 7 and 9 failures. Suite went 297.8s -> 72.0s on
+  a clean run.
+
+  The binary directory (1) has no owner bun can give it at the end of a run:
+  process.on("exit") does not fire under bun test, and a module-scope afterAll
+  belongs to whichever file loaded the module first, not to the run. So it is
+  built and removed per test file instead — 0.17s of warm go build each.
+
+  The orphaned tq-browser-log-* had a cause nobody had named: closeSync on the
+  descriptors handed to Bun.spawn raised EBADF, which abandoned the rmSync on
+  the next line. The descriptors outlive the child, and closing a number the OS
+  has since reused closes whatever now holds it. They are closed immediately
+  after the spawn now — the child has its own copies and nothing here ever
+  writes through the originals.
+
+  Not fixed, and not this ticket: the first page.click in live.test.ts or
+  notes.test.ts still wedges in a loaded full run, roughly two runs in three on
+  this machine (load average 6-9, Spotlight indexing the 4,100 leaked
+  directories at 150% CPU). Both files pass alone, and all twelve pass
+  file-by-file, 99/99, every time. It failed the same way before this change
+  (baseline: 93 pass, 7 fail, live.test.ts). What did change is that the first
+  failure now names the selector and what the locator resolved to, instead of
+  'Target page, context or browser has been closed'.

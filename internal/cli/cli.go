@@ -350,6 +350,7 @@ func (c *cli) runInit(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
+	st.Announce = c.announceReconciliation
 
 	var written []string
 	if st.ConfigWritten != "" {
@@ -360,6 +361,18 @@ func (c *cli) runInit(args []string) int {
 		return c.fail(err)
 	}
 	written = append(written, guides...)
+
+	// Init is where a board change lands. Editing the columns in
+	// .taskqueue.yaml and running init again is the documented way to change
+	// one, and this is what makes that true: every task left in a column the
+	// file no longer declares is moved to the default column, and named on
+	// stderr (TQ-0088).
+	//
+	// After the guide, because a marker that will not parse fails there first
+	// and with the file named; reconciling ahead of it would report the same
+	// broken config twice. What it cannot write it warns about and does not
+	// fail on, the way every other command treats one.
+	st.Reconcile()
 
 	if *jsonOut {
 		return c.printJSON(map[string]any{
@@ -776,7 +789,63 @@ func (c *cli) runVersion(args []string) int {
 // creates anything — a directory with no project above it fails here, with a
 // message naming `tq init`.
 func (c *cli) st() (*store.Store, error) {
-	return store.OpenStore(c.dir)
+	st, err := store.OpenStore(c.dir)
+	if err != nil {
+		return nil, err
+	}
+	st.Announce = c.announceReconciliation
+	return st, nil
+}
+
+// announceReconciliation says what a reconciliation did: the tasks it refiled,
+// and the ones it could not. Any command can trigger one — a board column
+// removed from `.taskqueue.yaml` strands every task still in it, and the first
+// command to notice moves them all — so this is wired to every store the CLI
+// opens rather than to the commands that expect it.
+//
+// On stderr, and the exit code stays 0, the way a skipped task file is reported
+// (see warnListing). The tasks the command was asked for are still its answer,
+// and a queue that could not be written is still one to read; what must not
+// happen is a task changing column, or failing to, with nothing said (TQ-0088).
+func (c *cli) announceReconciliation(done store.Reconciliation) {
+	for _, group := range groupMoves(done.Moved) {
+		fmt.Fprintf(c.stderr, "warning: %s, so %s moved to %q\n",
+			group.reason, strings.Join(group.ids, ", "), group.to)
+	}
+	if done.Unfinished == nil {
+		return
+	}
+	// One line per task that could not be moved: errors.Join separates them by
+	// newline, and every warning here is a line somebody reads on its own.
+	for _, line := range strings.Split(done.Unfinished.Error(), "\n") {
+		fmt.Fprintf(c.stderr, "warning: %s\n", line)
+	}
+}
+
+// moveGroup is every task that came out of one column, so a board edited under
+// fifty tasks is one line and not fifty.
+type moveGroup struct {
+	reason string
+	to     string
+	ids    []string
+}
+
+// groupMoves gathers moves by where they came from and where they went, keeping
+// the order the reconciliation made them in.
+func groupMoves(moves []store.Move) []moveGroup {
+	var groups []moveGroup
+	seen := map[string]int{}
+	for _, m := range moves {
+		key := m.From + "\x00" + m.To
+		at, ok := seen[key]
+		if !ok {
+			at = len(groups)
+			seen[key] = at
+			groups = append(groups, moveGroup{reason: m.Reason, to: m.To})
+		}
+		groups[at].ids = append(groups[at].ids, m.ID)
+	}
+	return groups
 }
 
 // tasks lists the queue and names on stderr every file the scan had to skip,

@@ -57,8 +57,8 @@ func (t Task) Validate() error {
 	// Neither the status nor the priority is checked against a vocabulary here:
 	// both are the project's, this package does not know them, and a task filed
 	// under one that has since been dropped must still load. Columns.Check and
-	// Priorities.Check guard the writes; Columns.Normalize decides where a task
-	// whose column is gone is shown.
+	// Priorities.Check guard the writes; Columns.Reconcile is what says which
+	// column a task whose own is gone belongs in.
 	for _, dep := range t.DependsOn {
 		if dep == t.ID {
 			return fmt.Errorf("task %s cannot depend on itself", t.ID)
@@ -187,7 +187,10 @@ func (f Filter) matchFields(t Task) bool {
 // FilterTasks keeps the input order and needs the full task set because the
 // "ready" filter depends on the state of other tasks.
 func FilterTasks(tasks []Task, f Filter, columns Columns) []Task {
-	// Resolve filter status the same way the store resolves task statuses.
+	// Spell the filter's column the way the board spells it, so `--status
+	// backlog` finds the tasks filed in `inbox`. Every caller runs
+	// Filter.Validate first, so a status with no column at all was refused
+	// before it reached here.
 	f.Status = columns.Normalize(f.Status)
 	index := IndexTasks(tasks)
 	out := make([]Task, 0, len(tasks))

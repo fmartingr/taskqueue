@@ -68,9 +68,16 @@ type Store struct {
 	// answering nothing.
 	Marker string
 
-	// mu serialises ID allocation. The HTTP server shares one Store across
-	// handlers, so without it two requests scan the directory, see the same
-	// highest number, and both claim it.
+	// mu serialises ID allocation and reconciliation. The HTTP server shares one
+	// Store across handlers, so without it two requests scan the directory, see
+	// the same highest number, and both claim it — and two would set about
+	// moving the same stranded tasks out of the same removed column, each
+	// announcing a migration the other was already making.
+	//
+	// A listing does not hold it across the scan, only across the
+	// reconciliation it may end in: the scan is read-only and can be long, and
+	// the reconciliation is idempotent, so the second caller in finds nothing
+	// left to move (TQ-0088).
 	mu sync.Mutex
 
 	// Created reports that InitStore made the task directory, so `tq init` can
@@ -82,6 +89,17 @@ type Store struct {
 	// when the directory already had a config, which is what a second `tq
 	// init` sees.
 	ConfigWritten string
+
+	// Announce is handed what a reconciliation did, once per pass that had
+	// anything to say — tasks it moved, tasks it could not, or both. It is how a
+	// queue never changes shape in silence: reconciling is a write nobody asked
+	// for, so whoever opened the store gets to say what happened — the CLI on
+	// stderr, where it cannot disturb `--json` on stdout.
+	//
+	// nil says nothing, which is what a test reading the files itself wants.
+	// It is called while the store's lock is held, so it is serialised against
+	// every other reconciliation and must not call back into the store.
+	Announce func(Reconciliation)
 
 	// duringScan runs inside a listing's read window — after the directory has
 	// been read, before the files are — and is nil everywhere but a test. It
@@ -560,17 +578,62 @@ const listAttempts = 3
 // cannot be parsed. Nor is a file whose name claims a task ID in a spelling tq
 // will not read: it is reported alongside the broken ones and otherwise left
 // exactly where it is (TQ-0039).
+//
+// A scan that finds a task the board has no column for reconciles the queue and
+// scans again, so what comes back is never a listing of a half-migrated
+// directory. That makes a read a write, which is the price of never showing a
+// status the file does not hold (TQ-0088).
+//
+// A reconciliation that cannot write does not fail the listing. The tasks are
+// still exactly what their files hold, which is all this ever promised, and a
+// queue on a read-only checkout has to stay readable; the writes it could not
+// make are reported through Announce.
 func (s *Store) List() (Listing, error) {
+	listing, columns, err := s.scanQueue()
+	if err != nil {
+		return Listing{}, err
+	}
+	if !stranded(listing.Tasks, columns) {
+		return listing, nil
+	}
+	// The lock goes on inside Reconcile and not around this whole listing: a
+	// scan is the long, read-only half, and holding it would put two boards'
+	// refreshes in a queue behind each other. Two listings that both find the
+	// queue stranded is harmless — the second one to get in finds the columns
+	// already settled, moves nothing and announces nothing.
+	s.Reconcile()
+	// Again from the top: every stranded task has a new status and most of them
+	// a new modification time, and the listing has to be of the directory as it
+	// is now rather than of the one that needed moving.
+	listing, _, err = s.scanQueue()
+	return listing, err
+}
+
+// stranded reports a task this board has nowhere to put, which is what makes a
+// listing reconcile before it answers.
+func stranded(tasks []task.Task, columns task.Columns) bool {
+	for _, t := range tasks {
+		if _, changed := columns.Reconcile(t.Status); changed {
+			return true
+		}
+	}
+	return false
+}
+
+// scanQueue is one listing of the directory, with the board it was sorted
+// against. It is the whole of List but for the reconciliation, split out
+// because a reconciliation has to be followed by another one of these.
+func (s *Store) scanQueue() (Listing, task.Columns, error) {
 	// The ranking and the board are the project's, so sorting needs both. Read
 	// once, ahead of the scans: they do not change with an attempt, and a
 	// failure here is a failure of the whole listing rather than of one pass.
 	priorities, err := s.Priorities()
 	if err != nil {
-		return Listing{}, err
+		return Listing{}, task.Columns{}, err
 	}
 	columns, err := s.Columns()
 	if err != nil {
-		return Listing{}, err
+		return Listing{}, task.Columns{}, err
 	}
 
 	var listing Listing
@@ -581,12 +644,12 @@ func (s *Store) List() (Listing, error) {
 		var err error
 		before, foreign, err = s.readTaskDir()
 		if err != nil {
-			return Listing{}, err
+			return Listing{}, task.Columns{}, err
 		}
 		listing = s.scan(before)
 		after, err := s.taskFileNames()
 		if err != nil {
-			return Listing{}, err
+			return Listing{}, task.Columns{}, err
 		}
 		doubled = duplicatedIDs(before)
 		heldStill := slices.Equal(before, after)
@@ -634,13 +697,13 @@ func (s *Store) List() (Listing, error) {
 		listing.Unreadable = append(listing.Unreadable, UnreadableFile{File: name, Reason: foreignReason(name, before)})
 	}
 
-	// A task filed under a value the project has since dropped keeps it and
-	// sorts last, rather than being refused by the listing that would show it.
-	for i := range listing.Tasks {
-		listing.Tasks[i].Status = columns.Normalize(listing.Tasks[i].Status)
-	}
+	// Statuses go out exactly as the files hold them. Rewriting one for display
+	// is what let `tq list` show three tasks in a column none of them was in,
+	// while an unrelated `tq update` persisted that display for whichever task
+	// it happened to touch (TQ-0088). A status the board has no column for sorts
+	// last and is List's cue to reconcile.
 	task.SortTasks(listing.Tasks, priorities, columns)
-	return listing, nil
+	return listing, columns, nil
 }
 
 // readTaskDir is one reading of the task directory, split in two: the names of
@@ -788,22 +851,27 @@ func skipReason(name string, err error) string {
 	return strings.Join(strings.Fields(msg), " ")
 }
 
-// Get returns a single task by ID, with its status resolved against the board:
-// an alias becomes the column it names, and a column the project has removed
-// becomes the first one, which is where the task is shown.
+// Get returns a single task by ID, carrying the status its file holds.
 //
-// Resolved in memory only. Reads never write — a listing must not rewrite the
-// directory it is listing — so the corrected value reaches the file the next
-// time the task is saved for some other reason.
+// Finding that status is not a column of the board reconciles the whole queue
+// first, and the task comes back as it stands afterwards. The alternative was
+// resolving it in memory for display and letting the correction reach the file
+// on whatever write came next, which left the queue split across two boards
+// with no way to tell which half was which (TQ-0088).
+//
+// A reconciliation that cannot write does not fail the lookup, for the reason
+// List gives: the task comes back carrying what its file holds, which is what
+// this promises, and what could not be written is reported through Announce.
 func (s *Store) Get(id string) (task.Task, error) {
-	if !task.ValidID(id) {
-		return task.Task{}, fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
-	}
-	name, err := s.locate(id)
-	if err != nil {
-		return task.Task{}, err
-	}
-	t, err := s.readFile(name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.get(id)
+}
+
+// get is Get with the lock already held, for Mutate, which holds it across the
+// read, the change and the save.
+func (s *Store) get(id string) (task.Task, error) {
+	t, err := s.read(id)
 	if err != nil {
 		return task.Task{}, err
 	}
@@ -811,8 +879,134 @@ func (s *Store) Get(id string) (task.Task, error) {
 	if err != nil {
 		return task.Task{}, err
 	}
-	t.Status = columns.Normalize(t.Status)
-	return t, nil
+	if _, changed := columns.Reconcile(t.Status); !changed {
+		return t, nil
+	}
+	s.reconcile()
+	return s.read(id)
+}
+
+// read is one task off the disk, exactly as its file holds it.
+func (s *Store) read(id string) (task.Task, error) {
+	if !task.ValidID(id) {
+		return task.Task{}, fmt.Errorf("invalid task id %q (must match TQ-<number>)", id)
+	}
+	name, err := s.locate(id)
+	if err != nil {
+		return task.Task{}, err
+	}
+	return s.readFile(name)
+}
+
+// Move is one task a reconciliation refiled: where its file had it, where the
+// board put it, and why it could not stay.
+type Move struct {
+	ID     string
+	From   string
+	To     string
+	Reason string
+}
+
+// Reconciliation is what one pass did. It is what Announce carries, and it has
+// two halves because a pass can do both: move some tasks and fail on others.
+type Reconciliation struct {
+	// Moved is every task the pass refiled, in the order it moved them.
+	Moved []Move
+
+	// Unfinished is why the pass could not settle the whole queue, one line per
+	// task it could not move, and nil when it settled it. The moves above still
+	// happened — a partial pass is a state somebody has to be told about, not
+	// one to keep quiet because the whole thing did not come off (TQ-0088).
+	//
+	// A pass that could not even start — a marker it cannot read, a directory
+	// it cannot list — reports that here too, having moved nothing.
+	Unfinished error
+}
+
+// Empty reports a pass with nothing to say: it moved nothing and failed at
+// nothing, which is every reconciliation of a queue already in order.
+func (r Reconciliation) Empty() bool { return len(r.Moved) == 0 && r.Unfinished == nil }
+
+// Reconcile files every task under a column this board still has, and reports
+// what it moved. `tq init` runs it, which is what makes editing the board in
+// `.taskqueue.yaml` and running init again the way to change one; any listing
+// runs it the moment it finds a task the board has nowhere to put, which is the
+// safety net for a config edited without that.
+//
+// The whole queue in one pass, on purpose. Correcting one task's file on
+// whatever write happened to touch it next left which tasks had migrated
+// decided by which ones somebody had edited since, and said nothing about
+// either half (TQ-0088).
+//
+// Nothing here is returned as an error, and that is the point: this runs inside
+// reads — a listing, a lookup — and a queue that cannot be written must still
+// be readable. A checkout mounted read-only is the case: every move fails,
+// every failure is named through Announce, and the tasks still come back
+// carrying exactly what their files hold.
+func (s *Store) Reconcile() Reconciliation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reconcile()
+}
+
+// reconcile is Reconcile with the lock already held.
+func (s *Store) reconcile() Reconciliation {
+	columns, err := s.Columns()
+	if err != nil {
+		return s.announce(Reconciliation{Unfinished: err})
+	}
+	names, _, err := s.readTaskDir()
+	if err != nil {
+		return s.announce(Reconciliation{Unfinished: err})
+	}
+
+	var done Reconciliation
+	var failures []error
+	for _, t := range s.readTasks(names).Tasks {
+		to, changed := columns.Reconcile(t.Status)
+		if !changed {
+			continue
+		}
+		from := t.Status
+		t.Status = to
+		if _, err := s.update(t); err != nil {
+			// A file that went out from under the pass, and an ID two files
+			// claim, are both conditions a listing already reports on its own,
+			// so they are passed over here rather than reported twice.
+			if errors.Is(err, ErrTaskNotFound) || errors.Is(err, task.ErrInvalidTaskFile) {
+				continue
+			}
+			// Anything else is the filesystem refusing a write, and the pass
+			// carries on to the rest of the queue rather than stopping at the
+			// first one: stopping would leave more tasks behind than it had to,
+			// which is the very thing this exists to prevent.
+			failures = append(failures, fmt.Errorf("could not move %s out of %q: %w", t.ID, from, err))
+			continue
+		}
+		done.Moved = append(done.Moved, Move{ID: t.ID, From: from, To: to, Reason: strandedReason(from, columns)})
+	}
+	done.Unfinished = errors.Join(failures...)
+	return s.announce(done)
+}
+
+// announce hands a pass to whoever opened the store, when it has anything to
+// say, and returns it. Every exit from reconcile goes through here, so no pass
+// can move a task — or fail to — without the caller being able to report it.
+func (s *Store) announce(done Reconciliation) Reconciliation {
+	if s.Announce != nil && !done.Empty() {
+		s.Announce(done)
+	}
+	return done
+}
+
+// strandedReason is why the board could not leave a task in the column its file
+// named. Composed here, where the board is in hand, so every surface saying it
+// says the same thing.
+func strandedReason(from string, columns task.Columns) string {
+	if columns.Valid(from) {
+		return fmt.Sprintf("%q is another name for %q", from, columns.Normalize(from))
+	}
+	return fmt.Sprintf("%q is not a column of this board (%s)", from, strings.Join(columns.Names(), ", "))
 }
 
 func (s *Store) readFile(name string) (task.Task, error) {
@@ -910,9 +1104,10 @@ func (s *Store) Create(in CreateTaskInput) (task.Task, error) {
 // last-write-wins by nature: two callers that read the same version both write
 // their whole copy. Use Mutate when the change depends on what is there.
 //
-// The priority is not checked here, because there is nothing to check it
-// against: the task came out of this store, so its priority is whatever the
-// file already held. Create and Patch are where a caller supplies one.
+// Neither the priority nor the status is checked here, because there is nothing
+// to check them against: the task came out of this store, so both are whatever
+// its file already held. Create, Patch and `tq move` are where a caller supplies
+// one, and each checks the board or the vocabulary before it does.
 func (s *Store) Update(t task.Task) (task.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -927,7 +1122,7 @@ func (s *Store) Mutate(id string, apply func(*task.Task) error) (task.Task, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	t, err := s.Get(id)
+	t, err := s.get(id)
 	if err != nil {
 		return task.Task{}, err
 	}
@@ -999,12 +1194,12 @@ func (s *Store) update(t task.Task) (task.Task, error) {
 	t.Body = strings.Trim(t.Body, "\n")
 	t.Updated = time.Now().Truncate(time.Second)
 
-	columns, err := s.Columns()
-	if err != nil {
-		return task.Task{}, err
-	}
-	t.Status = columns.Normalize(t.Status)
-
+	// The status goes down as the caller handed it over, and the board is not
+	// consulted. A save is not a decision about which column a task belongs in:
+	// Create, Patch and `tq move` are where one is picked, and each checks the
+	// board before it picks. Correcting a status here made `tq update
+	// --assignee` move a task, one task at a time, with nothing said (TQ-0088) —
+	// the same reason the priority is not checked here either.
 	if err := t.ValidateForWrite(); err != nil {
 		return task.Task{}, err
 	}

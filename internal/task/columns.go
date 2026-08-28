@@ -100,8 +100,9 @@ func (c Columns) Names() []string {
 	return names
 }
 
-// First is the leftmost column, which is where a task whose status the board no
-// longer has is shown.
+// First is the leftmost column. It is the board's order, not its fallback:
+// where a task the board has no column for goes is Default's answer, and the
+// two are only the same board when no column claims `default: true`.
 func (c Columns) First() string { return c.effective()[0].Name }
 
 // Default is where a task filed without a status goes.
@@ -134,36 +135,61 @@ func (c Columns) Valid(status string) bool {
 	return ok
 }
 
-// Normalize is the status as the board shows it: an alias resolved to the
-// column it means, and a status the board no longer has resolved to the first
-// column, because a task with nowhere to go would otherwise not be shown at all.
+// Normalize is a status spelled the way the board spells it: an alias resolved
+// to the column it names, and anything else returned exactly as it came.
 //
-// Reads normalize, reads do not write. The corrected value goes to disk the
-// next time the task is saved for some other reason.
+// It is for a value a caller has already had accepted — Check runs first
+// everywhere it is used — so a status the board has no column for is not its
+// business and it does not invent one. Moving such a task is Reconcile's job,
+// which is a write, announced, and over the whole queue at once (TQ-0088).
 func (c Columns) Normalize(status string) string {
-	// Empty is not a column the board has lost, it is no answer at all, and
-	// turning it into the first column would let an explicitly cleared status
-	// quietly move a task. Validate refuses it; this leaves it alone to be
-	// refused.
-	if status == "" {
-		return ""
-	}
 	if column, ok := c.find(status); ok {
 		return column.Name
 	}
-	return c.First()
+	return status
 }
 
-// Rank is the column's position, for sorting. A status the board does not have
-// ranks as the first column, which is where it is shown.
+// Reconcile is where this board files a task carrying the given status, and
+// whether that differs from the status itself. It is the rule a reconciliation
+// applies; the store is what writes the answer to disk.
+//
+// A status the board has no column for goes to Default and not to First. The
+// two differ exactly when a column claims `default: true`, and on a board that
+// lists its done column first that difference is the whole point: First would
+// mark every stranded task finished and unblock whatever waited on it.
+//
+// A board that names no default has no such difference to draw on — Default is
+// First there, by the rule that puts a task filed with no status in the first
+// column. Such a project files new work in its leading column already, and
+// stranded work following it is that decision, not this one.
+//
+// Empty is left alone. It is no answer at all rather than a column the board
+// has lost, and turning it into one would let a status explicitly cleared
+// through `tq update --status ""` quietly move the task instead of being
+// refused by Validate.
+func (c Columns) Reconcile(status string) (string, bool) {
+	if status == "" {
+		return status, false
+	}
+	if column, ok := c.find(status); ok {
+		return column.Name, column.Name != status
+	}
+	return c.Default(), true
+}
+
+// Rank is the column's position, for sorting. A status the board has no column
+// for ranks last, as a dropped priority does — a listing showing one is a
+// listing taken before the reconciliation that moves it, and it belongs at the
+// end rather than displacing the first column's work.
 func (c Columns) Rank(status string) int {
+	columns := c.effective()
 	name := c.Normalize(status)
-	for i, column := range c.effective() {
+	for i, column := range columns {
 		if column.Name == name {
 			return i
 		}
 	}
-	return 0
+	return len(columns)
 }
 
 // Offers reports whether `tq ready` hands out work from this status's column.
@@ -184,8 +210,9 @@ func (c Columns) Satisfies(status string) bool {
 // path reaches Task.Validate, which requires one.
 //
 // As with priorities this is not part of Validate. Reading stays tolerant of
-// any value — Normalize decides where it is shown — and only a write has to
-// agree with the board as it stands now.
+// any value — a file the project's board has outgrown still parses and still
+// lists — and only a write that picks a column has to agree with the board as
+// it stands now. Reconcile is what moves such a task, and it moves them all.
 func (c Columns) Check(status string) error {
 	if status == "" || c.Valid(status) {
 		return nil

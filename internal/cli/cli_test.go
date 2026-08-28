@@ -1912,3 +1912,265 @@ func TestCLIMoveReportsABrokenMarkerRatherThanTheBuiltInBoard(t *testing.T) {
 		}
 	}
 }
+
+// ── A column the project removed (TQ-0088) ──────────────────────
+//
+// Editing `.taskqueue.yaml` is a documented thing to do, and deleting a column
+// from it strands every task still filed there. The queue moves them all to the
+// default column, and the command that noticed says which — on stderr, so
+// `--json` stdout stays exactly what an agent parses.
+
+// removedColumnBoard is the report's project: three columns, the default first.
+const removedColumnBoard = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: review
+    display_name: Review
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+// withoutReviewBoard is the same board after the user deletes `review`.
+const withoutReviewBoard = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+// strandedCLI is a project with three tasks in a column the config no longer
+// declares — the state the report reproduces, reached the way a user reaches
+// it: by editing their own file.
+func strandedCLI(t *testing.T) *testCLI {
+	t.Helper()
+	tc := newBareCLI(t)
+	tqtest.WriteConfig(t, tc.root, removedColumnBoard)
+	tc.mustRun("init")
+	for _, title := range []string{"One", "Two", "Three"} {
+		tc.mustRun("add", title, "--status", "review")
+	}
+	tqtest.WriteConfig(t, tc.root, withoutReviewBoard)
+	return tc
+}
+
+// statusesOnDisk is what the files themselves say, keyed by ID. Every defect
+// here was a difference between a file and what some surface showed for it, so
+// this is the only reading that settles one.
+func statusesOnDisk(t *testing.T, tc *testCLI) map[string]string {
+	t.Helper()
+	dir := filepath.Join(tc.root, config.TaskDirName)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "TQ-") {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// TQ-0001-a-slug.md: the ID is the first two dash-separated fields.
+		parts := strings.SplitN(strings.TrimSuffix(entry.Name(), ".md"), "-", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			if rest, found := strings.CutPrefix(line, "status: "); found {
+				out[parts[0]+"-"+parts[1]] = rest
+				break
+			}
+		}
+	}
+	return out
+}
+
+func TestCLIListReconcilesARemovedColumnAndSaysWhatMoved(t *testing.T) {
+	tc := strandedCLI(t)
+
+	out := tc.mustRun("list")
+	for _, id := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
+		if !strings.Contains(out, id+"  backlog") {
+			t.Errorf("tq list does not show %s in backlog:\n%s", id, out)
+		}
+	}
+	// The listing is of the files, not a rendering over them.
+	for id, status := range statusesOnDisk(t, tc) {
+		if status != "backlog" {
+			t.Errorf("%s is %q on disk, want backlog: a listing must not show a status the file does not hold", id, status)
+		}
+	}
+
+	warning := tc.stderr.String()
+	if !strings.Contains(warning, "review") || !strings.Contains(warning, "backlog") {
+		t.Errorf("stderr = %q, want it to name the column that went and the one the tasks moved to", warning)
+	}
+	for _, id := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
+		if !strings.Contains(warning, id) {
+			t.Errorf("stderr = %q, want it to name %s", warning, id)
+		}
+	}
+	// One line for the three of them, not three.
+	if got := strings.Count(strings.TrimSpace(warning), "\n"); got != 0 {
+		t.Errorf("stderr is %d lines, want the tasks that came out of one column gathered into one:\n%s", got+1, warning)
+	}
+
+	// Settled now: a second listing has nothing to say.
+	tc.mustRun("list")
+	if tc.stderr.Len() != 0 {
+		t.Errorf("stderr = %q on a settled queue, want nothing", tc.stderr)
+	}
+}
+
+// The warning is a warning: the tasks are still the answer and the exit code
+// stays 0, and on stdout there is nothing but the JSON an agent parses.
+func TestCLIListJSONStaysPureJSONWhileReconciling(t *testing.T) {
+	tc := strandedCLI(t)
+
+	var tasks []task.Task
+	tc.mustRunJSON(&tasks, "list", "--json")
+	if len(tasks) != 3 {
+		t.Fatalf("tq list --json returned %d tasks, want 3", len(tasks))
+	}
+	for _, tk := range tasks {
+		if tk.Status != "backlog" {
+			t.Errorf("%s = %q, want backlog", tk.ID, tk.Status)
+		}
+	}
+	if tc.stderr.Len() == 0 {
+		t.Error("stderr is empty, want the reconciliation reported somewhere")
+	}
+}
+
+// The report's second half: one unrelated edit used to rewrite the status of
+// the single task it touched and leave the rest of the queue where it was.
+func TestCLIUpdateDoesNotChangeAStatusByItself(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "Work")
+	tc.mustRun("move", "TQ-0001", "in-progress")
+
+	tc.mustRun("update", "TQ-0001", "--assignee", "bob")
+	if got := statusesOnDisk(t, tc)["TQ-0001"]; got != "in-progress" {
+		t.Errorf("status on disk = %q after `tq update --assignee`, want in-progress", got)
+	}
+	tc.mustRun("note", "TQ-0001", "still going")
+	if got := statusesOnDisk(t, tc)["TQ-0001"]; got != "in-progress" {
+		t.Errorf("status on disk = %q after `tq note`, want in-progress", got)
+	}
+}
+
+// Whichever command gets there first moves the whole queue. A single
+// `tq update --assignee` on a stranded project migrates all three tasks, not
+// the one it was pointed at.
+func TestCLIAnUnrelatedEditMigratesTheWholeQueueOrNoneOfIt(t *testing.T) {
+	tc := strandedCLI(t)
+
+	tc.mustRun("update", "TQ-0001", "--assignee", "bob")
+	for id, status := range statusesOnDisk(t, tc) {
+		if status != "backlog" {
+			t.Errorf("%s is %q on disk, want backlog: the queue must never be half-migrated", id, status)
+		}
+	}
+	if !strings.Contains(tc.stderr.String(), "TQ-0003") {
+		t.Errorf("stderr = %q, want the tasks the edit moved named", tc.stderr)
+	}
+}
+
+// Editing the board means running `tq init` again, and this is what makes that
+// advice true rather than a formality.
+func TestCLIInitReconcilesARemovedColumn(t *testing.T) {
+	tc := strandedCLI(t)
+
+	out := tc.mustRun("init")
+	if !strings.Contains(out, "already initialized") {
+		t.Errorf("init output = %q, want the second run to report the existing queue", out)
+	}
+	for id, status := range statusesOnDisk(t, tc) {
+		if status != "backlog" {
+			t.Errorf("%s is %q on disk, want tq init to have moved it to the default column", id, status)
+		}
+	}
+	if !strings.Contains(tc.stderr.String(), "review") {
+		t.Errorf("stderr = %q, want tq init to name the column that went", tc.stderr)
+	}
+}
+
+// The board's default column is what a stranded task is filed under, whatever
+// order the columns are listed in. On a board whose first column is the one
+// that satisfies dependencies, the first-column answer would have marked every
+// stranded task done.
+func TestCLIReconciliationUsesTheDefaultColumnNotTheFirst(t *testing.T) {
+	tc := newBareCLI(t)
+	tqtest.WriteConfig(t, tc.root, `version: 1
+path: .tasks
+columns:
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+  - name: review
+    display_name: Review
+    consider_ready: true
+  - name: backlog
+    display_name: Backlog
+    default: true
+`)
+	tc.mustRun("init")
+	tc.mustRun("add", "Work", "--status", "review")
+	tqtest.WriteConfig(t, tc.root, `version: 1
+path: .tasks
+columns:
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+  - name: backlog
+    display_name: Backlog
+    default: true
+`)
+
+	tc.mustRun("list")
+	if got := statusesOnDisk(t, tc)["TQ-0001"]; got != "backlog" {
+		t.Errorf("status on disk = %q, want backlog: the default column, not the first one", got)
+	}
+}
+
+// A queue that cannot be written still lists, and says what it could not move.
+// A read-only checkout — CI, a container volume, a root-owned .tasks — must not
+// become a queue nobody can read because a column was removed from its config.
+func TestCLIListStillWorksWhenTheReconciliationCannotWrite(t *testing.T) {
+	tc := strandedCLI(t)
+	dir := filepath.Join(tc.root, config.TaskDirName)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if f, err := os.CreateTemp(dir, "probe-*"); err == nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		t.Skip("this filesystem let a write through a read-only directory")
+	}
+
+	out := tc.mustRun("list")
+	for _, id := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
+		// The column their files still hold, which is what a listing promises.
+		if !strings.Contains(out, id+"  review") {
+			t.Errorf("tq list does not show %s in review:\n%s", id, out)
+		}
+		if !strings.Contains(tc.stderr.String(), id) {
+			t.Errorf("stderr = %q, want it to name %s among the tasks it could not move", tc.stderr, id)
+		}
+	}
+	if !strings.Contains(tc.stderr.String(), "could not move") {
+		t.Errorf("stderr = %q, want it to say the migration did not happen", tc.stderr)
+	}
+}

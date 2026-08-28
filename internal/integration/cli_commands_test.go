@@ -621,3 +621,294 @@ func TestBacklogIsStillAcceptedAsInbox(t *testing.T) {
 		t.Errorf("after move to backlog, status = %q, want inbox", got.Status)
 	}
 }
+
+// ── A column the project removed (TQ-0088) ──────────────────────
+//
+// Editing `.taskqueue.yaml` is a documented thing to do, and deleting a column
+// strands every task still filed in it. Every one of them moves to the default
+// column, the command that noticed says which on stderr, and the exit code and
+// the `--json` stdout contract are untouched by any of it.
+
+const boardWithReview = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: review
+    display_name: Review
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+const boardWithoutReview = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+// strandedProject is the report: three tasks in `review`, and a config the user
+// has since deleted `review` from.
+func strandedProject(t *testing.T) *project {
+	t.Helper()
+	p := newProject(t)
+	if err := writeFile(p.path(".taskqueue.yaml"), boardWithReview); err != nil {
+		t.Fatal(err)
+	}
+	for _, title := range []string{"One", "Two", "Three"} {
+		p.mustRun(t, "add", title, "--status", "review")
+	}
+	if err := writeFile(p.path(".taskqueue.yaml"), boardWithoutReview); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// statusesOnDisk reads the status line out of every task file. The files are
+// what this whole report is about, so nothing here asks tq what they say.
+func statusesOnDisk(t *testing.T, p *project) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(p.path(".tasks"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "TQ-") || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		content, err := os.ReadFile(p.path(".tasks", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts := strings.SplitN(strings.TrimSuffix(entry.Name(), ".md"), "-", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			if rest, found := strings.CutPrefix(line, "status: "); found {
+				out[parts[0]+"-"+parts[1]] = rest
+				break
+			}
+		}
+	}
+	return out
+}
+
+func TestRemovingAColumnMovesEveryTaskLeftInIt(t *testing.T) {
+	t.Parallel()
+	p := strandedProject(t)
+
+	r := p.mustRun(t, "list", "--json")
+	var tasks []taskJSON
+	r.JSON(t, &tasks)
+	if len(tasks) != 3 {
+		t.Fatalf("tq list --json returned %d tasks, want 3", len(tasks))
+	}
+	for _, tk := range tasks {
+		if tk.Status != "backlog" {
+			t.Errorf("%s = %q, want the default column", tk.ID, tk.Status)
+		}
+	}
+	// stdout was JSON alone — JSON above would have failed otherwise — so the
+	// report of what moved is on stderr, where it cannot break an agent.
+	if !strings.Contains(r.Stderr, "review") || !strings.Contains(r.Stderr, "backlog") {
+		t.Errorf("stderr = %q, want the column that went and the one the tasks moved to", r.Stderr)
+	}
+	for _, id := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
+		if !strings.Contains(r.Stderr, id) {
+			t.Errorf("stderr = %q, want it to name %s", r.Stderr, id)
+		}
+	}
+
+	for id, status := range statusesOnDisk(t, p) {
+		if status != "backlog" {
+			t.Errorf("%s is %q on disk, want backlog: the listing must not show a status the file does not hold", id, status)
+		}
+	}
+
+	// Settled: the next command has nothing to report and still exits 0.
+	again := p.mustRun(t, "list", "--json")
+	if again.Stderr != "" {
+		t.Errorf("stderr = %q on a settled queue, want nothing", again.Stderr)
+	}
+}
+
+// `tq init` is the documented answer to a config edit, and running it after one
+// is what settles the queue.
+func TestInitReconcilesARemovedColumn(t *testing.T) {
+	t.Parallel()
+	p := strandedProject(t)
+
+	r := p.mustRun(t, "init")
+	if !strings.Contains(r.Stdout, "already initialized") {
+		t.Errorf("stdout = %q, want init to report the queue it found", r.Stdout)
+	}
+	if !strings.Contains(r.Stderr, "review") {
+		t.Errorf("stderr = %q, want init to name the column that went", r.Stderr)
+	}
+	for id, status := range statusesOnDisk(t, p) {
+		if status != "backlog" {
+			t.Errorf("%s is %q on disk, want tq init to have moved it", id, status)
+		}
+	}
+
+	// And `tq init --json` keeps stdout to itself, reconciliation or not.
+	p2 := strandedProject(t)
+	var payload map[string]any
+	p2.mustRun(t, "init", "--json").JSON(t, &payload)
+}
+
+// The other half of the report: one unrelated edit used to rewrite the status
+// of the single task it touched and leave the rest of the queue behind.
+func TestAnUnrelatedEditNeverChangesAStatusOnItsOwn(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	p.mustRun(t, "add", "Work")
+	p.mustRun(t, "move", "TQ-0001", "in-progress")
+
+	for _, args := range [][]string{
+		{"update", "TQ-0001", "--assignee", "bob"},
+		{"update", "TQ-0001", "--title", "Renamed"},
+		{"note", "TQ-0001", "something unrelated"},
+	} {
+		p.mustRun(t, args...)
+		if got := statusesOnDisk(t, p)["TQ-0001"]; got != "in-progress" {
+			t.Fatalf("status on disk = %q after `tq %s`, want in-progress", got, strings.Join(args, " "))
+		}
+	}
+}
+
+// A board whose default column is not its first. The first-column answer would
+// have filed every stranded task in `shipped`, which is the column that
+// satisfies dependencies — marking them done and unblocking their dependents.
+func TestReconciliationUsesTheDefaultColumnNotTheFirst(t *testing.T) {
+	t.Parallel()
+	p := newProject(t)
+	// `shipped` is both the first column and the one that satisfies
+	// dependencies; `backlog` is the default and sits last.
+	const doneFirstWithReview = `version: 1
+path: .tasks
+columns:
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+  - name: review
+    display_name: Review
+    consider_ready: true
+  - name: backlog
+    display_name: Backlog
+    default: true
+`
+	const doneFirstWithoutReview = `version: 1
+path: .tasks
+columns:
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+  - name: backlog
+    display_name: Backlog
+    default: true
+`
+	if err := writeFile(p.path(".taskqueue.yaml"), doneFirstWithReview); err != nil {
+		t.Fatal(err)
+	}
+	p.mustRun(t, "add", "Blocked work", "--status", "review")
+	p.mustRun(t, "add", "Dependent", "--depends-on", "TQ-0001")
+
+	if err := writeFile(p.path(".taskqueue.yaml"), doneFirstWithoutReview); err != nil {
+		t.Fatal(err)
+	}
+
+	r := p.mustRun(t, "list", "--json")
+	var tasks []taskJSON
+	r.JSON(t, &tasks)
+	for _, tk := range tasks {
+		if tk.Status != "backlog" {
+			t.Errorf("%s = %q, want backlog: the default column, not the first", tk.ID, tk.Status)
+		}
+	}
+	if got := statusesOnDisk(t, p)["TQ-0001"]; got != "backlog" {
+		t.Errorf("TQ-0001 is %q on disk, want backlog", got)
+	}
+	// The consequence the rule exists for: a stranded prerequisite must not
+	// come back marked done.
+	var ready []taskJSON
+	p.mustRun(t, "ready", "--json").JSON(t, &ready)
+	for _, tk := range ready {
+		if tk.ID == "TQ-0002" {
+			t.Error("TQ-0002 is ready, so its prerequisite was filed in the column that satisfies dependencies")
+		}
+	}
+}
+
+// A running board and a config edited under it: the server reconciles on the
+// next request, and what it serves is what the files hold.
+func TestAServingBoardReconcilesAConfigEditedUnderIt(t *testing.T) {
+	t.Parallel()
+	p := strandedProject(t)
+	srv := p.serve(t)
+
+	var listed []taskJSON
+	srv.get(t, "/api/tasks", &listed)
+	if len(listed) != 3 {
+		t.Fatalf("GET /api/tasks returned %d tasks, want 3", len(listed))
+	}
+	for _, tk := range listed {
+		if tk.Status != "backlog" {
+			t.Errorf("%s = %q, want backlog", tk.ID, tk.Status)
+		}
+	}
+	for id, status := range statusesOnDisk(t, p) {
+		if status != "backlog" {
+			t.Errorf("%s is %q on disk, want backlog: the board must not show a column the file is not in", id, status)
+		}
+	}
+}
+
+// A queue that cannot be written still lists, and still exits 0. Reconciling
+// runs inside a read now, and a read-only checkout — CI, a container volume, a
+// root-owned .tasks — must not become a queue nobody can list because a column
+// was taken out of its config.
+func TestAQueueThatCannotBeWrittenStillLists(t *testing.T) {
+	t.Parallel()
+	p := strandedProject(t)
+	dir := p.path(".tasks")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if f, err := os.CreateTemp(dir, "probe-*"); err == nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		t.Skip("this filesystem let a write through a read-only directory")
+	}
+
+	r := p.mustRun(t, "list", "--json")
+	var tasks []taskJSON
+	r.JSON(t, &tasks)
+	if len(tasks) != 3 {
+		t.Fatalf("tq list --json returned %d tasks, want 3", len(tasks))
+	}
+	for _, tk := range tasks {
+		// The column their files still hold: a listing shows what is on disk.
+		if tk.Status != "review" {
+			t.Errorf("%s = %q, want review, the status its file holds", tk.ID, tk.Status)
+		}
+	}
+	if !strings.Contains(r.Stderr, "could not move") {
+		t.Errorf("stderr = %q, want it to say the migration did not happen", r.Stderr)
+	}
+	for _, id := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
+		if !strings.Contains(r.Stderr, id) {
+			t.Errorf("stderr = %q, want it to name %s among the tasks it could not move", r.Stderr, id)
+		}
+	}
+}

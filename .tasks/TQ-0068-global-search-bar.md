@@ -1,12 +1,12 @@
 ---
 id: TQ-0068
 title: Global search bar
-status: backlog
+status: inbox
 priority: normal
 depends_on:
   - TQ-0076
 created: 2026-08-25T18:37:33+02:00
-updated: 2026-08-26T10:31:16+02:00
+updated: 2026-08-28T12:32:03+02:00
 ---
 
 ## Notes

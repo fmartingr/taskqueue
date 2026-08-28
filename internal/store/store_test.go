@@ -1288,8 +1288,11 @@ func TestDuplicateFilesForOneIDAreRejected(t *testing.T) {
 	}
 }
 
-// Update normalizes an unknown status to the first column on write.
-func TestUpdateCorrectsAStatusTheBoardDoesNotHave(t *testing.T) {
+// A save writes the status it was handed and never consults the board. Picking
+// a column is Create's, Patch's and `tq move`'s job, and each checks the board
+// before it picks; a save that corrected one instead is what made `tq update
+// --assignee` move a task nobody asked to move (TQ-0088).
+func TestUpdateWritesTheStatusItWasHandedRatherThanTheBoardsIdeaOfIt(t *testing.T) {
 	st := tqtest.NewStore(t)
 	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Valid"})
 	created.Status = "shipped"
@@ -1298,13 +1301,11 @@ func TestUpdateCorrectsAStatusTheBoardDoesNotHave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if written.Status != task.StatusInbox {
-		t.Errorf("Status = %q, want it corrected to the first column", written.Status)
+	if written.Status != "shipped" {
+		t.Errorf("Status = %q, want the value the caller handed over", written.Status)
 	}
-
-	reloaded, err := st.Get("TQ-0001")
-	if err != nil || reloaded.Status != task.StatusInbox {
-		t.Errorf("the correction should have reached the file, got %+v (%v)", reloaded, err)
+	if got := statusOnDisk(t, st, created.ID); got != "shipped" {
+		t.Errorf("the file says %q, want the value the save was given", got)
 	}
 }
 
@@ -2387,8 +2388,128 @@ func TestListSortsByTheBoardOrder(t *testing.T) {
 	}
 }
 
-// Removed columns normalize on read; the file updates on the next write.
-func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing.T) {
+// ── Reconciling a board that lost a column (TQ-0088) ─────────────
+//
+// A project edits its own columns, and the tasks filed in one that went have to
+// end up somewhere. The rule is that every one of them moves, at once, to the
+// default column, and that whoever opened the store is told which.
+//
+// removedColumn is the board of the report: three columns, the default first,
+// and a `review` the project then deletes.
+const removedColumn = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: review
+    display_name: Review
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+// withoutReview is the same board after the edit, with `review` gone.
+const withoutReview = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+// statusOnDisk is what the file itself says, which is the only reading that
+// settles this: every defect here was a difference between the file and what
+// some surface showed for it.
+func statusOnDisk(t *testing.T, st *store.Store, id string) string {
+	t.Helper()
+	entries, err := os.ReadDir(st.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if name := entry.Name(); !strings.HasPrefix(name, id+"-") && name != id+".md" {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(st.Dir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			if rest, found := strings.CutPrefix(line, "status: "); found {
+				return rest
+			}
+		}
+		t.Fatalf("%s has no status line:\n%s", entry.Name(), content)
+	}
+	t.Fatalf("no file for %s in %s", id, st.Dir)
+	return ""
+}
+
+// The report, end to end: three tasks in `review`, the project deletes the
+// column, and the first listing moves all three to the default column — on
+// disk, not for display.
+func TestRemovingAColumnMovesEveryTaskLeftInItToTheDefault(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, removedColumn)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	var announced []store.Reconciliation
+	st.Announce = func(done store.Reconciliation) { announced = append(announced, done) }
+
+	for _, title := range []string{"One", "Two", "Three"} {
+		tqtest.MustCreate(t, st, store.CreateTaskInput{Title: title, Status: "review"})
+	}
+	tqtest.WriteConfig(t, root, withoutReview)
+
+	for _, tk := range listTasks(t, st) {
+		if tk.Status != "backlog" {
+			t.Errorf("%s lists as %q, want the default column", tk.ID, tk.Status)
+		}
+		if got := statusOnDisk(t, st, tk.ID); got != tk.Status {
+			t.Errorf("%s lists as %q but its file says %q: a listing must never show a status the file does not hold",
+				tk.ID, tk.Status, got)
+		}
+	}
+
+	// Told once, about all three, with the column they came out of named.
+	if len(announced) != 1 {
+		t.Fatalf("Announce called %d times, want exactly one reconciliation: %+v", len(announced), announced)
+	}
+	moved := announced[0].Moved
+	if announced[0].Unfinished != nil {
+		t.Errorf("Unfinished = %v, want a pass that settled the whole queue", announced[0].Unfinished)
+	}
+	if len(moved) != 3 {
+		t.Fatalf("announced %d moves, want all three: %+v", len(moved), moved)
+	}
+	for _, m := range moved {
+		if m.From != "review" || m.To != "backlog" {
+			t.Errorf("move = %+v, want review -> backlog", m)
+		}
+		if !strings.Contains(m.Reason, `"review" is not a column`) {
+			t.Errorf("Reason = %q, want it to say review is not a column of this board", m.Reason)
+		}
+	}
+
+	// And nothing is said the second time round: the queue is settled.
+	announced = nil
+	listTasks(t, st)
+	if len(announced) != 0 {
+		t.Errorf("Announce called again on a settled queue: %+v", announced)
+	}
+}
+
+// The default column, not the first one. A board that lists its done column
+// first would otherwise have every stranded task marked finished, unblocking
+// whatever was waiting on it — which is what Columns.Normalize did.
+func TestReconciliationFilesStrandedTasksInTheDefaultColumnNotTheFirst(t *testing.T) {
 	root := tqtest.Root(t)
 	st, err := store.InitStore(root)
 	if err != nil {
@@ -2396,30 +2517,177 @@ func TestAColumnThatDisappearsShowsInTheFirstAndIsFixedOnTheNextWrite(t *testing
 	}
 	stranded := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed before the board changed", Status: task.StatusDone})
 
+	// customBoard's default is `doing`, and its first column is `spotted`.
 	tqtest.WriteConfig(t, root, customBoard)
 
 	listed := listTasks(t, st)
-	if len(listed) != 1 || listed[0].Status != "spotted" {
-		t.Fatalf("List() = %+v, want the task shown in the first column", listed)
+	if len(listed) != 1 || listed[0].Status != "doing" {
+		t.Fatalf("List() = %+v, want the task in `doing`, the column marked default", listed)
 	}
+	if got := statusOnDisk(t, st, stranded.ID); got != "doing" {
+		t.Errorf("the file says %q, want the default column: reconciling is a write, not a display", got)
+	}
+}
 
-	onDisk, err := os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(stranded)))
+// Reconciliation is all of the queue or none of it. Half a migration is what
+// the old behaviour produced, and which half you had depended on which tasks
+// somebody happened to have edited since the config changed.
+func TestReconciliationLeavesNoTaskBehindInARemovedColumn(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, removedColumn)
+	st, err := store.InitStore(root)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("InitStore: %v", err)
 	}
-	if !strings.Contains(string(onDisk), "status: "+task.StatusDone) {
-		t.Errorf("a listing rewrote the file; it should still say %q", task.StatusDone)
+	var ids []string
+	for i := 0; i < 5; i++ {
+		ids = append(ids, tqtest.MustCreate(t, st, store.CreateTaskInput{
+			Title:  fmt.Sprintf("Filed %d", i),
+			Status: "review",
+		}).ID)
 	}
+	// One filed in a column that survives, to prove reconciliation touches only
+	// what it has to.
+	settled := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Shipped already", Status: "shipped"})
 
-	if _, err := st.Note(stranded.ID, "something unrelated"); err != nil {
+	tqtest.WriteConfig(t, root, withoutReview)
+
+	// The single edit that used to migrate exactly one task.
+	if _, err := st.Patch(ids[0], task.TaskPatch{Assignee: ptr("bob")}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	for _, id := range ids {
+		if got := statusOnDisk(t, st, id); got != "backlog" {
+			t.Errorf("%s is %q on disk, want backlog: one edit must migrate the whole queue or none of it", id, got)
+		}
+	}
+	if got := statusOnDisk(t, st, settled.ID); got != "shipped" {
+		t.Errorf("%s is %q on disk, want shipped left alone", settled.ID, got)
+	}
+}
+
+// The data-loss case, pinned hard. An edit that says nothing about the status
+// leaves the status alone: only a reconciliation moves a task between columns,
+// and a reconciliation moves them all and says so.
+func TestAnEditThatSaysNothingAboutTheStatusLeavesItAlone(t *testing.T) {
+	st := storeWithBoard(t)
+	tk := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed", Status: "shipped"})
+
+	tk.Assignee = "bob"
+	if _, err := st.Update(tk); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if _, err := st.Patch(tk.ID, task.TaskPatch{Title: ptr("Retitled")}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if _, err := st.Note(tk.ID, "something unrelated"); err != nil {
 		t.Fatalf("Note: %v", err)
 	}
-	onDisk, err = os.ReadFile(filepath.Join(st.Dir, store.TaskFileName(stranded)))
+	if _, err := st.Patch(tk.ID, task.TaskPatch{AddLabels: []string{"auth"}}); err != nil {
+		t.Fatalf("Patch(add-label): %v", err)
+	}
+	if got := statusOnDisk(t, st, tk.ID); got != "shipped" {
+		t.Errorf("status on disk = %q after four edits that never mentioned it, want shipped", got)
+	}
+}
+
+// Get reads one task and can only see one, so a stranded task it finds
+// reconciles the whole queue rather than that task alone.
+func TestGetReconcilesTheQueueWhenTheTaskItReadsIsStranded(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, removedColumn)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	first := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "One", Status: "review"})
+	second := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Two", Status: "review"})
+
+	tqtest.WriteConfig(t, root, withoutReview)
+
+	got, err := st.Get(first.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != "backlog" {
+		t.Errorf("Get(%s).Status = %q, want backlog", first.ID, got.Status)
+	}
+	if disk := statusOnDisk(t, st, first.ID); disk != got.Status {
+		t.Errorf("Get says %q and the file says %q; a read must never report a status the file does not hold", got.Status, disk)
+	}
+	if disk := statusOnDisk(t, st, second.ID); disk != "backlog" {
+		t.Errorf("%s is %q on disk, want backlog: reading one task reconciles the queue, not the task", second.ID, disk)
+	}
+}
+
+// Reconcile is what `tq init` calls, and calling it on a settled queue does
+// nothing at all — which is what makes running init after every config edit
+// safe advice.
+func TestReconcileIsIdempotent(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, removedColumn)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "One", Status: "review"})
+	tqtest.WriteConfig(t, root, withoutReview)
+
+	done := st.Reconcile()
+	if done.Unfinished != nil {
+		t.Fatalf("Reconcile: %v", done.Unfinished)
+	}
+	if len(done.Moved) != 1 {
+		t.Fatalf("Reconcile() moved %d tasks, want 1: %+v", len(done.Moved), done.Moved)
+	}
+	if again := st.Reconcile(); !again.Empty() {
+		t.Errorf("Reconcile() = %+v the second time, want nothing left to do", again)
+	}
+}
+
+// A file carrying an alias is reconciled to the column the alias names, so the
+// file and the board agree on a single spelling. Nothing tq writes produces
+// one — Create resolves it — so this is a hand-edited or an inherited file.
+func TestReconciliationRewritesAnAliasToTheColumnItNames(t *testing.T) {
+	st := tqtest.NewStore(t)
+	created := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed under the old name"})
+	writeStatusByHand(t, st, created.ID, task.StatusBacklog)
+
+	var announced []store.Move
+	st.Announce = func(done store.Reconciliation) { announced = append(announced, done.Moved...) }
+
+	if listed := listTasks(t, st); len(listed) != 1 || listed[0].Status != task.StatusInbox {
+		t.Fatalf("List() = %+v, want the task in inbox", listed)
+	}
+	if got := statusOnDisk(t, st, created.ID); got != task.StatusInbox {
+		t.Errorf("the file says %q, want it rewritten to the column the alias names", got)
+	}
+	if len(announced) != 1 || !strings.Contains(announced[0].Reason, "another name for") {
+		t.Errorf("announced %+v, want one move saying backlog is another name for inbox", announced)
+	}
+}
+
+// writeStatusByHand rewrites a task file's status line, the way a person
+// editing the file would. It is the only way a status the store would not write
+// gets onto disk.
+func writeStatusByHand(t *testing.T, st *store.Store, id, status string) {
+	t.Helper()
+	name, err := filepath.Glob(filepath.Join(st.Dir, id+"*.md"))
+	if err != nil || len(name) != 1 {
+		t.Fatalf("looking for %s in %s: %v (%v)", id, st.Dir, err, name)
+	}
+	content, err := os.ReadFile(name[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(onDisk), "status: spotted") {
-		t.Errorf("the correction did not ride along with the next write:\n%s", onDisk)
+	lines := strings.Split(string(content), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "status: ") {
+			lines[i] = "status: " + status
+		}
+	}
+	if err := os.WriteFile(name[0], []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -2965,5 +3233,167 @@ func TestStoreConfigFailsWhenTheMarkerIsGone(t *testing.T) {
 	// the project never declared — the decoy above the queue included.
 	if _, err := st.Columns(); err == nil {
 		t.Error("Columns() = nil error with the marker gone, want the failure reported")
+	}
+}
+
+// A reconciliation that cannot write must not take the queue with it. The
+// tasks it could not move are named, the ones it did are named too, and reading
+// still works — a checkout mounted read-only is a queue to read, not one to
+// refuse (TQ-0088).
+func TestReconciliationThatCannotWriteStillListsAndSaysWhatItCouldNotDo(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, removedColumn)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	for _, title := range []string{"One", "Two"} {
+		tqtest.MustCreate(t, st, store.CreateTaskInput{Title: title, Status: "review"})
+	}
+	tqtest.WriteConfig(t, root, withoutReview)
+
+	// A directory nothing may write to, which is what a read-only checkout, a
+	// root-owned .tasks and a container volume all look like from here.
+	if err := os.Chmod(st.Dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(st.Dir, 0o755) })
+	if f, err := os.CreateTemp(st.Dir, "probe-*"); err == nil {
+		// Running as root, where the mode is advisory. Nothing to prove here.
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		t.Skip("this filesystem let a write through a read-only directory")
+	}
+
+	var announced []store.Reconciliation
+	st.Announce = func(done store.Reconciliation) { announced = append(announced, done) }
+
+	listing, err := st.List()
+	if err != nil {
+		t.Fatalf("List on a queue that cannot be written = %v, want the tasks it can read", err)
+	}
+	if len(listing.Tasks) != 2 {
+		t.Fatalf("List() = %+v, want both tasks", listing.Tasks)
+	}
+	for _, tk := range listing.Tasks {
+		if tk.Status != "review" {
+			t.Errorf("%s = %q, want the status its file still holds", tk.ID, tk.Status)
+		}
+	}
+	if len(announced) != 1 || announced[0].Unfinished == nil {
+		t.Fatalf("announced %+v, want one pass reporting what it could not move", announced)
+	}
+	// Both of them, not just the first: the pass carries on rather than
+	// stopping, so as little as possible is left behind.
+	for _, id := range []string{"TQ-0001", "TQ-0002"} {
+		if !strings.Contains(announced[0].Unfinished.Error(), id) {
+			t.Errorf("Unfinished = %q, want it to name %s", announced[0].Unfinished, id)
+		}
+	}
+
+	// And a lookup answers too, with what the file holds.
+	got, err := st.Get("TQ-0001")
+	if err != nil {
+		t.Fatalf("Get on a queue that cannot be written = %v", err)
+	}
+	if got.Status != "review" {
+		t.Errorf("Get().Status = %q, want the status its file holds", got.Status)
+	}
+}
+
+// A pass that gets partway through says so, and says which tasks it moved.
+// Announcing only a pass that came off whole would leave a half-migrated queue
+// as the one state nobody was told about.
+func TestAPartialReconciliationAnnouncesWhatItMovedAndWhatItCouldNot(t *testing.T) {
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, removedColumn)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	moves := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Movable", Status: "review"})
+	stuck := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Stuck", Status: "review"})
+	tqtest.WriteConfig(t, root, withoutReview)
+
+	// The directory goes read-only between the two saves: the first lands, the
+	// second cannot. Driven rather than waited for, the way the other races in
+	// this file are — a test that hoped to catch a filesystem mid-pass would
+	// pass or fail by timing.
+	saves := 0
+	st.DuringUpdate(func() {
+		if saves++; saves != 2 {
+			return
+		}
+		if err := os.Chmod(st.Dir, 0o555); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Cleanup(func() { _ = os.Chmod(st.Dir, 0o755) })
+
+	var announced []store.Reconciliation
+	st.Announce = func(done store.Reconciliation) { announced = append(announced, done) }
+
+	done := st.Reconcile()
+	if len(done.Moved) != 1 || done.Moved[0].ID != moves.ID {
+		t.Fatalf("Moved = %+v, want the one task that could be moved", done.Moved)
+	}
+	if done.Unfinished == nil || !strings.Contains(done.Unfinished.Error(), stuck.ID) {
+		t.Fatalf("Unfinished = %v, want it to name %s", done.Unfinished, stuck.ID)
+	}
+	if len(announced) != 1 {
+		t.Fatalf("Announce called %d times, want the partial pass reported exactly once", len(announced))
+	}
+	if len(announced[0].Moved) != 1 || announced[0].Unfinished == nil {
+		t.Errorf("announced %+v, want both halves of the pass", announced[0])
+	}
+	if got := statusOnDisk(t, st, moves.ID); got != "backlog" {
+		t.Errorf("%s is %q on disk, want the move that succeeded to have landed", moves.ID, got)
+	}
+}
+
+// A board that names no default has none to fall back on but its first column,
+// which is the rule that also files a task created without a status. Pinned so
+// the choice is a decision and not an accident: on such a board a stranded task
+// follows new work into the leading column.
+func TestReconciliationFollowsTheBoardsDefaultEvenWhenThatIsTheFirstColumn(t *testing.T) {
+	root := tqtest.Root(t)
+	const noDefault = `version: 1
+path: .tasks
+columns:
+  - name: spotted
+    display_name: Spotted
+    consider_ready: true
+  - name: doing
+    display_name: Doing
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+	tqtest.WriteConfig(t, root, noDefault)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	// The same column a task filed with no status of its own lands in.
+	filed := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed with no column"})
+	if filed.Status != "spotted" {
+		t.Fatalf("Create() filed the task in %q, want the first column", filed.Status)
+	}
+
+	stale := tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Filed in doing", Status: "doing"})
+	tqtest.WriteConfig(t, root, `version: 1
+path: .tasks
+columns:
+  - name: spotted
+    display_name: Spotted
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`)
+
+	listTasks(t, st)
+	if got := statusOnDisk(t, st, stale.ID); got != "spotted" {
+		t.Errorf("status on disk = %q, want the board's default, which here is its first column", got)
 	}
 }

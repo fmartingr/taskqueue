@@ -85,6 +85,16 @@ whole string, so `tq list --label component/backend` takes the whole key.
   status outside it is refused on write. A task filed without one lands in
   {{.DefaultStatus}}. `tq ready` offers work from {{.Offering}}, and a dependency counts as met
   once it reaches {{.Satisfying}}.
+- **After editing `{{.ConfigFile}}`, run `tq init` again.** It is
+  idempotent — an existing queue and an existing marker are left as they are —
+  and it is what settles the edit: the guide you are reading is regenerated, and
+  every task still filed in a column the file no longer declares is moved to
+  {{.DefaultStatus}}, all of them at once, with the tasks that moved named on
+  stderr. Forget, and anything that lists — `tq list`, `tq ready`, the board —
+  does the same thing and says the same thing; nothing is left half-migrated
+  either way. Nothing else moves a task between columns: `tq update
+  --assignee`, `tq update --title` and `tq note` leave the status exactly as the
+  file holds it.
 - Priorities: {{.Priorities}} (default: {{.DefaultPriority}}).
   Most severe first, and that order is the sort order. Unlike labels this is a
   closed set, declared by the project in `{{.ConfigFile}}`: a value outside it

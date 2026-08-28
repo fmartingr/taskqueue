@@ -59,17 +59,80 @@ func TestColumnsNormalize(t *testing.T) {
 	if got := builtin.Normalize(StatusDone); got != StatusDone {
 		t.Errorf("Normalize(done) = %q, want it unchanged", got)
 	}
-	// A column the project removed: the task is shown in the first one rather
-	// than vanishing off a board that has nowhere to put it.
-	if got := custom().Normalize(StatusDone); got != "spotted" {
-		t.Errorf("Normalize(done) under a custom board = %q, want the first column", got)
+	// A column the project removed comes back exactly as it went in. Normalize
+	// only spells a status the board's way; deciding where a task the board has
+	// no column for goes is Reconcile's, and it is a write (TQ-0088).
+	if got := custom().Normalize(StatusDone); got != StatusDone {
+		t.Errorf("Normalize(done) under a custom board = %q, want it left alone", got)
 	}
-	// Empty is left alone rather than becoming the first column: it is no
-	// answer at all, and turning it into one would let a status explicitly
-	// cleared through `tq update --status ""` quietly move the task instead of
-	// being refused by Validate.
 	if got := custom().Normalize(""); got != "" {
-		t.Errorf("Normalize(\"\") = %q, want it left empty for Validate to refuse", got)
+		t.Errorf("Normalize(\"\") = %q, want it left empty", got)
+	}
+}
+
+// Reconcile is where a board says what to do about a status it has no column
+// for, and the answer is the default column rather than the first one: a board
+// that lists its done column first would otherwise mark every stranded task
+// finished and unblock whatever waited on it (TQ-0088).
+func TestColumnsReconcile(t *testing.T) {
+	// The default is deliberately not the first column here.
+	board := NewColumns([]Column{
+		{Name: "shipped", Satisfies: true},
+		{Name: "spotted", Ready: true},
+		{Name: "doing"},
+	}, "doing", nil)
+
+	for _, tc := range []struct {
+		status  string
+		want    string
+		changed bool
+	}{
+		{status: "doing", want: "doing"},
+		{status: "shipped", want: "shipped"},
+		{status: "review", want: "doing", changed: true},
+		// Empty is no answer at all rather than a column the board has lost, so
+		// it is left for Validate to refuse: turning it into one would let a
+		// status cleared through `tq update --status ""` quietly move the task.
+		{status: "", want: ""},
+	} {
+		got, changed := board.Reconcile(tc.status)
+		if got != tc.want || changed != tc.changed {
+			t.Errorf("Reconcile(%q) = %q, %v; want %q, %v", tc.status, got, changed, tc.want, tc.changed)
+		}
+	}
+
+	// An alias is a change too: the file and the board have to agree on one
+	// spelling, or a read has to correct the file for display.
+	if got, changed := (Columns{}).Reconcile(StatusBacklog); got != StatusInbox || !changed {
+		t.Errorf("Reconcile(backlog) = %q, %v; want %q, true", got, changed, StatusInbox)
+	}
+
+	// A board that names no default has only its first column to fall back on,
+	// which is the same column a task filed with no status of its own lands in.
+	// Pinned so that following the project's own choice is a decision rather
+	// than an accident.
+	noDefault := NewColumns([]Column{
+		{Name: "shipped", Satisfies: true},
+		{Name: "spotted", Ready: true},
+	}, "", nil)
+	if noDefault.Default() != "shipped" {
+		t.Fatalf("Default() = %q, want the first column when none is declared", noDefault.Default())
+	}
+	if got, changed := noDefault.Reconcile("review"); got != "shipped" || !changed {
+		t.Errorf("Reconcile(review) = %q, %v; want the board's own default, %q", got, changed, "shipped")
+	}
+}
+
+// A status the board has no column for sorts last, as a dropped priority does.
+// It is a task waiting for the reconciliation that will move it, and it does
+// not belong at the head of the board in the meantime.
+func TestColumnsRankPutsAStatusTheBoardHasNoColumnForLast(t *testing.T) {
+	c := custom()
+	if got, want := c.Rank("review"), len(c.Names()); got != want {
+		t.Errorf("Rank(review) = %d, want %d", got, want)
+	}
+	if got := c.Rank("spotted"); got != 0 {
+		t.Errorf("Rank(spotted) = %d, want 0", got)
 	}
 }
 

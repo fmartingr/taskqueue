@@ -303,8 +303,10 @@ func TestParseTaskKeepsAStatusTheBoardNoLongerHas(t *testing.T) {
 	if tk.Status != "shipped" {
 		t.Errorf("Status = %q, want it kept verbatim", tk.Status)
 	}
-	if got := (Columns{}).Normalize(tk.Status); got != StatusInbox {
-		t.Errorf("Normalize(%q) = %q, want the first column", tk.Status, got)
+	// The board says where such a task belongs, and a write is what puts it
+	// there: the default column, all of them at once (TQ-0088).
+	if got, changed := (Columns{}).Reconcile(tk.Status); got != StatusInbox || !changed {
+		t.Errorf("Reconcile(%q) = %q, %v; want %q, true", tk.Status, got, changed, StatusInbox)
 	}
 	if err := (Columns{}).Check(tk.Status); err == nil {
 		t.Error("Check() on the parsed status = nil, want it refused for a write")

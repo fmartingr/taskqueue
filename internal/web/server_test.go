@@ -810,3 +810,192 @@ func TestAPIKeepsTheProjectsBoardWhenThePathLeavesTheMarkersDirectory(t *testing
 		t.Errorf("status = %+v, want one task in %s", status, st.Dir)
 	}
 }
+
+// ── A column the project removed (TQ-0088) ──────────────────────
+
+// removedColumnBoard is the board of the report, and withoutReviewBoard is the
+// same file after the user deletes `review` from it.
+const removedColumnBoard = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: review
+    display_name: Review
+    consider_ready: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+const withoutReviewBoard = `version: 1
+path: .tasks
+columns:
+  - name: backlog
+    display_name: Backlog
+    default: true
+  - name: shipped
+    display_name: Shipped
+    consider_done: true
+`
+
+// strandedServer serves a project with three tasks filed in a column its config
+// no longer declares — the state a user reaches by editing their own file while
+// a board is open.
+func strandedServer(t *testing.T) (*httptest.Server, *store.Store, string) {
+	t.Helper()
+	root := tqtest.Root(t)
+	tqtest.WriteConfig(t, root, removedColumnBoard)
+	st, err := store.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, title := range []string{"One", "Two", "Three"} {
+		tqtest.MustCreate(t, st, store.CreateTaskInput{Title: title, Status: "review"})
+	}
+	tqtest.WriteConfig(t, root, withoutReviewBoard)
+
+	router := newAPIRouter(st, testVersion, eventInterval)
+	srv := httptest.NewServer(router)
+	t.Cleanup(func() { _ = router.Close() })
+	t.Cleanup(srv.Close)
+	return srv, st, root
+}
+
+// statusOnDisk is what a task's file says, which is the reading that settles
+// every defect here: each one was a difference between a file and what a
+// surface showed for it.
+func statusOnDisk(t *testing.T, st *store.Store, id string) string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(st.Dir, id+"*.md"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("looking for %s in %s: %v (%v)", id, st.Dir, err, matches)
+	}
+	content, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		if rest, found := strings.CutPrefix(line, "status: "); found {
+			return rest
+		}
+	}
+	t.Fatalf("%s has no status line:\n%s", matches[0], content)
+	return ""
+}
+
+// The board asks for the tasks, and what it gets back is what the files hold —
+// because the request that noticed the stranded tasks moved them.
+func TestAPIListReconcilesTasksLeftInARemovedColumn(t *testing.T) {
+	srv, st, _ := strandedServer(t)
+
+	resp, payload := do(t, srv, http.MethodGet, "/api/tasks", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d: %s", resp.StatusCode, payload)
+	}
+	listed := decode[[]task.Task](t, payload)
+	if len(listed) != 3 {
+		t.Fatalf("listing = %+v, want all three tasks", listed)
+	}
+	for _, tk := range listed {
+		if tk.Status != "backlog" {
+			t.Errorf("%s = %q, want the default column", tk.ID, tk.Status)
+		}
+		if disk := statusOnDisk(t, st, tk.ID); disk != tk.Status {
+			t.Errorf("%s is served as %q and stored as %q; the board must never show a column the file is not in",
+				tk.ID, tk.Status, disk)
+		}
+	}
+
+	// And the columns the board draws no longer include the one that went, so
+	// every card it was handed has somewhere to sit.
+	_, payload = do(t, srv, http.MethodGet, "/api/config", "")
+	got := decode[struct {
+		Columns []config.BoardColumn `json:"columns"`
+	}](t, payload)
+	var names []string
+	for _, column := range got.Columns {
+		names = append(names, column.Name)
+	}
+	if want := "backlog,shipped"; strings.Join(names, ",") != want {
+		t.Errorf("columns = %v, want %q", names, want)
+	}
+}
+
+// GET /api/status counts the same queue, and reconciles it the same way: the
+// board asks here for what it cannot show in an array of tasks, and it must not
+// be answered from a directory half of which is on the old board.
+func TestAPIStatusReconcilesTasksLeftInARemovedColumn(t *testing.T) {
+	srv, st, _ := strandedServer(t)
+
+	resp, payload := do(t, srv, http.MethodGet, "/api/status", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/status = %d: %s", resp.StatusCode, payload)
+	}
+	got := decode[serverStatus](t, payload)
+	if !got.OK || got.TaskCount != 3 {
+		t.Errorf("status = %+v, want three tasks", got)
+	}
+	if len(got.Unreadable) != 0 || len(got.Duplicated) != 0 || got.Incomplete {
+		t.Errorf("status = %+v, want a clean queue: a removed column is not a broken file", got)
+	}
+	for _, id := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
+		if disk := statusOnDisk(t, st, id); disk != "backlog" {
+			t.Errorf("%s is %q on disk, want backlog", id, disk)
+		}
+	}
+}
+
+// Dragging one card must not be what migrates the queue one task at a time.
+// A PATCH that says nothing about the status leaves it alone; a PATCH on a
+// stranded queue moves every task, not the one it names.
+func TestAPIPatchDoesNotMoveATaskByItself(t *testing.T) {
+	srv, st := newTestServer(t)
+	tqtest.MustCreate(t, st, store.CreateTaskInput{Title: "Work", Status: task.StatusInProgress})
+
+	resp, payload := do(t, srv, http.MethodPatch, "/api/tasks/TQ-0001", `{"assignee": "bob"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH = %d: %s", resp.StatusCode, payload)
+	}
+	if got := statusOnDisk(t, st, "TQ-0001"); got != task.StatusInProgress {
+		t.Errorf("status on disk = %q after a patch that only set an assignee, want in-progress", got)
+	}
+}
+
+func TestAPIPatchOnAStrandedQueueMigratesAllOfIt(t *testing.T) {
+	srv, st, _ := strandedServer(t)
+
+	resp, payload := do(t, srv, http.MethodPatch, "/api/tasks/TQ-0001", `{"assignee": "bob"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH = %d: %s", resp.StatusCode, payload)
+	}
+	patched := decode[task.Task](t, payload)
+	if patched.Status != "backlog" {
+		t.Errorf("patched status = %q, want backlog", patched.Status)
+	}
+	for _, id := range []string{"TQ-0001", "TQ-0002", "TQ-0003"} {
+		if disk := statusOnDisk(t, st, id); disk != "backlog" {
+			t.Errorf("%s is %q on disk, want backlog: the queue must never be half-migrated", id, disk)
+		}
+	}
+}
+
+// GET /api/tasks/{id} is what the board's dialog reads, and it answers with the
+// file's own column — after moving the queue onto the board the config now
+// declares.
+func TestAPIGetTaskReportsTheStatusItsFileHolds(t *testing.T) {
+	srv, st, _ := strandedServer(t)
+
+	resp, payload := do(t, srv, http.MethodGet, "/api/tasks/TQ-0002", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET = %d: %s", resp.StatusCode, payload)
+	}
+	got := decode[task.Task](t, payload)
+	if disk := statusOnDisk(t, st, got.ID); got.Status != disk {
+		t.Errorf("served as %q, stored as %q", got.Status, disk)
+	}
+	if got.Status != "backlog" {
+		t.Errorf("status = %q, want backlog", got.Status)
+	}
+}

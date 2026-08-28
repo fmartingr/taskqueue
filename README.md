@@ -66,6 +66,10 @@ the directory and the config it writes `.tasks/AGENTS.md` — a short CLI cheat
 sheet for coding agents, generated from the statuses, priorities and exit codes
 the binary actually implements.
 
+**Run it again after every edit to `.taskqueue.yaml`.** That is what regenerates
+the guide and moves the tasks a removed column stranded — see
+[After editing `.taskqueue.yaml`, run `tq init` again](#after-editing-taskqueueyaml-run-tq-init-again).
+
 Point your agents at it yourself, by referencing that guide from your
 `AGENTS.md`, `CLAUDE.md` or whatever your tool reads — an `@.tasks/AGENTS.md`
 include, a Markdown link, whatever the tool understands.
@@ -184,6 +188,20 @@ a different one is the failure this replaces.
 So there are two ways to get a marker and no others — walk up for it, or be
 handed one — and every command has one.
 
+### After editing `.taskqueue.yaml`, run `tq init` again
+
+Everything below is edited by hand, in a file committed with the project, and
+`tq init` is what settles the queue afterwards. It is idempotent — an existing
+task directory and an existing marker are left exactly as they are — so running
+it again costs nothing and does two things: it regenerates `.tasks/AGENTS.md` so
+the guide agents read is not describing the old board, and it moves every task
+the edit stranded (see [Columns](#columns)).
+
+Forgetting is safe rather than silent: a command that meets a task filed in a
+column the config no longer declares reconciles the queue itself and says so.
+Running init is how you choose when that happens, and how you settle a queue
+whose stranded tasks no single command has happened to look at yet.
+
 ### Where the server binds
 
 `tq serve` listens on `127.0.0.1:7331` by default. A project can pin its own
@@ -260,10 +278,34 @@ Like priorities and unlike labels, this is a closed set: `tq add --status`,
 `tq move`, `tq update --status`, `POST /api/tasks` and `PATCH /api/tasks/{id}`
 refuse a status the board has no column for, and list what it does have.
 
-A task whose column the project has since removed is **shown in the first
-column** — on the board, in `tq list`, in filters and in sorting — and the file
-is corrected the next time that task is saved for some other reason. Reads never
-write: a listing does not rewrite the directory it is listing.
+**After editing the columns, run `tq init` again.** It is idempotent — an
+existing queue and an existing marker are left exactly as they are — and it is
+what settles the tasks the edit stranded: every task still filed in a column the
+file no longer declares is moved to the **default** column, all of them in one
+pass, and the tasks that moved are named on stderr.
+
+Forgetting is safe. A command that finds a task in a column the config no longer
+has reconciles the queue there and then, and says the same thing — anything that
+lists (`tq list`, `tq ready`, the board, `GET /api/tasks`), and any command
+whose own task is one of the stranded ones. `tq show` on a task that is *not*
+stranded looks at nothing else, so it leaves the rest of the queue for the next
+listing; that is why running `tq init` is the way to settle one deliberately.
+
+That does mean a command which only reads can write, on purpose: the
+alternative is showing a column the file is not in, and correcting the file on
+whatever write happened to come next, which left half the queue on the old board
+and half on the new one with nothing said about either (TQ-0088). A queue that
+cannot be written — a read-only checkout — still lists, carrying exactly what
+its files hold, and says on stderr which tasks it could not move.
+
+The **default** column and not the first one, because a board that marks a later
+column `default: true` and lists its `consider_done` column first would otherwise
+have every stranded task marked finished, unblocking whatever was waiting on it.
+A board that declares no default has only its first column to fall back on — the
+same one a task filed without a status lands in.
+
+Nothing else moves a task between columns: `tq update --assignee`,
+`tq update --title` and `tq note` leave the status exactly as the file holds it.
 
 The built-in board is Inbox, To do, In Progress, Done and Rejected.
 

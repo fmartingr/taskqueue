@@ -236,8 +236,6 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onShortcut));
 
 <template>
   <div class="search">
-    <label class="search-label" for="search-query">Search</label>
-
     <div class="search-box">
       <input
         id="search-query"
@@ -249,6 +247,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onShortcut));
         placeholder="text, -not, or priority=urgent  (/)"
         autocomplete="off"
         spellcheck="false"
+        aria-label="Search"
         aria-autocomplete="list"
         aria-controls="search-suggestions"
         :aria-expanded="showing"

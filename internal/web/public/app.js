@@ -6967,10 +6967,6 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
     onBeforeUnmount(() => document.removeEventListener("keydown", onShortcut));
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("div", _hoisted_18, [
-        _cache[2] || (_cache[2] = createBaseVNode("label", {
-          class: "search-label",
-          for: "search-query"
-        }, "Search", -1)),
         createBaseVNode("div", _hoisted_25, [
           createBaseVNode("input", {
             id: "search-query",
@@ -6983,6 +6979,7 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
             placeholder: "text, -not, or priority=urgent  (/)",
             autocomplete: "off",
             spellcheck: "false",
+            "aria-label": "Search",
             "aria-autocomplete": "list",
             "aria-controls": "search-suggestions",
             "aria-expanded": showing.value,

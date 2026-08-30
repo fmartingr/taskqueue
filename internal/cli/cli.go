@@ -201,6 +201,11 @@ Commands:
 Statuses:   %s
 Priorities: %s (most severe first; default: %s)
 
+Task IDs:
+  <id> is TQ-0028, and the number on its own says the same thing: tq show 28.
+  The prefix is optional and case does not matter, on an argument and on a
+  dependency flag alike.
+
 Common flags:
   --json                          Print JSON to stdout and nothing else
   --status, --priority, --label, --assignee   Filters for list/ready
@@ -442,7 +447,7 @@ func (c *cli) runAdd(args []string) int {
 		Priority:  *priority,
 		Assignee:  *assignee,
 		Labels:    labels,
-		DependsOn: dependsOn,
+		DependsOn: taskIDs(dependsOn),
 		Body:      *body,
 	})
 	if err != nil {
@@ -513,6 +518,24 @@ func (c *cli) runReady(args []string) int {
 	return exitOK
 }
 
+// taskID is every ID this package takes from a person, expanded from the
+// shorthand they may have typed: `tq show 28` means TQ-0028. Expanding happens
+// here and nowhere deeper — the store looks a task up by the exact ID a file
+// carries, and the board and the API deal in IDs they were given by tq
+// (TQ-0071).
+func taskID(arg string) string { return task.NormalizeID(arg) }
+
+// taskIDs is taskID over a repeatable flag: a dependency is typed the same way
+// an argument is, and it is written to a file, so it is expanded before it
+// gets there rather than being refused as an invalid dependency.
+func taskIDs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = taskID(arg)
+	}
+	return out
+}
+
 func (c *cli) runShow(args []string) int {
 	fs := c.flagSet("show")
 	jsonOut := fs.Bool("json", false, "print JSON output")
@@ -525,7 +548,7 @@ func (c *cli) runShow(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := st.Get(positional[0])
+	t, err := st.Get(taskID(positional[0]))
 	if err != nil {
 		return c.fail(err)
 	}
@@ -594,7 +617,7 @@ func (c *cli) runMove(args []string) int {
 	if !ok {
 		return code
 	}
-	return c.moveTask(positional[0], positional[1], *jsonOut)
+	return c.moveTask(taskID(positional[0]), positional[1], *jsonOut)
 }
 
 func (c *cli) runDone(args []string) int {
@@ -619,7 +642,7 @@ func (c *cli) runDone(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	return c.moveTask(positional[0], target, *jsonOut)
+	return c.moveTask(taskID(positional[0]), target, *jsonOut)
 }
 
 // moveTask is the shared status transition behind `tq move` and `tq done`.
@@ -693,8 +716,8 @@ func (c *cli) runUpdate(args []string) int {
 	patch := task.TaskPatch{
 		AddLabels:    addLabels,
 		RemoveLabels: removeLabels,
-		AddDeps:      addDeps,
-		RemoveDeps:   removeDeps,
+		AddDeps:      taskIDs(addDeps),
+		RemoveDeps:   taskIDs(removeDeps),
 	}
 	// Only flags that were actually passed become part of the patch.
 	fs.Visit(func(f *flag.Flag) {
@@ -728,7 +751,7 @@ func (c *cli) runUpdate(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := st.Patch(positional[0], patch)
+	t, err := st.Patch(taskID(positional[0]), patch)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -761,7 +784,7 @@ func (c *cli) runNote(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	t, err := st.Note(positional[0], positional[1])
+	t, err := st.Note(taskID(positional[0]), positional[1])
 	if err != nil {
 		return c.fail(err)
 	}

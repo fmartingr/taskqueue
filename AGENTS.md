@@ -222,6 +222,16 @@ frontend`, `make typecheck` or `make dev` will run.
 - Task files are named `<id>-<title-slug>.md`, but the ID in the frontmatter is
   what identifies a task: look tasks up by ID (`Store.locate`), never by
   reconstructing a filename from a title.
+- The number alone is an ID on the command line — `tq show 28` is `tq show
+  TQ-0028` — and `task.NormalizeID` is the one place that expansion happens,
+  called at the CLI's boundary and nowhere deeper (TQ-0071). The store looks a
+  task up by the exact ID a file carries, and the API and the board deal in IDs
+  tq gave them, so nothing below the CLI has to know the shorthand exists. It
+  leaves anything already shaped like an ID alone: `TQ-28` is a valid ID, and
+  re-padding one somebody hand-wrote would send the lookup to a file that is not
+  there. `task.FormatID` is the other half — the spelling `NextID` hands out —
+  and the two are checked against each other, so every number tq writes is one
+  the shorthand reaches.
 - `.md`, lowercase, is the only extension a task file may have, and the rule is
   one-way: every path tq writes, renames, links or removes ends in a lowercase
   `.md`, and every path it matches must too (TQ-0039). Folding case in

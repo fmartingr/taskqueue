@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -796,5 +797,67 @@ func TestValidateRejectsLineBreaksInSingleLineFields(t *testing.T) {
 
 	if err := base.ValidateForWrite(); err != nil {
 		t.Errorf("ValidateForWrite() on a clean task = %v, want nil", err)
+	}
+}
+
+func TestNormalizeID(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"28", "TQ-0028"},
+		{"0028", "TQ-0028"},
+		{"00000028", "TQ-0028"},
+		{"1", "TQ-0001"},
+		{"12345", "TQ-12345"},
+		{"0", "TQ-0000"},
+		{"tq-28", "TQ-0028"},
+		{"Tq-0028", "TQ-0028"},
+		{"TQ-0028", "TQ-0028"},
+		// Already an ID, so it is taken literally: a task hand-filed under
+		// TQ-28 is what TQ-28 means, and padding it would look for a file that
+		// is not there.
+		{"TQ-28", "TQ-28"},
+		// Not a spelling of a number, so it comes back for the caller to refuse.
+		{"", ""},
+		{"TQ-", "TQ-"},
+		{"28a", "28a"},
+		{"-28", "-28"},
+		{"tq 28", "tq 28"},
+		{"TQ-0028-fix", "TQ-0028-fix"},
+	}
+	for _, tc := range cases {
+		if got := NormalizeID(tc.in); got != tc.want {
+			t.Errorf("NormalizeID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A number far past what an int holds is still a number: it is padded like any
+// other rather than parsed, so it names a task that does not exist instead of
+// wrapping into one that does.
+func TestNormalizeIDDoesNotParseTheNumber(t *testing.T) {
+	huge := "99999999999999999999999999"
+	if got := NormalizeID(huge); got != "TQ-"+huge {
+		t.Errorf("NormalizeID(%q) = %q", huge, got)
+	}
+}
+
+func TestFormatID(t *testing.T) {
+	for n, want := range map[int]string{0: "TQ-0000", 1: "TQ-0001", 42: "TQ-0042", 12345: "TQ-12345"} {
+		if got := FormatID(n); got != want {
+			t.Errorf("FormatID(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+// Every ID tq hands out is one the shorthand reaches: the two spellings are one
+// rule, and a drift between them would leave numbers only typable in full.
+func TestNormalizeIDReachesEveryFormattedID(t *testing.T) {
+	for _, n := range []int{0, 1, 9, 10, 999, 1000, 9999, 10000, 123456} {
+		id := FormatID(n)
+		if !ValidID(id) {
+			t.Fatalf("FormatID(%d) = %q, which is not a valid ID", n, id)
+		}
+		if got := NormalizeID(strconv.Itoa(n)); got != id {
+			t.Errorf("NormalizeID(%d) = %q, want %q", n, got, id)
+		}
 	}
 }

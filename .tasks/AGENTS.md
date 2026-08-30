@@ -123,6 +123,10 @@ whole string, so `tq list --label component/backend` takes the whole key.
   body can document notes without `tq note` mistaking prose for notes.
 - Each note is one Markdown list item. The lines after its first are indented
   under the bullet, which is what keeps a multi-line note inside its note.
+- An `<id>` is `TQ-0028`, and the number on its own says the same thing:
+  `tq show 28`. The prefix is optional and case does not matter, on an argument
+  and on `--depends-on`, `--add-dependency` and `--remove-dependency` alike; a
+  dependency is stored in full whichever way it was typed.
 - The filename carries a slug of the title, but the `id` in the frontmatter is
   what identifies a task. `tq update --title` renames the file itself; never
   rename one by hand to match a new title, and look a task up by its ID rather

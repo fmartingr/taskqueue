@@ -40,7 +40,52 @@ var builtinPriorities = []string{PriorityUrgent, PriorityHigh, PriorityNormal, P
 // idPattern is the only accepted shape for task IDs (and therefore filenames).
 var idPattern = regexp.MustCompile(`^TQ-[0-9]+$`)
 
+// How tq spells a number it hands out: the prefix, and at least this many
+// digits. A bigger number takes the digits it needs.
+const (
+	idPrefix = "TQ-"
+	idDigits = 4
+)
+
 func ValidID(id string) bool { return idPattern.MatchString(id) }
+
+// FormatID is how a number becomes an ID, and the only place that spelling
+// lives: NormalizeID expands what a person types to the same shape.
+func FormatID(n int) string { return fmt.Sprintf("%s%0*d", idPrefix, idDigits, n) }
+
+// idShorthand is what a person may type instead of a whole ID: the number,
+// with the prefix optional and in any case.
+var idShorthand = regexp.MustCompile(`^(?i:tq-)?([0-9]+)$`)
+
+// NormalizeID expands the shorthand a person types into the ID a task carries:
+// `28`, `0028` and `tq-0028` all mean TQ-0028, the way tq itself writes a
+// number (four digits, more when the number needs them). Anything else comes
+// back as it went in, for the caller's own validation to name.
+//
+// A string that is already a valid ID is handed back untouched, and that is the
+// rule that keeps this safe: TQ-28 is a valid ID, an ID is what identifies a
+// task, and re-padding one somebody hand-wrote into their frontmatter would
+// send every lookup to a file that is not there. So the expansion only ever
+// applies to a spelling no task file could be filed under.
+func NormalizeID(id string) string {
+	if ValidID(id) {
+		return id
+	}
+	match := idShorthand.FindStringSubmatch(id)
+	if match == nil {
+		return id
+	}
+	number := strings.TrimLeft(match[1], "0")
+	if number == "" {
+		number = "0"
+	}
+	// Padded rather than parsed: a number too big for an int is still a number,
+	// and turning it into one here would answer with somebody else's task.
+	if len(number) < idDigits {
+		number = strings.Repeat("0", idDigits-len(number)) + number
+	}
+	return idPrefix + number
+}
 
 // Validate reports the first problem that would make a task file unusable.
 func (t Task) Validate() error {

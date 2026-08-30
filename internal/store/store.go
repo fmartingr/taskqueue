@@ -1367,7 +1367,7 @@ func (s *Store) NextID() (string, error) {
 	// crosses it off, and every number above the highest file is otherwise free.
 	referenced := s.referencedIDs(names)
 	for n := highest + 1; ; n++ {
-		id := fmt.Sprintf("TQ-%04d", n)
+		id := task.FormatID(n)
 		if _, taken := referenced[id]; !taken {
 			return id, nil
 		}

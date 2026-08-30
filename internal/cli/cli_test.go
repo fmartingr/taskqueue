@@ -2191,3 +2191,65 @@ func TestCLIListStillWorksWhenTheReconciliationCannotWrite(t *testing.T) {
 		t.Errorf("stderr = %q, want it to say the migration did not happen", tc.stderr)
 	}
 }
+
+// The number on its own is an ID: TQ-0028 is what a person is looking at, and
+// `28` is what they type (TQ-0071). Every command that takes an ID takes the
+// shorthand, and so does every flag that names another task.
+func TestCLITakesTheNumberAloneForAnID(t *testing.T) {
+	tc := newTestCLI(t)
+	tc.mustRun("add", "First task")
+	tc.mustRun("add", "Second task")
+
+	var tk task.Task
+	tc.mustRunJSON(&tk, "show", "2", "--json")
+	if tk.ID != "TQ-0002" {
+		t.Errorf("show 2 = %s, want TQ-0002", tk.ID)
+	}
+	tc.mustRunJSON(&tk, "show", "tq-2", "--json")
+	if tk.ID != "TQ-0002" {
+		t.Errorf("show tq-2 = %s, want TQ-0002", tk.ID)
+	}
+
+	tc.mustRun("move", "2", "todo")
+	tc.mustRun("note", "2", "typed short")
+	tc.mustRunJSON(&tk, "update", "2", "--assignee", "agent-api", "--add-dependency", "1", "--json")
+	if tk.Status != "todo" || tk.Assignee != "agent-api" {
+		t.Errorf("update 2 = %+v", tk)
+	}
+	if got := strings.Join(tk.DependsOn, ","); got != "TQ-0001" {
+		t.Errorf("--add-dependency 1 stored %q, want TQ-0001", got)
+	}
+	if !strings.Contains(tk.Body, "typed short") {
+		t.Errorf("note 2 did not reach the task:\n%s", tk.Body)
+	}
+
+	// A fresh value: a removed dependency leaves the key out of the JSON, and
+	// unmarshalling over the last task would keep the list that just went.
+	var freed task.Task
+	tc.mustRunJSON(&freed, "update", "2", "--remove-dependency", "1", "--json")
+	if len(freed.DependsOn) != 0 {
+		t.Errorf("--remove-dependency 1 left %v", freed.DependsOn)
+	}
+
+	tc.mustRunJSON(&tk, "add", "Third task", "--depends-on", "1", "--json")
+	if got := strings.Join(tk.DependsOn, ","); got != "TQ-0001" {
+		t.Errorf("--depends-on 1 stored %q, want TQ-0001", got)
+	}
+
+	tc.mustRunJSON(&tk, "done", "2", "--json")
+	if tk.Status != "done" {
+		t.Errorf("done 2 = %s", tk.Status)
+	}
+}
+
+// A number no task answers to is still that task's ID in the report: a reader
+// who typed 4242 has to be told which task tq went looking for.
+func TestCLINamesTheWholeIDForAMissingNumber(t *testing.T) {
+	tc := newTestCLI(t)
+	if code := tc.run("show", "4242"); code != exitTaskNotFound {
+		t.Errorf("show 4242 = exit %d, want %d", code, exitTaskNotFound)
+	}
+	if !strings.Contains(tc.stderr.String(), "TQ-4242") {
+		t.Errorf("stderr should name TQ-4242, got %q", tc.stderr)
+	}
+}

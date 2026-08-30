@@ -510,6 +510,11 @@ tq version
 `--label` and `--depends-on` (and the `--add-*`/`--remove-*` flags) can be
 repeated. Only the fields you pass to `tq update` change.
 
+An `<id>` is `TQ-0028`, and the number on its own says the same thing —
+`tq show 28`, `tq done 28`, `tq update 30 --add-dependency 28`. The prefix is
+optional and case does not matter; what a task file holds and what tq prints is
+always the whole ID.
+
 `tq update --body` is how a body is revised. The [notes](#task-format) on the
 task are kept, so correcting a finding does not take the record of how the task
 got there with it, and a notes section in the text you pass is ignored — the

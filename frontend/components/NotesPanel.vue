@@ -1,9 +1,16 @@
 <script setup lang="ts">
 /**
- * The notes panel of the task dialog: the notes a task carries, each editable
- * in place, and the box that appends a new one.
+ * The notes panel of the task dialog: the box that appends a note, and the
+ * notes the file holds, each editable in place.
  *
- * Two of the bugs this component was written to fix live here.
+ * The composer sits above the list rather than below it, which is what TQ-0069
+ * drew and what a list that grows downwards wants. Both the composer and an
+ * editor write when they close — there is no Save left to carry them — so the
+ * two callbacks below are the whole of this component's contract with the
+ * dialog: each answers whether the write landed, and a write that did not keeps
+ * its text on screen.
+ *
+ * Four of the bugs this panel was written to fix live here.
  *
  * TQ-0027: the old panel rebuilt every note when an editor lost focus, so the
  * mousedown on a second note's pencil detached the button before mouseup and no
@@ -12,80 +19,64 @@
  * blurs underneath it. The click that follows is a no-op, which is what keeps
  * the keyboard path (Enter on a focused button, which fires no mousedown) alive.
  *
- * TQ-0019: the "append a note" box sits in the dialog's form, next to a submit
- * button, so Enter in it used to submit the form — saving the dialog and
- * silently discarding what was typed. Enter is handled here, and cancelled, so
- * it can never reach the form.
+ * TQ-0019: the composer used to sit in the dialog's form, next to a submit
+ * button, so Enter in it submitted the form — saving the dialog and silently
+ * discarding what was typed. There is no form and no submit button any more,
+ * which retires the bug rather than guarding against it; Enter is still handled
+ * here because it has to mean "append".
  *
- * TQ-0054: that box is a textarea, like the editor above it and for the same
- * reason — a note keeps the line breaks it is given, and the guide tells agents
- * to paste a command into one, so a control that cannot hold a second line made
- * the multi-line note something only the CLI could write. Enter appends and
- * Shift+Enter is a newline, exactly as in the editor; a textarea never submits
- * a form on Enter either way, so TQ-0019 survives the shift.
+ * TQ-0054: both boxes are textareas — a note keeps the line breaks it is given,
+ * and the guide tells agents to paste a command into one. Enter sends and
+ * Shift+Enter is a newline, in the composer and in the editor alike.
+ *
+ * TQ-0084: the list is live and comes off the file, so the note under an open
+ * editor is held by what it *said* rather than by the object it was, and by its
+ * position least of all — a position is a name that can come to mean a
+ * different note between one keystroke and the next. That is also exactly how
+ * `commitNote` finds it in the file, so the panel and the write agree on which
+ * note is which. A note that stops matching — reworded on disk, or gone
+ * altogether — takes its editor out of the list rather than out of the page,
+ * because the text in it is the one thing there is no getting back.
  */
-import { nextTick, ref } from "vue";
+import { computed, nextTick, ref, useTemplateRef } from "vue";
 
 import { formatTime } from "../format";
 import { noteLines, type Note } from "../notes";
 
-const props = defineProps<{ notes: Note[]; draft: string }>();
-const emit = defineEmits<{
-  /** The user finished editing this note. */
-  edit: [note: Note, text: string];
-  "update:draft": [value: string];
-  append: [];
+const props = defineProps<{
+  notes: Note[];
+  /** Rewords one note and answers whether the write landed. */
+  commit: (note: Note, text: string) => Promise<boolean>;
+  /** Appends a note and answers whether the write landed. */
+  append: (text: string) => Promise<boolean>;
 }>();
 
-const list = ref<HTMLUListElement | null>(null);
-/**
- * The note being edited, or null.
- *
- * The note itself rather than its position in the list. The list is live while
- * the dialog is open — it takes in whatever the file holds (TQ-0084) — so a
- * position is a name that can come to mean a different note between one
- * keystroke and the next, and the edit would be committed onto that one. The
- * merge hands an edited note back unchanged, so its identity is the one thing
- * an adoption cannot move.
- */
+const list = useTemplateRef<HTMLUListElement>("list");
+const draft = ref("");
+/** The note being edited, as it read when the editor opened. */
 const editing = ref<Note | null>(null);
 const editor = ref("");
 
-function beginEdit(note: Note): void {
-  if (editing.value === note) return;
-  // An edit already in progress is kept, the way losing focus keeps it.
-  if (editing.value !== null) commit(editing.value);
-  editing.value = note;
-  editor.value = note.text;
+/** True while a write is in flight, so a blur landing on top of an Enter
+ *  cannot send the same text twice. */
+let writing = false;
 
-  void nextTick(() => {
-    const area = list.value?.querySelector("textarea.note-editor");
-    if (area instanceof HTMLTextAreaElement) {
-      area.focus();
-      area.setSelectionRange(area.value.length, area.value.length);
-    }
-  });
+/** Whether these are the same note — the file's rule, not the panel's. */
+function same(one: Note | null, other: Note): boolean {
+  return one !== null && one.timestamp === other.timestamp && one.text === other.text;
 }
 
-/**
- * Ends the edit of one note — Enter and losing focus keep it, Escape drops it —
- * and either way the change is written with the dialog's Save, like every other
- * field.
- *
- * Which note matters, and is the other half of the TQ-0027 fix: swapping the
- * textarea back out for its paragraph blurs it, and that blur arrives *after*
- * the edit has already moved to another note. Acting on it would close the
- * editor that was just opened, which is the same "nothing happened" the
- * detached button used to produce.
- */
-function finish(keep: boolean, note: Note): void {
-  if (editing.value !== note) return;
-  editing.value = null;
-  if (keep) commit(note);
-}
+/** Where in the list the note being edited is, or -1 when it is not there.
+ *  By index rather than by a per-note test, so a queue that somehow holds the
+ *  same note twice still shows one editor. */
+const editingAt = computed(() => props.notes.findIndex((note) => same(editing.value, note)));
+
+/** The editor is open on a note the list no longer has. */
+const detached = computed(() => editing.value !== null && editingAt.value === -1);
 
 /**
- * Hands an edit back to the dialog, unless it is empty or unchanged.
+ * Writes one edit, unless it is empty or unchanged, and answers whether the
+ * panel may close the editor.
  *
  * Normalised the way the file will hold it rather than merely trimmed: a
  * pasted block's shared indent is what makes it one block, and trimming would
@@ -94,10 +85,70 @@ function finish(keep: boolean, note: Note): void {
  * of the file gives, so an edit that only moved whitespace stays a no-op
  * rather than becoming a write that changes nothing but the timestamp.
  */
-function commit(note: Note): void {
-  editing.value = null;
-  const text = noteLines(editor.value).join("\n");
-  if (text !== "" && text !== note.text) emit("edit", note, text);
+async function write(note: Note, raw: string): Promise<boolean> {
+  if (writing) return false;
+  const text = noteLines(raw).join("\n");
+  if (text === "" || text === note.text) return true;
+
+  writing = true;
+  try {
+    return await props.commit(note, text);
+  } finally {
+    writing = false;
+  }
+}
+
+/**
+ * Opens an editor on a note, writing whatever the last one held first — and
+ * staying where it is if that write was refused, because the text it refused
+ * is the half worth keeping.
+ */
+async function beginEdit(note: Note): Promise<void> {
+  if (same(editing.value, note)) return;
+  if (editing.value !== null && !(await write(editing.value, editor.value))) return;
+
+  editing.value = { ...note };
+  editor.value = note.text;
+
+  await nextTick();
+  const area = list.value?.querySelector("textarea.note-editor");
+  if (area instanceof HTMLTextAreaElement) {
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+  }
+}
+
+/**
+ * Ends the edit of one note — Enter and losing focus write it, Escape drops it.
+ *
+ * Which note matters, and is the other half of the TQ-0027 fix: swapping the
+ * textarea back out for its paragraph blurs it, and that blur arrives *after*
+ * the edit has already moved to another note. Acting on it would close the
+ * editor that was just opened, which is the same "nothing happened" the
+ * detached button used to produce.
+ */
+async function finish(keep: boolean, note: Note): Promise<void> {
+  if (!same(editing.value, note)) return;
+  if (!keep) {
+    editing.value = null;
+    return;
+  }
+  if (await write(note, editor.value)) editing.value = null;
+}
+
+async function send(): Promise<void> {
+  // Trimmed to answer "is there a note here at all", and not otherwise: the
+  // indent a pasted block shares is what makes it one block, and the store
+  // normalises the text anyway (TQ-0054).
+  const text = draft.value;
+  if (text.trim() === "" || writing) return;
+
+  writing = true;
+  try {
+    if (await props.append(text)) draft.value = "";
+  } finally {
+    writing = false;
+  }
 }
 
 /**
@@ -105,19 +156,45 @@ function commit(note: Note): void {
  * `.enter.exact` because that also swallows Ctrl/Alt/Meta+Enter, which the
  * board this replaced treated as an ordinary Enter.
  */
-function onEnter(event: KeyboardEvent, commit: () => void): void {
+function onEnter(event: KeyboardEvent, act: () => void): void {
   if (event.shiftKey) return;
   event.preventDefault();
-  commit();
+  act();
 }
 </script>
 
 <template>
   <section class="notes-section">
-    <h3 class="notes-title">Notes</h3>
+    <h3 class="task-section">Notes</h3>
+
+    <div class="note-row">
+      <textarea
+        id="task-note"
+        v-model="draft"
+        class="note-draft"
+        rows="2"
+        placeholder="Write a note…"
+        @keydown.enter="onEnter($event, send)"
+      ></textarea>
+      <button id="task-note-add" type="button" class="primary" @click="send">Send</button>
+    </div>
 
     <ul id="task-notes" ref="list" class="notes">
-      <li v-if="notes.length === 0" class="notes-empty">No notes yet.</li>
+      <li v-if="notes.length === 0 && !detached" class="notes-empty">No notes yet.</li>
+
+      <li v-if="detached && editing !== null" class="note detached">
+        <p id="task-note-detached" class="note-moved">
+          The note you were editing is no longer in the file as you opened it. Nothing was written —
+          copy what you need, then press Escape.
+        </p>
+        <textarea
+          v-model="editor"
+          class="note-editor"
+          rows="2"
+          @keydown.esc.prevent.stop="editing = null"
+        ></textarea>
+      </li>
+
       <li v-for="(note, position) in notes" :key="position" class="note">
         <div class="note-head">
           <time class="note-time">{{
@@ -135,29 +212,16 @@ function onEnter(event: KeyboardEvent, commit: () => void): void {
           </button>
         </div>
         <textarea
-          v-if="editing === note"
+          v-if="editingAt === position"
           v-model="editor"
           class="note-editor"
           rows="2"
           @keydown.enter="onEnter($event, () => finish(true, note))"
-          @keydown.esc.prevent="finish(false, note)"
+          @keydown.esc.prevent.stop="finish(false, note)"
           @blur="finish(true, note)"
         ></textarea>
         <p v-else class="note-text">{{ note.text }}</p>
       </li>
     </ul>
-
-    <div class="note-row">
-      <textarea
-        id="task-note"
-        class="note-draft"
-        rows="2"
-        placeholder="Append a timestamped note…"
-        :value="draft"
-        @input="emit('update:draft', ($event.target as HTMLTextAreaElement).value)"
-        @keydown.enter="onEnter($event, () => emit('append'))"
-      ></textarea>
-      <button id="task-note-add" type="button" class="ghost" @click="emit('append')">Add note</button>
-    </div>
   </section>
 </template>

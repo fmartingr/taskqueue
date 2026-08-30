@@ -1,69 +1,62 @@
 <script setup lang="ts">
 /**
- * The task dialog: every editable field of one task, plus its notes panel.
+ * The task dialog: one task, live, in two columns.
  *
- * The board stays live while it is open, so the task under it can move: an
- * agent claims it, appends a note, rewrites the body. The dialog follows what
- * the file holds for every field the user is not in the middle of, and never
- * overwrites one they are — see `adopt` and ../adopt.ts (TQ-0084).
+ * TQ-0069 turned this from a form into a card. Two things follow from that, and
+ * everything else here is one of the two.
  *
- * Saving is the other half. A body snapshot taken at open time and PATCHed
- * wholesale erased every note the CLI wrote in between (TQ-0010), so a save
- * re-reads the task first and merges (see buildPatch and mergeBody): the file
- * decides which notes exist, the dialog decides only the wording of the ones it
- * holds, and the content half above them belongs to whichever side actually
- * edited it — the snapshot is never written back over an edit the dialog did
- * not make (TQ-0079).
+ * **The dialog holds no draft of the task.** Every field is drawn from the task
+ * the board last read, so the whole dialog follows the file: an agent claiming
+ * the task, appending a note or rewriting the body is visible here while it is
+ * open, with no adoption rules and no per-field dirty flags, because there is
+ * nothing local for an incoming change to overwrite. The one exception is the
+ * editor the user has open, and there is at most one of those.
  *
- * The two meet at `baseline`, the body the merge is defined against. Every
- * adoption moves it, or the next save would read the dialog's own adoption as
- * somebody else's edit.
+ * **A field is written when its editor closes.** There is no Save, no Cancel
+ * and no whole-task patch: `Store.Patch` takes a partial, so a title that was
+ * edited sends a title and nothing else. That is what makes the point above
+ * safe — a save of every field is only ever correct if the dialog holds a
+ * current copy of every field, which is exactly what it stopped doing.
+ *
+ * The third rule is the ticket's, and it is a narrowing: a write whose field
+ * moved on disk since the editor opened is **refused**, not merged. The dialog
+ * says which field, writes nothing at all, and keeps the user's text on screen;
+ * what to do about the collision is theirs, in the VCS. The arithmetic is in
+ * ../edit.ts, and the one thing it is careful about is that a body is two
+ * fields in one string — `tq note` appending a note is not a change to the
+ * paragraph somebody is rewriting, and must not refuse it.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
-import { adoptBody, adoptField } from "../adopt";
 import { addNote, describe, fetchTask, patchTask, type TaskInput } from "../api";
 import { defaultPriority, pendingDependencies, priorityOptions, type Task } from "../board";
-import { formatTime, splitList } from "../format";
-import { mergeBody, splitBody, type Note, type SplitBody } from "../notes";
+import { commitContent, commitField, commitNote, type Commit } from "../edit";
+import { formatTime } from "../format";
+import { splitBody, type Note } from "../notes";
 import { columns, index, openTaskMissing, priorities, refresh, toast } from "../state";
+import InlineText from "./InlineText.vue";
+import LabelChip from "./LabelChip.vue";
+import Markdown from "./Markdown.vue";
 import NotesPanel from "./NotesPanel.vue";
+import TokenField from "./TokenField.vue";
 
 const props = defineProps<{ task: Task }>();
 const emit = defineEmits<{ close: [] }>();
 
 const dialog = ref<HTMLDialogElement | null>(null);
 
-const opened = splitBody(props.task.body ?? "");
-/** The body exactly as the dialog last took it from the file, for the merge on
- *  save — moved by every adoption, so the two work from one snapshot. */
-const baseline = ref<SplitBody>({
-  content: opened.content,
-  notes: opened.notes.map((note) => ({ ...note })),
-});
+/** The body as the file holds it, split into the paragraph half the
+ *  description shows and the notes the panel lists. */
+const split = computed(() => splitBody(props.task.body ?? ""));
 
-const title = ref(props.task.title);
-const status = ref<string>(props.task.status);
-const priority = ref(props.task.priority || defaultPriority(priorities.value));
-const assignee = ref(props.task.assignee ?? "");
-const labelList = ref((props.task.labels ?? []).join(", "));
-const dependsOn = ref((props.task.depends_on ?? []).join(", "));
-const content = ref(opened.content);
-const notes = ref<Note[]>(opened.notes.map((note) => ({ ...note })));
-const noteDraft = ref("");
-
+const priority = computed(() => props.task.priority || defaultPriority(priorities.value));
 /**
- * The priorities the select has to keep offering: the one the task was opened
- * with, and any a live adoption has since put in the field. The dialog writes
- * every field back on save, so a value with no option of its own is a priority
- * the next save would silently erase. They accumulate rather than tracking the
- * current value, so switching away from one does not take it off the list.
+ * The priorities the select has to offer: the project's, plus whatever this
+ * task carries. A task filed before the vocabulary changed still holds a value
+ * the project has dropped, and a select that cannot show it would say the task
+ * is something it is not.
  */
-const kept = ref<string[]>([priority.value]);
-watch(priority, (value) => {
-  if (!kept.value.includes(value)) kept.value = [...kept.value, value];
-});
-const priorityChoices = computed(() => priorityOptions(priorities.value, kept.value));
+const priorityChoices = computed(() => priorityOptions(priorities.value, [priority.value]));
 
 const pending = computed(() => pendingDependencies(props.task, index.value, columns.value));
 const timestamps = computed(
@@ -72,271 +65,276 @@ const timestamps = computed(
 
 onMounted(() => dialog.value?.showModal());
 
-// ── Following the file ──────────────────────────────────────────
-
-/**
- * One plain field: what the notice calls it, the control the user would be
- * typing in, the ref behind it, and how to read it off a task.
- *
- * `taken` is the value the field was last given from the file — what it opened
- * with, or the last thing it adopted. `local` differing from it is exactly "the
- * user typed here", which is why no input needs a dirty flag kept in step.
- */
-interface Field {
-  label: string;
-  id: string;
-  local: Ref<string>;
-  from: (task: Task) => string;
-  taken: string;
-}
-
-function field(label: string, id: string, local: Ref<string>, from: (task: Task) => string): Field {
-  return { label, id, local, from, taken: from(props.task) };
-}
-
-const fields: Field[] = [
-  field("Title", "task-title", title, (task) => task.title),
-  field("Status", "task-status", status, (task) => task.status),
-  field("Priority", "task-priority", priority, (task) => task.priority || defaultPriority(priorities.value)),
-  field("Assignee", "task-assignee", assignee, (task) => task.assignee ?? ""),
-  field("Labels", "task-labels", labelList, (task) => (task.labels ?? []).join(", ")),
-  field("Depends on", "task-depends-on", dependsOn, (task) => (task.depends_on ?? []).join(", ")),
-];
-
-/** The fields the file changed under an edit in progress. Named rather than
- *  counted: "Title, Labels" is what tells the user where to look. */
-const changed = ref<string[]>([]);
-
-/**
- * Records whether the file is still holding something back from this field.
- *
- * It has to go both ways. A user who puts a field back the way they found it
- * frees the dialog to adopt it after all, and a notice still naming that field
- * would be pointing at text nobody is holding any more.
- */
-function report(label: string, withheld: boolean): void {
-  if (changed.value.includes(label) === withheld) return;
-  changed.value = withheld
-    ? [...changed.value, label]
-    : changed.value.filter((named) => named !== label);
-}
-
-/** Whether the caret is in this control right now. */
-function focused(id: string): boolean {
-  return document.activeElement?.id === id;
-}
-
-/**
- * Takes what the file now holds into every field the user is not in the middle
- * of, and says which ones it had to leave alone.
- *
- * `caret` is what makes a deferral: with it, a field the user is merely inside
- * keeps what it is showing until they leave. A write passes false, because by
- * then there is nothing left to protect and everything left to lose — see
- * buildPatch.
- */
-function adopt(task: Task, caret = true): void {
-  for (const entry of fields) {
-    const incoming = entry.from(task);
-    switch (adoptField(entry.taken, entry.local.value, incoming, caret && focused(entry.id))) {
-      case "take":
-        entry.local.value = incoming;
-        entry.taken = incoming;
-        report(entry.label, false);
-        break;
-      case "keep":
-        report(entry.label, true);
-        break;
-      case "unchanged":
-        // The file agrees with what this field last took, so whatever was being
-        // withheld from it no longer is: a notice still naming it would point
-        // at text nobody is holding back.
-        report(entry.label, false);
-        break;
-      // "defer" leaves the field exactly as it stands, and says nothing: the
-      // pass that runs when the caret leaves is what settles it.
-    }
-  }
-
-  const adoption = adoptBody(
-    baseline.value,
-    { content: content.value, notes: notes.value },
-    splitBody(task.body ?? ""),
-    caret && focused("task-body"),
-  );
-  content.value = adoption.edited.content;
-  notes.value = adoption.edited.notes;
-  baseline.value = adoption.baseline;
-  // "held" is a body nothing is being withheld from either — the caret is in it,
-  // or the file has not moved since the edit began.
-  report("Body", adoption.content === "overridden");
-}
-
-watch(() => props.task, (task) => adopt(task));
-
-/**
- * The deferral half of the rule: a field is left alone while the caret is in
- * it, so the pass has to run again once the caret has gone, or a change that
- * arrived at the wrong moment would never be shown at all.
- *
- * A turn later, because focusout fires while the focus is still on its way out
- * and document.activeElement would still name the control being left.
- */
-let refocus: ReturnType<typeof setTimeout> | undefined;
-
-function onFocusOut(): void {
-  clearTimeout(refocus);
-  refocus = setTimeout(() => adopt(props.task), 0);
-}
-
-onBeforeUnmount(() => clearTimeout(refocus));
-
-/** Every path out of the dialog goes through the element's own close event. */
+/** Every path out of the dialog goes through the element's own close event, so
+ *  Escape, the ✕ and a click outside end up in the same place. */
 function dismiss(): void {
   dialog.value?.close();
 }
 
-// ── Writing ─────────────────────────────────────────────────────
+/** The editors that can be open inside the dialog, for the rule below. */
+const EDITORS = ".inline-editor, .note-editor, .token-input";
 
 /**
- * The whole dialog as one patch, against what the file holds *now* rather than
- * what the dialog last read.
- *
- * `body` is left out of the patch whenever the body needs no writing, so a save
- * that changed only Priority cannot touch content someone else wrote. Null is
- * the one case with no honest patch at all — both sides edited the content half
- * — and every caller answers it by writing nothing and saying so.
- *
- * The patch is a save of every field, so a deferral has to be settled before it
- * is built. A field the caret is in keeps showing what it had while the user is
- * reading it, and Enter in a text input submits the form without ever moving
- * the focus — so without this a change the dialog quietly deferred would be
- * written straight back out of the stale field, saying nothing to anyone.
- *
- * And what it is built from is read *before* the round trip, not after. An
- * adoption landing while the fetch is in flight moves the baseline and the
- * fields to a file newer than the `current` below, and a merge across those two
- * would write the pre-adoption content half back over the newer one — TQ-0079's
- * bug again, on the path this ticket opened.
+ * Where the button went down, so a click can be told from a drag that ended
+ * somewhere else. A `click` is dispatched at the *common ancestor* of the
+ * mousedown and the mouseup, so selecting text in the description and letting
+ * go past the edge of the sheet arrives looking exactly like a click on the
+ * backdrop — and would throw the dialog away mid-selection.
  */
-async function buildPatch(): Promise<Partial<TaskInput> | null> {
-  adopt(props.task, false);
+let pressedOutside = false;
 
-  // By reference, and safely so: an adoption replaces these refs rather than
-  // writing into what they held (see adoptBody), so what is captured here is
-  // still the pair mergeNotes needs, lined up index for index. A merge that
-  // ever started mutating in place would break this silently.
-  const opened = baseline.value;
-  const edited = { content: content.value, notes: notes.value };
-  const patch: Partial<TaskInput> = {
-    title: title.value,
-    status: status.value,
-    priority: priority.value,
-    assignee: assignee.value,
-    labels: splitList(labelList.value),
-    depends_on: splitList(dependsOn.value),
-  };
-
-  const current = splitBody((await fetchTask(props.task.id)).body ?? "");
-  const merged = mergeBody(opened, edited, current);
-  if (merged.outcome === "conflict") return null;
-  if (merged.outcome === "write") patch.body = merged.body;
-  return patch;
+function onMouseDown(event: MouseEvent): void {
+  pressedOutside = event.target === dialog.value;
 }
 
 /**
- * Says why nothing was written, and leaves every field exactly as the user left
+ * A click outside the sheet closes the dialog.
+ *
+ * `<dialog>` paints its backdrop as part of the element rather than as a child,
+ * so a click on it arrives with the dialog itself as the target — which is only
+ * an unambiguous "outside" because the sheet fills the element and the element
+ * carries no padding of its own.
+ *
+ * The exception is an editor being open, and it is the one thing this must not
+ * get wrong. Losing focus writes an edit, and that write can be refused
+ * (TQ-0069) — so closing on the same click would take the text a refusal exists
+ * to preserve down with it, before the write has even come back. The first
+ * click outside therefore lands on the editor and settles it; a second one
+ * closes the dialog.
+ */
+function onClick(event: MouseEvent): void {
+  const outside = pressedOutside && event.target === dialog.value;
+  pressedOutside = false;
+  if (outside && dialog.value?.querySelector(EDITORS) === null) dismiss();
+}
+
+// ── Saying the file moved ───────────────────────────────────────
+
+/** A field with an editor open on it: what a refusal calls it, and how to read
+ *  it off a task, so the notice can keep asking whether the file still agrees. */
+interface Editable {
+  what: string;
+  of: (task: Task) => string;
+}
+
+const TITLE: Editable = { what: "title", of: (task) => task.title };
+const ASSIGNEE: Editable = { what: "assignee", of: (task) => task.assignee ?? "" };
+const DESCRIPTION: Editable = {
+  what: "description",
+  of: (task) => splitBody(task.body ?? "").content,
+};
+
+/** The editor the user has open, and the value the file held when it opened. */
+const editing = ref<Editable | null>(null);
+const opened = ref("");
+
+function begin(field: Editable): void {
+  editing.value = field;
+  opened.value = field.of(props.task);
+}
+
+/**
+ * The field the file has moved under an open editor, or "".
+ *
+ * Asked of the task the board holds rather than of the server, so the notice
+ * appears while the user is still typing rather than when they finish — which
+ * is the whole difference between a warning and a report. The write asks the
+ * server again anyway, because the board's copy can be a moment behind and a
+ * refusal has to be about the file.
+ */
+const moved = computed(() => {
+  const field = editing.value;
+  if (field === null) return "";
+  return field.of(props.task) === opened.value ? "" : field.what;
+});
+
+// ── Writing ─────────────────────────────────────────────────────
+
+/**
+ * Says why nothing was written, and leaves the editor exactly as the user left
  * it, typing included: the point of refusing is that their text is the half
  * that would have been lost, so it is the last thing to throw away.
  *
  * Deliberately without a refresh. A task withheld from a scan is exactly what a
  * file being written twice looks like (TQ-0012, TQ-0040), which is the
  * situation a refusal is already in, and there is nothing here a refetch would
- * put right: the dialog already follows the file for every field it can.
- *
- * "since this dialog read it" rather than "while it was open": the body it
- * holds may have been adopted a moment ago rather than read at open time.
+ * put right: every field the user is not in is already following the file.
  */
-function refuse(): void {
+function refuse(what: string): void {
   toast(
-    `Not saved: the body of ${props.task.id} changed on disk since this dialog read it. ` +
-      `Your text is still here — copy it, then close and reopen the task.`,
+    `Not saved: the ${what} of ${props.task.id} changed on disk while you were editing it. ` +
+      `Nothing was written — copy what you need, then press Escape to see the file's version, ` +
+      `and check the change in your VCS.`,
   );
 }
 
 /**
- * Starts the dialog over from what the server just wrote back, baseline and all.
+ * One plain field: read the file, decide, write.
  *
- * Anything that writes has to do this before it can fail again: a baseline left
- * behind a write the dialog itself made reads as somebody else's edit, and
- * every later save would refuse itself over it. The plain fields are marked
- * taken from what they hold rather than from the response, because the patch
- * that returned it is what put those values on disk — so nothing is left
- * looking edited, and the notice about the file changing underneath is spent.
+ * `was` is what the editor was opened with, or — for a select, which has no
+ * editor to open — what the control was showing when it was used. The two are
+ * the same question: somebody acted on a value, and the file either still holds
+ * that value or it does not.
+ *
+ * The read is a round trip per commit, and it is the price of the ticket:
+ * without it a refusal would be against the board's last listing rather than
+ * against the file, and the whole point is that the file decides.
  */
-function rebase(task: Task): void {
-  const written = splitBody(task.body ?? "");
-  content.value = written.content;
-  notes.value = written.notes.map((note) => ({ ...note }));
-  baseline.value = { content: written.content, notes: written.notes.map((note) => ({ ...note })) };
-  for (const entry of fields) entry.taken = entry.local.value;
-  changed.value = [];
-}
-
-async function save(): Promise<void> {
+async function writeField(
+  field: Editable,
+  was: string,
+  edited: string,
+  patch: Partial<TaskInput>,
+): Promise<boolean> {
   try {
-    const patch = await buildPatch();
-    if (patch === null) {
-      refuse();
-      return;
+    const commit = commitField(was, edited, field.of(await fetchTask(props.task.id)));
+    if (commit === "unchanged") return true;
+    if (commit === "conflict") {
+      refuse(field.what);
+      return false;
     }
     await patchTask(props.task.id, patch);
-    dismiss();
     await refresh();
+    return true;
   } catch (error) {
     toast(`Could not update ${props.task.id}: ${describe(error)}`);
+    return false;
   }
 }
 
-async function append(): Promise<void> {
-  // Trimmed to answer "is there a note here at all", and not otherwise: the
-  // indent a pasted block shares is what makes it one block, and the store
-  // normalises the text anyway (TQ-0054).
-  const text = noteDraft.value;
-  if (text.trim() === "") return;
-
+/** The same, for the two halves of the body, which decide for themselves what
+ *  a change on disk means to them. */
+async function writeBody(what: string, decide: (current: ReturnType<typeof splitBody>) => Commit) {
   try {
-    // Pending edits are saved first: appending a note rewrites the body, and
-    // silently dropping what the user typed would be worse than an extra write.
-    const patch = await buildPatch();
-    if (patch === null) {
-      refuse();
-      return;
+    const commit = decide(splitBody((await fetchTask(props.task.id)).body ?? ""));
+    if (commit.outcome === "conflict") {
+      refuse(what);
+      return false;
     }
-    // Rebased twice, because the note is a second write and can fail on its
-    // own: leaving the dialog on the pre-patch baseline until both had landed
-    // is what would strand it, refusing every later save over its own edit.
-    rebase(await patchTask(props.task.id, patch));
-    rebase(await addNote(props.task.id, text));
-    noteDraft.value = "";
+    if (commit.outcome === "write") {
+      await patchTask(props.task.id, { body: commit.body });
+      await refresh();
+    }
+    return true;
+  } catch (error) {
+    toast(`Could not update ${props.task.id}: ${describe(error)}`);
+    return false;
+  }
+}
 
+async function saveTitle(title: string): Promise<boolean> {
+  if (title.trim() === "") {
+    toast(`Not saved: ${props.task.id} needs a title.`);
+    return false;
+  }
+  return writeField(TITLE, opened.value, title, { title });
+}
+
+const saveAssignee = (assignee: string) =>
+  writeField(ASSIGNEE, opened.value, assignee, { assignee });
+
+const saveContent = (content: string) =>
+  writeBody(DESCRIPTION.what, (current) => commitContent(opened.value, content, current));
+
+const saveNote = (note: Note, text: string) =>
+  writeBody("note", (current) => commitNote(note, text, current));
+
+/**
+ * A select the user has just used.
+ *
+ * The control is put back by hand when the write does not land, because there
+ * is nothing local for Vue to re-render it from: it is bound to the task, the
+ * task did not change, and the browser is holding a value the file never took.
+ */
+async function choose(field: Editable, event: Event, patch: (value: string) => Partial<TaskInput>) {
+  const select = event.target as HTMLSelectElement;
+  const chosen = select.value;
+  const was = field.of(props.task);
+  if (!(await writeField(field, was, chosen, patch(chosen)))) select.value = was;
+}
+
+const chooseStatus = (event: Event) =>
+  choose({ what: "status", of: (task) => task.status }, event, (status) => ({ status }));
+
+const choosePriority = (event: Event) =>
+  choose(
+    { what: "priority", of: (task) => task.priority || defaultPriority(priorities.value) },
+    event,
+    (value) => ({ priority: value }),
+  );
+
+/**
+ * A list, compared as a whole and written as a whole.
+ *
+ * Serialised for the comparison rather than joined with a separator, because a
+ * label is any string the project cares to use and nothing stops one holding
+ * whatever separator was picked.
+ */
+function writeList(
+  what: string,
+  of: (task: Task) => string[],
+  values: string[],
+  patch: Partial<TaskInput>,
+): Promise<boolean> {
+  const field: Editable = { what, of: (task) => JSON.stringify(of(task)) };
+  return writeField(field, field.of(props.task), JSON.stringify(values), patch);
+}
+
+const saveLabels = (labels: string[]) =>
+  writeList("labels", (task) => task.labels ?? [], labels, { labels });
+
+const saveDependencies = (depends_on: string[]) =>
+  writeList("dependencies", (task) => task.depends_on ?? [], depends_on, { depends_on });
+
+/** Appending is not an edit of anything, so it collides with nothing: a note
+ *  goes on the end of whatever the file holds at the moment it lands. */
+async function appendNote(text: string): Promise<boolean> {
+  try {
+    await addNote(props.task.id, text);
     await refresh();
     toast(`Note added to ${props.task.id}`, "info");
+    return true;
   } catch (error) {
     toast(`Could not add a note to ${props.task.id}: ${describe(error)}`);
+    return false;
   }
-}
-
-function editNote(note: Note, text: string): void {
-  note.text = text;
 }
 </script>
 
 <template>
-  <dialog id="task-dialog" ref="dialog" class="dialog" @close="emit('close')">
-    <form id="task-form" method="dialog" @submit.prevent="save" @focusout="onFocusOut">
-      <header class="dialog-header">
-        <span id="task-dialog-id" class="task-id">{{ task.id }}</span>
+  <dialog
+    id="task-dialog"
+    ref="dialog"
+    class="dialog task-dialog"
+    @close="emit('close')"
+    @mousedown="onMouseDown"
+    @click="onClick"
+  >
+    <div class="task-sheet">
+      <header class="task-head">
+        <div class="task-head-text">
+          <span id="task-dialog-id" class="task-id">{{ task.id }}</span>
+          <InlineText
+            id="task-title"
+            heading
+            label="Title"
+            :value="task.title"
+            :commit="saveTitle"
+            @open="begin(TITLE)"
+            @close="editing = null"
+          />
+          <select
+            id="task-status"
+            class="task-status"
+            aria-label="Status"
+            :value="task.status"
+            @change="chooseStatus"
+          >
+            <option v-for="column in columns" :key="column.name" :value="column.name">
+              {{ column.display_name }}
+            </option>
+          </select>
+        </div>
         <button
           type="button"
           class="ghost close"
@@ -349,29 +347,59 @@ function editNote(note: Note, text: string): void {
       </header>
 
       <p id="task-gone" class="dialog-note gone" :hidden="!openTaskMissing">
-        {{ task.id }} is no longer in the queue — it may have been deleted. Copy anything you
-        still need here: a save has nothing left to write to.
+        {{ task.id }} is no longer in the queue — it may have been deleted. Copy anything you still
+        need here: a write has nothing left to land on.
       </p>
 
-      <p id="task-changed" class="dialog-note" :hidden="changed.length === 0">
-        Changed on disk while you were editing: {{ changed.join(", ") }}. Your text was kept.
+      <p id="task-changed" class="dialog-note moved" :hidden="moved === ''">
+        The {{ moved }} of {{ task.id }} changed on disk while you were editing it. Nothing here has
+        been written — copy what you need, press Escape to see the file's version, and check the
+        change in your VCS.
       </p>
 
-      <label>
-        Title
-        <input id="task-title" v-model="title" name="title" type="text" required />
-      </label>
+      <div class="task-columns">
+        <section class="task-main">
+          <h3 class="task-section">Description</h3>
+          <InlineText
+            id="task-body"
+            multiline
+            label="Description"
+            :value="split.content"
+            :commit="saveContent"
+            @open="begin(DESCRIPTION)"
+            @close="editing = null"
+          >
+            <Markdown v-if="split.content !== ''" :source="split.content" />
+            <p v-else class="task-empty">No description yet — click here to write one.</p>
+          </InlineText>
 
-      <div class="grid">
-        <label>
-          Status
-          <select id="task-status" v-model="status" name="status">
-            <option v-for="column in columns" :key="column.name" :value="column.name">{{ column.display_name }}</option>
-          </select>
-        </label>
-        <label>
-          Priority
-          <select id="task-priority" v-model="priority" name="priority">
+          <h3 class="task-section">Depends on</h3>
+          <TokenField
+            id="task-depends-on"
+            label="a dependency"
+            placeholder="TQ-0002"
+            :values="task.depends_on ?? []"
+            :commit="saveDependencies"
+          >
+            <template #default="{ value }">
+              <span class="token-id">{{ value }}</span>
+            </template>
+          </TokenField>
+          <p id="task-blocked" class="blocked-note" :hidden="pending.length === 0">
+            Blocked by {{ pending.join(", ") }}
+          </p>
+
+          <NotesPanel :notes="split.notes" :commit="saveNote" :append="appendNote" />
+        </section>
+
+        <aside class="task-side">
+          <h3 class="task-section">Priority</h3>
+          <select
+            id="task-priority"
+            aria-label="Priority"
+            :value="priority"
+            @change="choosePriority"
+          >
             <option
               v-for="option in priorityChoices"
               :key="option.name"
@@ -379,59 +407,38 @@ function editNote(note: Note, text: string): void {
               :title="
                 option.configured ? option.name : `${option.name} — not in the project's priority set`
               "
-            >{{ option.display }}</option>
+            >
+              {{ option.display }}
+            </option>
           </select>
-        </label>
-        <label>
-          Assignee
-          <input id="task-assignee" v-model="assignee" name="assignee" type="text" autocomplete="off" />
-        </label>
-        <label>
-          Labels
-          <input
+
+          <h3 class="task-section">Assignee</h3>
+          <InlineText
+            id="task-assignee"
+            label="Assignee"
+            placeholder="Unassigned"
+            :value="task.assignee ?? ''"
+            :commit="saveAssignee"
+            @open="begin(ASSIGNEE)"
+            @close="editing = null"
+          />
+
+          <h3 class="task-section">Labels</h3>
+          <TokenField
             id="task-labels"
-            v-model="labelList"
-            name="labels"
-            type="text"
-            placeholder="backend, auth"
-            autocomplete="off"
-          />
-        </label>
-        <label>
-          Depends on
-          <input
-            id="task-depends-on"
-            v-model="dependsOn"
-            name="depends_on"
-            type="text"
-            placeholder="TQ-0002, TQ-0003"
-            autocomplete="off"
-          />
-        </label>
+            label="a label"
+            placeholder="backend"
+            :values="task.labels ?? []"
+            :commit="saveLabels"
+          >
+            <template #default="{ value }">
+              <LabelChip :name="value" />
+            </template>
+          </TokenField>
+
+          <p id="task-timestamps" class="timestamps">{{ timestamps }}</p>
+        </aside>
       </div>
-
-      <p id="task-blocked" class="blocked-note" :hidden="pending.length === 0">{{
-        pending.length === 0 ? "" : `Blocked by ${pending.join(", ")}`
-      }}</p>
-
-      <label>
-        Body (Markdown)
-        <textarea id="task-body" v-model="content" name="body" rows="10" spellcheck="false"></textarea>
-      </label>
-
-      <NotesPanel
-        v-model:draft="noteDraft"
-        :notes="notes"
-        @edit="editNote"
-        @append="append"
-      />
-
-      <footer class="dialog-footer">
-        <span id="task-timestamps" class="timestamps">{{ timestamps }}</span>
-        <span class="spacer"></span>
-        <button type="button" class="ghost" data-close="task-dialog" @click="dismiss">Cancel</button>
-        <button type="submit" class="primary">Save</button>
-      </footer>
-    </form>
+    </div>
   </dialog>
 </template>

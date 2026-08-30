@@ -93,12 +93,21 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
 - "+ Add a card" at the bottom of a column files a task straight into it:
   type a title and press Enter (the composer stays open for the next one) or
   click away. An empty card is discarded; Escape cancels.
-- Click a card to edit title, status, priority, assignee, labels, dependencies
-  and the Markdown body.
-- Notes are not part of the body editor: they get their own list in the dialog,
-  each with a pencil to correct it, and cards show a 💬 count. They are still
-  stored as the trailing `## Notes` section of the Markdown file that `tq note`
-  writes, so a `## Notes` heading in the body itself stays part of the body.
+- Click a card to open it: the title as a heading, the description as rendered
+  Markdown, the notes below it, and the priority, assignee and labels down the
+  side. Click any of them to edit it in place — Enter or clicking away writes
+  it, Escape drops it — and Escape, the ✕ or a click outside closes the card.
+  There is no Save button: a field is written to the file the moment you finish
+  with it, and only that field is written. A click outside while an editor is
+  open settles the editor first and leaves the card where it is, so a write that
+  is refused cannot take your text down with it.
+- The description is Markdown, rendered. Clicking it opens the editor on the
+  text the file holds; Save writes it and Escape leaves it alone.
+- Notes are not part of the description: they get their own list in the dialog,
+  a box above it to add one, and a pencil on each to correct it, and cards show
+  a 💬 count. They are still stored as the trailing `## Notes` section of the
+  Markdown file that `tq note` writes, so a `## Notes` heading in the body
+  itself stays part of the body.
 - "New task" creates a task.
 - The search box is the one control the board is narrowed from — status,
   priority, assignee, label, readiness and free text, all written as one line.
@@ -124,9 +133,12 @@ tq serve                # http://127.0.0.1:7331 (localhost only, no auth)
 - Cards show a blocked marker while a dependency is unfinished or missing.
 - The board is live: the server watches the queue and pushes, so a task an agent
   creates or moves appears within about half a second, without a reload. It stays
-  live while a dialog or a composer is open — an open task even picks up notes an
-  agent writes to it, and follows the file for every field you have not typed in,
-  saying so rather than overwriting one you have. Only a drag holds a change back,
+  live while a dialog or a composer is open — an open task holds no draft of
+  itself, so every field you are not editing simply *is* the file, notes an agent
+  appends included. A field you *are* editing is never overwritten: if the file
+  moves under it the dialog says so, and refuses the write rather than merging.
+  Nothing is written, your text stays where it is, and what to do about the two
+  versions is yours to settle in your VCS. Only a drag holds a change back,
   until the card lands. If the stream cannot be opened the board falls back to a
   three second poll and the footer says `polling`, so slower updates are always
   visible rather than silent.

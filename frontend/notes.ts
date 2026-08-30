@@ -13,9 +13,12 @@
  *
  *     - 2026-08-25T09:42:00+02:00 — the actual note
  *
- * The board splits that section out for display and puts it back together on
- * save. A "## Notes" heading anywhere else — in the middle of a document, or
- * inside a fenced code block — is ordinary content and is left alone.
+ * The board splits that section out — the dialog shows the content half as
+ * rendered Markdown and the notes as a list — and puts the two back together
+ * whenever it writes either. A "## Notes" heading anywhere else — in the middle
+ * of a document, or inside a fenced code block — is ordinary content and is
+ * left alone. What a write does about the file having moved underneath it is
+ * edit.ts's question, not this file's.
  *
  * This mirrors notesSection in task.go, which the CLI and the API write
  * through: the two have to agree or a board save would move an agent's notes.
@@ -166,86 +169,6 @@ export function joinBody(body: SplitBody): string {
   // The blank line above the rule matters: content directly above "---" would
   // be a setext heading rather than a horizontal rule.
   return content === "" ? section : [content, "", NOTES_RULE, "", section].join("\n");
-}
-
-/**
- * Merges the notes of a body being edited with the notes the file has now.
- *
- * The task dialog writes the whole body back, and the poll stands down for as
- * long as it is open, so what it holds can be arbitrarily behind what the CLI
- * has written in the meantime — every one of those notes would be erased by a
- * save that trusted the snapshot (TQ-0010). Re-reading and merging is what
- * makes the save keep both sides.
- *
- * `opened` is the notes as they were when the dialog opened, `edited` the same
- * list as the user has since changed it — the two are the same length and line
- * up index for index — and `current` is what the file holds now.
- *
- * The file wins on which notes exist: notes appended since are kept, and notes
- * that have gone stay gone. The dialog wins only on the wording of a note it
- * actually still recognises, which is why a note is matched by the timestamp
- * *and* the text it was opened with rather than by its position.
- */
-export function mergeNotes(opened: Note[], edited: Note[], current: Note[]): Note[] {
-  const taken = new Set<number>();
-
-  return current.map((note) => {
-    const at = opened.findIndex(
-      (candidate, i) =>
-        !taken.has(i) && candidate.timestamp === note.timestamp && candidate.text === note.text,
-    );
-    if (at === -1) return note; // appended while the dialog was open
-    taken.add(at);
-    return edited[at] ?? note;
-  });
-}
-
-/** What a save should do to a body: leave it alone, write this, or refuse. */
-export type BodyMerge =
-  | { outcome: "unchanged" }
-  | { outcome: "write"; body: string }
-  | { outcome: "conflict" };
-
-/**
- * Decides what a save should do to a task's body.
- *
- * `opened` is the body as the dialog read it, `edited` the same body as the
- * user has since made it, and `current` is what the file holds now — the dialog
- * re-reads before every write, because the poll stands down while it is open
- * and the file can be arbitrarily ahead of the snapshot.
- *
- * The notes half merges, note by note (see mergeNotes). The content half does
- * not: a three-way merge of free Markdown is guesswork, so one side gets the
- * whole of it and the two are never interleaved.
- *
- * - Untouched here: the file's content half stands, whoever wrote it, and the
- *   dialog's snapshot is dropped. This is TQ-0079 — a save that changed only
- *   Priority used to write that snapshot back over an agent's edit.
- * - Touched here, untouched there: the dialog's content half is written.
- * - Touched on both sides: "conflict". There is no honest answer, so the
- *   caller refuses the save rather than picking a winner.
- *
- * "unchanged" means the body needs no patch at all, so the save can leave the
- * field out and touch nothing — which is the whole of the first case above
- * whenever the notes did not move either.
- */
-export function mergeBody(opened: SplitBody, edited: SplitBody, current: SplitBody): BodyMerge {
-  const notes = mergeNotes(opened.notes, edited.notes, current.notes);
-
-  if (edited.content !== opened.content) {
-    if (current.content !== opened.content) return { outcome: "conflict" };
-    return { outcome: "write", body: joinBody({ content: edited.content, notes }) };
-  }
-
-  if (sameNotes(notes, current.notes)) return { outcome: "unchanged" };
-  return { outcome: "write", body: joinBody({ content: current.content, notes }) };
-}
-
-function sameNotes(a: Note[], b: Note[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((note, i) => note.timestamp === b[i].timestamp && note.text === b[i].text)
-  );
 }
 
 /**

@@ -1,13 +1,17 @@
 /**
  * The notes panel of the task dialog. `frontend/notes.test.ts` already covers
- * the split/join arithmetic; what only a browser can show is the editor TQ-0048
- * added — a note turning into a textarea in place, and Enter, Shift+Enter,
- * Escape and blur each meaning something different in it.
+ * the split/join arithmetic and `frontend/edit.test.ts` what a write does about
+ * the file; what only a browser can show is the editor TQ-0048 added — a note
+ * turning into a textarea in place, and Enter, Shift+Enter, Escape and blur
+ * each meaning something different in it.
+ *
+ * Since TQ-0069 an edit is a write: there is no Save left to carry it, so every
+ * case below ends at the file rather than at the panel.
  */
 
 import { expect, test } from "bun:test";
 import type { Page } from "playwright-core";
-import { cardIn, useBoard, type Board } from "./harness";
+import { cardIn, useBoard, type Board, type Task } from "./harness";
 
 const openBoard = useBoard();
 
@@ -28,6 +32,11 @@ async function dialogWithNotes(...notes: string[]): Promise<Board & { id: string
 const noteTexts = (page: Page) =>
   page.$$eval("#task-notes .note .note-text", (items) => items.map((item) => item.textContent ?? ""));
 
+/** The task as the server has it, which is what "it was written" means. */
+async function saved(board: Board, id: string): Promise<Task | undefined> {
+  return (await board.project.tasks(board.server)).find((candidate) => candidate.id === id);
+}
+
 test("the panel lists the notes the CLI appended, and the card counts them", async () => {
   const { page } = await dialogWithNotes("first note", "second note");
 
@@ -45,8 +54,9 @@ test("a task with no notes says so", async () => {
   expect(await page.textContent("#task-notes")).toContain("No notes yet");
 });
 
-test("editing a note in place and saving writes it back to the file", async () => {
-  const { project, server, page, id } = await dialogWithNotes("the original wording");
+test("editing a note in place writes it back to the file", async () => {
+  const board = await dialogWithNotes("the original wording");
+  const { page, id } = board;
 
   await page.click("#task-notes .note button.icon");
   await page.waitForSelector("#task-notes .note-editor");
@@ -55,14 +65,12 @@ test("editing a note in place and saving writes it back to the file", async () =
   await page.fill("#task-notes .note-editor", "the edited wording");
   await page.press("#task-notes .note-editor", "Enter");
 
-  // Enter ends the edit and puts the note back as text, still unsaved.
+  // Enter ends the edit, and the edit is the write: the panel comes back from
+  // the file rather than from what it was holding.
   await page.waitForSelector("#task-notes .note-editor", { state: "detached" });
   expect(await noteTexts(page)).toEqual(["the edited wording"]);
 
-  await page.click("#task-form button[type='submit']");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
-
-  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  const task = await saved(board, id);
   expect(task?.body).toContain("the edited wording");
   expect(task?.body).not.toContain("the original wording");
   // The timestamp the CLI wrote survives the round trip.
@@ -70,7 +78,8 @@ test("editing a note in place and saving writes it back to the file", async () =
 });
 
 test("Escape drops an edit and leaves the note as it was", async () => {
-  const { project, server, page, id } = await dialogWithNotes("keep me");
+  const board = await dialogWithNotes("keep me");
+  const { page, id } = board;
 
   await page.click("#task-notes .note button.icon");
   await page.fill("#task-notes .note-editor", "discard me");
@@ -78,16 +87,17 @@ test("Escape drops an edit and leaves the note as it was", async () => {
 
   await page.waitForSelector("#task-notes .note-editor", { state: "detached" });
   expect(await noteTexts(page)).toEqual(["keep me"]);
+  // Escape inside an editor belongs to the editor: the dialog is still open.
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
 
-  await page.click("#task-form button[type='submit']");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
-  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  const task = await saved(board, id);
   expect(task?.body).toContain("keep me");
   expect(task?.body).not.toContain("discard me");
 });
 
 test("Shift+Enter writes a multi-line note, indented under its own bullet", async () => {
-  const { project, server, page, id } = await dialogWithNotes("one line for now");
+  const board = await dialogWithNotes("one line for now");
+  const { page, id } = board;
 
   await page.click("#task-notes .note button.icon");
   const editor = "#task-notes .note-editor";
@@ -101,28 +111,27 @@ test("Shift+Enter writes a multi-line note, indented under its own bullet", asyn
   await page.waitForSelector(editor, { state: "detached" });
   expect(await noteTexts(page)).toEqual(["first line\nsecond line"]);
 
-  await page.click("#task-form button[type='submit']");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
-
-  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  const task = await saved(board, id);
   expect(task?.body).toMatch(/- \S+ — first line\n {2}second line/);
 });
 
 test("clicking away from an editor keeps the edit, the way the composer does", async () => {
-  const { page } = await dialogWithNotes("before the blur");
+  const board = await dialogWithNotes("before the blur");
+  const { page, id } = board;
 
   await page.click("#task-notes .note button.icon");
   await page.fill("#task-notes .note-editor", "after the blur");
-  await page.click("#task-title"); // focus somewhere else in the dialog
+  await page.click("#task-note"); // focus somewhere else in the dialog
 
   await page.waitForSelector("#task-notes .note-editor", { state: "detached" });
   expect(await noteTexts(page)).toEqual(["after the blur"]);
+  expect((await saved(board, id))?.body).toContain("after the blur");
 });
 
-test("adding a note through the panel saves pending edits with it", async () => {
-  const { project, server, page, id } = await dialogWithNotes();
+test("the composer appends a note, and clears itself once it has landed", async () => {
+  const board = await dialogWithNotes();
+  const { page, id } = board;
 
-  await page.fill("#task-body", "Body typed but not saved yet.");
   await page.fill("#task-note", "appended from the panel");
   await page.click("#task-note-add");
 
@@ -130,16 +139,14 @@ test("adding a note through the panel saves pending edits with it", async () => 
   await page.waitForSelector("#task-notes .note .note-text");
   expect(await noteTexts(page)).toEqual(["appended from the panel"]);
   expect(await page.inputValue("#task-note")).toBe("");
-
-  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
-  expect(task?.body).toContain("Body typed but not saved yet.");
-  expect(task?.body).toContain("appended from the panel");
+  expect((await saved(board, id))?.body).toContain("appended from the panel");
 });
 
 // ── TQ-0054 ─────────────────────────────────────────────────────
 
-test("a multi-line note can be written in the panel and survives the save", async () => {
-  const { project, server, page, id } = await dialogWithNotes();
+test("a multi-line note can be written in the panel and survives the write", async () => {
+  const board = await dialogWithNotes();
+  const { page, id } = board;
 
   // A block pasted out of a terminal: every line carries the margin it was
   // copied with, and the margin is what must not reach the file — on top of
@@ -150,9 +157,7 @@ test("a multi-line note can be written in the panel and survives the save", asyn
   await page.waitForSelector("#task-notes .note .note-text");
   expect(await noteTexts(page)).toEqual(["make test\nmake build"]);
   expect(await page.inputValue("#task-note")).toBe("");
-
-  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
-  expect(task?.body).toContain(" — make test\n  make build");
+  expect((await saved(board, id))?.body).toContain(" — make test\n  make build");
 });
 
 test("Shift+Enter in the note field starts a second line instead of appending", async () => {
@@ -164,6 +169,6 @@ test("Shift+Enter in the note field starts a second line instead of appending", 
 
   expect(await page.inputValue("#task-note")).toBe("first line\ns");
   expect(await noteTexts(page)).toEqual([]);
-  // TQ-0019's property, which the textarea inherits: the dialog is still open.
+  // TQ-0019's property, which outlived the form: the dialog is still open.
   expect(await page.$("#task-dialog[open]")).not.toBeNull();
 });

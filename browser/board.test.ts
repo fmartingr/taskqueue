@@ -8,7 +8,19 @@
 import { expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { card, cardIn, idsIn, useBoard, type Project, type Server, type Task } from "./harness";
+import {
+  card,
+  cardIn,
+  choose,
+  editBody,
+  editField,
+  idsIn,
+  openEditor,
+  useBoard,
+  type Project,
+  type Server,
+  type Task,
+} from "./harness";
 
 const openBoard = useBoard();
 
@@ -139,7 +151,7 @@ test("the composer discards an empty draft rather than filing a blank card", asy
   expect(await project.tasks(server)).toEqual([]);
 });
 
-test("the task dialog opens on a card, saves every field, and closes", async () => {
+test("the task dialog opens on a card and writes each field as it is edited", async () => {
   let id = "";
   const { project, server, page } = await openBoard((p) => {
     id = p.add("Before the edit");
@@ -148,45 +160,158 @@ test("the task dialog opens on a card, saves every field, and closes", async () 
   await page.click(cardIn("todo", id));
   await page.waitForSelector("#task-dialog[open]");
   expect(await page.textContent("#task-dialog-id")).toBe(id);
-  expect(await page.inputValue("#task-title")).toBe("Before the edit");
+  // The title reads as a heading, not as an input: there is no draft of the
+  // task in the dialog, so there is nothing for a form to submit (TQ-0069).
+  expect(await page.textContent("#task-title")).toBe("Before the edit");
+  expect(await page.$("#task-title-edit")).toBeNull();
 
-  await page.fill("#task-title", "After the edit");
-  await page.selectOption("#task-priority", "high");
-  await page.fill("#task-assignee", "agent-api");
-  await page.fill("#task-labels", "backend, auth");
-  await page.fill("#task-body", "The body, written in the dialog.");
-  await page.selectOption("#task-status", "in-progress");
-  await page.click("#task-form button[type='submit']");
+  await editField(page, "task-title", "After the edit");
+  await editField(page, "task-assignee", "agent-api");
+  await editBody(page, "The body, written in the dialog.");
+  await choose(page, "task-priority", "high");
+  await choose(page, "task-status", "in-progress");
 
-  // The dialog closes itself once the patch lands.
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
+  await page.click("#task-labels-add");
+  await page.fill("#task-labels-input", "backend");
+  await page.press("#task-labels-input", "Enter");
+  await page.waitForSelector("#task-labels .token", { state: "attached" });
 
+  // Every one of those landed on the file on its own, with no Save to press.
+  await page.waitForSelector(cardIn("in-progress", id));
   const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
   expect(task).toMatchObject({
     title: "After the edit",
     status: "in-progress",
     priority: "high",
     assignee: "agent-api",
-    labels: ["backend", "auth"],
+    labels: ["backend"],
     body: "The body, written in the dialog.",
   });
-  await page.waitForSelector(cardIn("in-progress", id));
 });
 
-test("cancelling the dialog leaves the task alone", async () => {
+// The dialog is a view of the file rather than a form over it, so closing it
+// is not a decision about anything: what was written is written, and what was
+// never edited was never touched.
+test("closing the dialog writes nothing by itself", async () => {
   let id = "";
   const { project, server, page } = await openBoard((p) => {
     id = p.add("Untouched");
   });
 
+  const before = (await project.tasks(server)).find((candidate) => candidate.id === id);
+
   await page.click(cardIn("todo", id));
   await page.waitForSelector("#task-dialog[open]");
-  await page.fill("#task-title", "Never saved");
   await page.click("#task-dialog [data-close='task-dialog'].close");
 
   await page.waitForSelector("#task-dialog[open]", { state: "detached" });
+  expect((await project.tasks(server)).find((candidate) => candidate.id === id)).toEqual(before!);
+});
+
+// Escape is the other way out, and it is the element's own: `<dialog>` closes
+// on a close request, and nothing in the dialog cancels one unless an editor
+// is open on a field (TQ-0069).
+test("Escape closes the dialog", async () => {
+  let id = "";
+  const { page } = await openBoard((p) => {
+    id = p.add("Closed with Escape");
+  });
+
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
+});
+
+// The dialog fills the window bar a margin, and that margin is the backdrop:
+// clicking it is the third way out, beside Escape and the ✕.
+test("a click outside the dialog closes it, and a click inside does not", async () => {
+  let id = "";
+  const { page } = await openBoard((p) => {
+    id = p.add("Closed from outside");
+  });
+
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  // Inside first, so that "it closed" below cannot be the dialog closing on any
+  // click at all — which is the way this is easiest to get wrong.
+  await page.click("#task-dialog .task-section");
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
+
+  await page.mouse.click(10, 10);
+  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
+});
+
+// A drag that starts in the sheet and ends past its edge — selecting the whole
+// description, say — is dispatched as a click on the dialog itself, because a
+// click event goes to the common ancestor of its mousedown and its mouseup.
+// Closing on that would throw the dialog away mid-selection.
+test("a selection released outside the dialog does not close it", async () => {
+  let id = "";
+  const { page } = await openBoard((p) => {
+    id = p.add("Kept through a drag", "--body", "Some text to drag across.");
+  });
+
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  const box = await page.locator("#task-body").boundingBox();
+  if (!box) throw new Error("the description has no box to drag across");
+  await page.mouse.move(box.x + 4, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(10, 10);
+  await page.mouse.up();
+
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
+});
+
+// Losing focus writes an edit, and a write can be refused — so a click outside
+// that both settled the editor and closed the dialog would take the text a
+// refusal exists to preserve down with it, before the write had even answered.
+// The first click outside settles the editor; the next one closes.
+test("a click outside with a write in flight settles the editor and keeps the dialog", async () => {
+  let id = "";
+  const { page } = await openBoard((p) => {
+    id = p.add("Editing when the click landed");
+  });
+
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  // Refused outright, which is the worst case: the text is only recoverable
+  // from the editor it is still sitting in.
+  await page.route("**/api/tasks/" + id, (route) =>
+    route.request().method() === "PATCH" ? route.abort() : route.continue(),
+  );
+  await openEditor(page, "task-title", "typed, and about to fail");
+  await page.mouse.click(10, 10);
+
+  await page.waitForSelector("#toasts .toast.error");
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
+  expect(await page.inputValue("#task-title-edit")).toBe("typed, and about to fail");
+});
+
+// An open editor takes Escape for itself: it means "drop what I typed", and
+// the dialog behind it stays where it is.
+test("Escape in an open editor drops the edit and keeps the dialog", async () => {
+  let id = "";
+  const { project, server, page } = await openBoard((p) => {
+    id = p.add("Kept as it was");
+  });
+
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+  await page.click("#task-title");
+  await page.fill("#task-title-edit", "Never written");
+  await page.press("#task-title-edit", "Escape");
+
+  await page.waitForSelector("#task-title-edit", { state: "detached" });
+  expect(await page.$("#task-dialog[open]")).not.toBeNull();
+  expect(await page.textContent("#task-title")).toBe("Kept as it was");
+
   const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
-  expect(task?.title).toBe("Untouched");
+  expect(task?.title).toBe("Kept as it was");
 });
 
 // Filing a task from the dialog is one gesture rather than four — the fields
@@ -318,7 +443,7 @@ test("a blocked card says what it is waiting for, in the board and the dialog", 
   await page.click(cardIn("todo", blocked));
   await page.waitForSelector("#task-dialog[open]");
   expect(await page.textContent("#task-blocked")).toContain(blocker);
-  expect(await page.inputValue("#task-depends-on")).toBe(blocker);
+  expect(await page.textContent("#task-depends-on")).toContain(blocker);
 });
 
 // Two files claiming one ID used to reach the board as two cards on a single

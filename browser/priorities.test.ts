@@ -13,7 +13,7 @@ import { expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright-core";
-import { card, idsIn, useBoard, type Project } from "./harness";
+import { card, editField, idsIn, useBoard, type Project } from "./harness";
 
 const openBoard = useBoard();
 
@@ -128,9 +128,10 @@ test("filtering by a configured priority hides the rest", async () => {
 });
 
 // The vocabulary can be edited under tasks already filed. Opening one of those
-// must offer the value it carries, or the save that follows would rewrite the
-// file with whatever the select fell back to.
-test("a priority the project has dropped stays selectable, and survives a save", async () => {
+// must offer the value it carries, or the select would be saying the task is
+// something it is not — and choosing anything else would be the one gesture
+// that could quietly drop it.
+test("a priority the project has dropped stays selectable, and stays on the task", async () => {
   let stale = "";
   const { page, project, server } = await openBoard((project) => {
     // Filed under the built-in set, then the project declares its own.
@@ -153,10 +154,9 @@ test("a priority the project has dropped stays selectable, and survives a save",
   expect(offered[3]!.title).toContain("not in the project's priority set");
   expect(await page.inputValue("#task-priority")).toBe("high");
 
-  // Saving without touching the priority writes it back unchanged.
-  await page.fill("#task-title", "Retitled");
-  await page.click("#task-form button[type='submit']");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
+  // Editing another field writes that field and nothing else, so the priority
+  // the project no longer declares is not rewritten by touching the task.
+  await editField(page, "task-title", "Retitled");
 
   const [saved] = (await project.tasks(server)).filter((task) => task.id === stale);
   expect(saved).toMatchObject({ title: "Retitled", priority: "high" });

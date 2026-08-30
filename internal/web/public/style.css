@@ -482,10 +482,11 @@ button.ghost {
   color: var(--text);
 }
 
-/* What the dialog says about its own task moving on disk underneath it: a field
-   it kept out of the way of an edit, or a task that has left the queue. Quiet
-   on purpose — nothing here is an error, and the board behind the dialog is
-   live, so this is the ordinary case rather than the alarming one. */
+/* What a dialog says about its own task moving on disk underneath it: a task
+   that has left the queue, or a field an editor is open on that the file has
+   since changed. Quiet on purpose for the first — the board behind the dialog
+   is live, so a task moving is the ordinary case — and coloured for the second,
+   which is a write that is going to be refused. */
 .dialog-note {
   margin: 0;
   padding: 6px 10px;
@@ -499,6 +500,11 @@ button.ghost {
   color: var(--blocked);
 }
 
+.dialog-note.moved {
+  color: var(--danger);
+  border-left: 3px solid var(--danger);
+}
+
 .dialog .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -509,6 +515,291 @@ button.ghost {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 13px;
   resize: vertical;
+}
+
+/* ── The task dialog ─────────────────────────────────────────── */
+
+/* The task dialog fills the window bar a margin, rather than being a card the
+   size of its own contents: it is where a task is read and worked on, and a
+   description with code in it wants the room.
+
+   No padding of its own, and that is load-bearing rather than tidy. The
+   backdrop of a <dialog> belongs to the element, so a click on it arrives
+   targeting the element — and any padding here would be a strip of the element
+   that is *inside* the sheet and indistinguishable from it (see onClick).
+
+   [open] and not the class alone: an author's `display` beats the UA rule that
+   hides a closed <dialog>, so without it the sheet would be on the page,
+   backdrop-less, for the tick between closing and unmounting. */
+.task-dialog[open] {
+  width: 90vw;
+  height: 90vh;
+  max-width: none;
+  max-height: none;
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Everything the dialog draws, filling it. One element rather than none, so
+   that the element itself is only ever the backdrop. */
+.task-sheet {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px;
+  overflow: auto;
+}
+
+.task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-head-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Small and quiet: the status is a fact about the card, and the control is
+   only there because changing it is one click away from reading it. */
+.task-status {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.task-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 28px;
+  align-items: start;
+}
+
+.task-main,
+.task-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-section {
+  margin: 8px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.task-section:first-child {
+  margin-top: 0;
+}
+
+.task-empty {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ── Click to edit ───────────────────────────────────────────── */
+
+/* The display half of an editable field. It has to look like text and behave
+   like a button, so the affordance is the hover rather than a border: a page
+   of outlined boxes is the form this dialog stopped being. */
+.inline-value {
+  margin: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: text;
+  min-width: 0;
+}
+
+.inline-value:hover {
+  background: var(--surface-alt);
+  border-color: var(--border);
+}
+
+.inline-value.empty {
+  color: var(--muted);
+}
+
+.inline-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.inline-text.multiline .inline-value {
+  min-height: 48px;
+}
+
+h2.inline-value {
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
+  /* The heading is one line's worth of the title and wraps rather than
+     stretching the dialog: a title is free text and can be any length. */
+  overflow-wrap: anywhere;
+}
+
+.inline-editor {
+  width: 100%;
+}
+
+textarea.inline-editor {
+  resize: vertical;
+}
+
+.inline-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Rendered Markdown ───────────────────────────────────────── */
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 14px 0 6px;
+  line-height: 1.3;
+}
+
+/* Scaled down from the browser's defaults: these are headings inside a card,
+   and an <h1> in a body must not shout louder than the task's own title. */
+.markdown h1 {
+  font-size: 17px;
+}
+
+.markdown h2 {
+  font-size: 15px;
+}
+
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 14px;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown pre {
+  margin: 0 0 8px;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 20px;
+}
+
+.markdown li {
+  margin: 2px 0;
+}
+
+.markdown li.task-item {
+  list-style: none;
+  margin-left: -20px;
+}
+
+.markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  color: var(--muted);
+}
+
+.markdown code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  background: var(--surface-alt);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.markdown pre {
+  background: var(--surface-alt);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+.markdown img {
+  max-width: 100%;
+}
+
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+/* ── Token lists ─────────────────────────────────────────────── */
+
+.tokens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.token {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.token-id {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.token-remove,
+.token-add {
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.token-input {
+  padding: 2px 6px;
+  font-size: 12px;
+  max-width: 140px;
 }
 
 /* ── Notes ───────────────────────────────────────────────────── */
@@ -530,17 +821,12 @@ button.ghost {
   gap: 8px;
   border-top: 1px solid var(--border);
   padding-top: 12px;
+  margin-top: 4px;
 }
 
-.notes-title {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--muted);
-}
-
+/* No scroller of its own: the sheet is tall enough to be the one that scrolls,
+   and a list boxed inside a page that is already scrolling is two scrollbars
+   for one column of notes. */
 .notes {
   list-style: none;
   margin: 0;
@@ -548,8 +834,6 @@ button.ghost {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 220px;
-  overflow-y: auto;
 }
 
 .notes-empty {
@@ -561,6 +845,18 @@ button.ghost {
   background: var(--surface-alt);
   border-radius: var(--radius);
   padding: 8px 10px;
+}
+
+/* An editor whose note is no longer in the file as it was opened. It stays in
+   the page because the text in it is the one thing there is no getting back. */
+.note.detached {
+  border-left: 3px solid var(--danger);
+}
+
+.note-moved {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--danger);
 }
 
 .note-head {
@@ -620,6 +916,7 @@ button.icon:hover {
 }
 
 .timestamps {
+  margin: 12px 0 0;
   font-size: 12px;
   color: var(--muted);
 }
@@ -659,5 +956,11 @@ button.icon:hover {
 @media (max-width: 900px) {
   .board {
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  /* The sidebar goes under the description rather than squeezing it: at this
+     width the two columns are narrower than one paragraph wants. */
+  .task-columns {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

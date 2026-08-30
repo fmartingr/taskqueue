@@ -653,6 +653,54 @@ export async function centre(page: Page, selector: string): Promise<{ x: number;
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
+/**
+ * Edits one of the dialog's click-to-edit fields and lets go of it.
+ *
+ * Three steps rather than a `fill`, and every one of them is the behaviour
+ * under test somewhere: the value reads as text until it is clicked, the
+ * editor carries `<id>-edit`, and the write happens when the editor closes
+ * (TQ-0069). A test that only wants the editor open stops after `openEditor`.
+ */
+export async function openEditor(page: Page, id: string, value: string): Promise<void> {
+  await page.click(`#${id}`);
+  await page.waitForSelector(`#${id}-edit`);
+  await page.fill(`#${id}-edit`, value);
+}
+
+/** Opens an editor, types, and closes it with Enter — one field, written. */
+export async function editField(page: Page, id: string, value: string): Promise<void> {
+  await openEditor(page, id, value);
+  await page.press(`#${id}-edit`, "Enter");
+  await page.waitForSelector(`#${id}-edit`, { state: "detached" });
+}
+
+/**
+ * The same for the description, which is a textarea: Enter is a newline there,
+ * so the Save button beside it is what closes the editor.
+ */
+export async function editBody(page: Page, value: string): Promise<void> {
+  await openEditor(page, "task-body", value);
+  await page.click(".inline-actions button.primary");
+  await page.waitForSelector("#task-body-edit", { state: "detached" });
+}
+
+/**
+ * Chooses from one of the dialog's selects and waits for the write it starts.
+ *
+ * The wait is the point. A select writes the moment it is used, so a test that
+ * asserted straight afterwards would be racing a PATCH that had not been sent
+ * yet — and would pass or fail on how long the assertion above it happened to
+ * take. Only for a change that is expected to land: a refused one sends no
+ * PATCH at all, and is waited for by its toast instead.
+ */
+export async function choose(page: Page, id: string, value: string): Promise<void> {
+  const written = page.waitForResponse(
+    (response) => response.request().method() === "PATCH" && response.ok(),
+  );
+  await page.selectOption(`#${id}`, value);
+  await written;
+}
+
 /** The IDs currently rendered in a column, top to bottom. */
 export async function idsIn(page: Page, status: string): Promise<string[]> {
   return page.$$eval(`.column[data-status="${status}"] .card`, (cards) =>

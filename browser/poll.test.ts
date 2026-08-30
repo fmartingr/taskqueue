@@ -10,7 +10,16 @@
  */
 
 import { expect, test } from "bun:test";
-import { POLL_INTERVAL_MS, card, cardIn, centre, idsIn, useBoard, type OpenBoard } from "./harness";
+import {
+  POLL_INTERVAL_MS,
+  card,
+  cardIn,
+  centre,
+  idsIn,
+  openEditor,
+  useBoard,
+  type OpenBoard,
+} from "./harness";
 
 const useBoardFor = useBoard();
 
@@ -72,7 +81,7 @@ test("the poll fills the board in under an open composer, draft intact", async (
   expect(await page.evaluate(() => document.activeElement?.className)).toBe("composer-input");
 });
 
-test("the poll fills the board in under an open task dialog, edit intact", async () => {
+test("the poll fills the board in under an open task dialog, an open editor intact", async () => {
   let open = "";
   const { project, page } = await openBoard((p) => {
     open = p.add("Open me");
@@ -80,13 +89,13 @@ test("the poll fills the board in under an open task dialog, edit intact", async
 
   await page.click(card(open));
   await page.waitForSelector("#task-dialog[open]");
-  await page.fill("#task-title", "an unsaved edit");
+  await openEditor(page, "task-title", "an unwritten edit");
 
   const id = project.add("Arrived while the dialog was open");
   await page.waitForSelector(cardIn("todo", id), WITHIN_A_POLL);
 
   expect(await page.$("#task-dialog[open]")).not.toBeNull();
-  expect(await page.inputValue("#task-title")).toBe("an unsaved edit");
+  expect(await page.inputValue("#task-title-edit")).toBe("an unwritten edit");
 });
 
 test("the poll fills the board in behind the create dialog", async () => {

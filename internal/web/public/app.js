@@ -1385,6 +1385,9 @@ function isRef2(r) {
 function ref(value) {
   return createRef(value, false);
 }
+function shallowRef(value) {
+  return createRef(value, true);
+}
 function createRef(rawValue, shallow) {
   if (/* @__PURE__ */ isRef2(rawValue)) {
     return rawValue;
@@ -2111,6 +2114,23 @@ function defineComponent(options, extraOptions) {
 function markAsyncBoundary(instance) {
   instance.ids = [instance.ids[0] + instance.ids[2]++ + "-", 0, 0];
 }
+function useTemplateRef(key) {
+  const i = getCurrentInstance();
+  const r = shallowRef(null);
+  if (i) {
+    const refs = i.refs === EMPTY_OBJ ? i.refs = {} : i.refs;
+    if (false) {} else {
+      Object.defineProperty(refs, key, {
+        enumerable: true,
+        get: () => r.value,
+        set: (val) => r.value = val
+      });
+    }
+  } else if (false) {}
+  const ret = r;
+  if (false) {}
+  return ret;
+}
 function isTemplateRefKey(refs, key) {
   let desc;
   return !!((desc = Object.getOwnPropertyDescriptor(refs, key)) && !desc.configurable);
@@ -2267,7 +2287,36 @@ var onUnmounted = createHook("um");
 var onServerPrefetch = createHook("sp");
 var onRenderTriggered = createHook("rtg");
 var onRenderTracked = createHook("rtc");
+var COMPONENTS = "components";
 var NULL_DYNAMIC_COMPONENT = /* @__PURE__ */ Symbol.for("v-ndc");
+function resolveDynamicComponent(component) {
+  if (isString(component)) {
+    return resolveAsset(COMPONENTS, component, false) || component;
+  } else {
+    return component || NULL_DYNAMIC_COMPONENT;
+  }
+}
+function resolveAsset(type, name, warnMissing = true, maybeSelfReference = false) {
+  const instance = currentRenderingInstance || currentInstance;
+  if (instance) {
+    const Component = instance.type;
+    if (type === COMPONENTS) {
+      const selfName = getComponentName(Component, false);
+      if (selfName && (selfName === name || selfName === camelize(name) || selfName === capitalize(camelize(name)))) {
+        return Component;
+      }
+    }
+    const res = resolve(instance[type] || Component[type], name) || resolve(instance.appContext[type], name);
+    if (!res && maybeSelfReference) {
+      return Component;
+    }
+    if (false) {}
+    return res;
+  } else if (false) {}
+}
+function resolve(registry, name) {
+  return registry && (registry[name] || registry[camelize(name)] || registry[capitalize(camelize(name))]);
+}
 function renderList(source, renderItem, cache, index) {
   let ret;
   const cached = cache && cache[index];
@@ -2310,6 +2359,55 @@ function renderList(source, renderItem, cache, index) {
     cache[index] = ret;
   }
   return ret;
+}
+function renderSlot(slots, name, props, fallback, noSlotted, branchKey) {
+  if (props == null)
+    props = {};
+  if (currentRenderingInstance.ce || currentRenderingInstance.parent && isAsyncWrapper(currentRenderingInstance.parent) && currentRenderingInstance.parent.ce) {
+    const slotProps = branchKey != null && props.key == null ? extend({}, props, { key: branchKey }) : props;
+    const hasProps = Object.keys(slotProps).length > 0;
+    if (name !== "default")
+      slotProps.name = name;
+    return openBlock(), createBlock(Fragment, null, [createVNode("slot", slotProps, fallback && fallback())], hasProps ? -2 : 64);
+  }
+  let slot = slots[name];
+  if (false) {}
+  if (slot && slot._c) {
+    slot._d = false;
+  }
+  const prevStackSize = blockStack.length;
+  openBlock();
+  let rendered;
+  try {
+    const validSlotContent = slot && ensureValidVNode(slot(props));
+    const slotKey = props.key || branchKey || validSlotContent && validSlotContent.key;
+    rendered = createBlock(Fragment, {
+      key: (slotKey && !isSymbol(slotKey) ? slotKey : `_${name}`) + (!validSlotContent && fallback ? "_fb" : "")
+    }, validSlotContent || (fallback ? fallback() : []), validSlotContent && slots._ === 1 ? 64 : -2);
+  } catch (err) {
+    for (let i = blockStack.length;i > prevStackSize; i--)
+      closeBlock();
+    throw err;
+  } finally {
+    if (slot && slot._c) {
+      slot._d = true;
+    }
+  }
+  if (!noSlotted && rendered.scopeId) {
+    rendered.slotScopeIds = [rendered.scopeId + "-s"];
+  }
+  return rendered;
+}
+function ensureValidVNode(vnodes) {
+  return vnodes.some((child) => {
+    if (!isVNode(child))
+      return true;
+    if (child.type === Comment)
+      return false;
+    if (child.type === Fragment && !ensureValidVNode(child.children))
+      return false;
+    return true;
+  }) ? vnodes : null;
 }
 var getPublicInstance = (i) => {
   if (!i)
@@ -4719,6 +4817,9 @@ function getComponentPublicInstance(instance) {
     return instance.proxy;
   }
 }
+function getComponentName(Component, includeInferred = true) {
+  return isFunction(Component) ? Component.displayName || Component.name : Component.name || includeInferred && Component.__name;
+}
 function isClassComponent(value) {
   return isFunction(value) && "__vccOpts" in value;
 }
@@ -5985,30 +6086,6 @@ function joinBody(body) {
   return content === "" ? section : [content, "", NOTES_RULE, "", section].join(`
 `);
 }
-function mergeNotes(opened, edited, current) {
-  const taken = new Set;
-  return current.map((note) => {
-    const at = opened.findIndex((candidate, i) => !taken.has(i) && candidate.timestamp === note.timestamp && candidate.text === note.text);
-    if (at === -1)
-      return note;
-    taken.add(at);
-    return edited[at] ?? note;
-  });
-}
-function mergeBody(opened, edited, current) {
-  const notes = mergeNotes(opened.notes, edited.notes, current.notes);
-  if (edited.content !== opened.content) {
-    if (current.content !== opened.content)
-      return { outcome: "conflict" };
-    return { outcome: "write", body: joinBody({ content: edited.content, notes }) };
-  }
-  if (sameNotes(notes, current.notes))
-    return { outcome: "unchanged" };
-  return { outcome: "write", body: joinBody({ content: current.content, notes }) };
-}
-function sameNotes(a, b) {
-  return a.length === b.length && a.every((note, i) => note.timestamp === b[i].timestamp && note.text === b[i].text);
-}
 function noteLines(text) {
   const lines = [];
   let blank = false;
@@ -7032,110 +7109,526 @@ var SearchBar_default = /* @__PURE__ */ defineComponent({
 // frontend/components/SearchBar.vue
 var SearchBar_default2 = SearchBar_default;
 
-// frontend/adopt.ts
-function adoptField(taken, local, incoming, focused) {
-  if (incoming === taken)
+// frontend/edit.ts
+function commitField(opened, edited, current) {
+  if (edited === opened)
     return "unchanged";
-  if (local !== taken)
-    return "keep";
-  return focused ? "defer" : "take";
+  return current === opened ? "write" : "conflict";
 }
-var copy = (notes) => notes.map((note) => ({ ...note }));
-function adoptBody(baseline, edited, current, focused) {
-  const notes = mergeNotes(baseline.notes, edited.notes, current.notes);
-  const typed = edited.content !== baseline.content;
-  const keep = typed || focused;
-  return {
-    edited: { content: keep ? edited.content : current.content, notes },
-    baseline: {
-      content: keep ? baseline.content : current.content,
-      notes: copy(current.notes)
-    },
-    content: !keep ? "taken" : typed && current.content !== baseline.content ? "overridden" : "held"
-  };
+function commitContent(opened, content, current) {
+  if (content === opened)
+    return { outcome: "unchanged" };
+  if (current.content !== opened)
+    return { outcome: "conflict" };
+  return { outcome: "write", body: joinBody({ content, notes: current.notes }) };
+}
+function commitNote(opened, text, current) {
+  if (text === opened.text)
+    return { outcome: "unchanged" };
+  const at = current.notes.findIndex((note) => note.timestamp === opened.timestamp && note.text === opened.text);
+  if (at === -1)
+    return { outcome: "conflict" };
+  const notes = current.notes.map((note, position) => position === at ? { timestamp: note.timestamp, text } : note);
+  return { outcome: "write", body: joinBody({ content: current.content, notes }) };
 }
 
+// frontend/components/InlineText.vue?type=script
+var _hoisted_19 = ["id", "aria-label", "onKeydown"];
+var _hoisted_26 = ["id", "aria-label", "onKeydown"];
+var _hoisted_35 = {
+  key: 2,
+  class: "inline-actions"
+};
+var InlineText_default = /* @__PURE__ */ defineComponent({
+  __name: "InlineText",
+  props: {
+    value: { type: String, required: true },
+    id: { type: String, required: true },
+    label: { type: String, required: true },
+    heading: { type: Boolean, required: false, default: false },
+    multiline: { type: Boolean, required: false, default: false },
+    placeholder: { type: String, required: false, default: "" },
+    commit: { type: Function, required: true }
+  },
+  emits: ["open", "close"],
+  setup(__props, { emit: __emit }) {
+    const props = __props;
+    const emit2 = __emit;
+    const editing = ref(false);
+    const draft = ref("");
+    const editor = useTemplateRef("editor");
+    let writing = false;
+    function begin() {
+      if (editing.value)
+        return;
+      draft.value = props.value;
+      editing.value = true;
+      emit2("open");
+      nextTick(() => {
+        const area = editor.value;
+        if (!area)
+          return;
+        area.focus();
+        area.setSelectionRange(area.value.length, area.value.length);
+      });
+    }
+    function close() {
+      editing.value = false;
+      emit2("close");
+    }
+    async function finish(keep) {
+      if (!editing.value || writing)
+        return;
+      if (!keep || draft.value === props.value) {
+        close();
+        return;
+      }
+      writing = true;
+      try {
+        if (await props.commit(draft.value))
+          close();
+      } finally {
+        writing = false;
+      }
+    }
+    function cancel() {
+      if (!editing.value)
+        return;
+      close();
+    }
+    return (_ctx, _cache) => {
+      return openBlock(), createElementBlock("div", {
+        class: normalizeClass(["inline-text", { multiline: __props.multiline, editing: editing.value }])
+      }, [
+        editing.value ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+          __props.multiline ? withDirectives((openBlock(), createElementBlock("textarea", {
+            key: 0,
+            id: `${__props.id}-edit`,
+            ref_key: "editor",
+            ref: editor,
+            "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => draft.value = $event),
+            class: "inline-editor",
+            rows: "12",
+            spellcheck: "false",
+            "aria-label": __props.label,
+            onKeydown: [
+              withKeys(withModifiers(cancel, ["prevent", "stop"]), ["esc"]),
+              _cache[1] || (_cache[1] = withKeys(withModifiers(($event) => finish(true), ["ctrl", "prevent"]), ["enter"])),
+              _cache[2] || (_cache[2] = withKeys(withModifiers(($event) => finish(true), ["meta", "prevent"]), ["enter"]))
+            ],
+            onBlur: _cache[3] || (_cache[3] = ($event) => finish(true))
+          }, null, 40, _hoisted_19)), [
+            [vModelText, draft.value]
+          ]) : withDirectives((openBlock(), createElementBlock("input", {
+            key: 1,
+            id: `${__props.id}-edit`,
+            ref_key: "editor",
+            ref: editor,
+            "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => draft.value = $event),
+            class: "inline-editor",
+            type: "text",
+            autocomplete: "off",
+            "aria-label": __props.label,
+            onKeydown: [
+              _cache[5] || (_cache[5] = withKeys(withModifiers(($event) => finish(true), ["prevent"]), ["enter"])),
+              withKeys(withModifiers(cancel, ["prevent", "stop"]), ["esc"])
+            ],
+            onBlur: _cache[6] || (_cache[6] = ($event) => finish(true))
+          }, null, 40, _hoisted_26)), [
+            [vModelText, draft.value]
+          ]),
+          __props.multiline ? (openBlock(), createElementBlock("div", _hoisted_35, [
+            createBaseVNode("button", {
+              type: "button",
+              class: "primary",
+              onMousedown: _cache[7] || (_cache[7] = withModifiers(() => {}, ["prevent"])),
+              onClick: _cache[8] || (_cache[8] = ($event) => finish(true))
+            }, "Save", 32),
+            createCommentVNode(` Both handlers, and both load-bearing: mousedown is what stops the
+             textarea blurring (which would write the draft this button exists
+             to drop), and click is the only one a keyboard fires. `),
+            createBaseVNode("button", {
+              type: "button",
+              class: "ghost",
+              onMousedown: withModifiers(cancel, ["prevent"]),
+              onClick: cancel
+            }, " Cancel ", 32)
+          ])) : createCommentVNode("v-if", true)
+        ], 64)) : (openBlock(), createBlock(resolveDynamicComponent(__props.heading ? "h2" : "div"), {
+          key: 1,
+          id: __props.id,
+          class: normalizeClass(["inline-value", { empty: __props.value === "" }]),
+          role: "button",
+          tabindex: "0",
+          title: `Click to edit the ${__props.label.toLowerCase()}`,
+          onClick: begin,
+          onKeydown: withKeys(withModifiers(begin, ["prevent"]), ["enter"])
+        }, {
+          default: withCtx(() => [
+            renderSlot(_ctx.$slots, "default", {}, () => [
+              createTextVNode(toDisplayString(__props.value === "" ? __props.placeholder : __props.value), 1)
+            ])
+          ]),
+          _: 3
+        }, 40, ["id", "class", "title", "onKeydown"]))
+      ], 2);
+    };
+  }
+});
+
+// frontend/components/InlineText.vue
+var InlineText_default2 = InlineText_default;
+
+// frontend/markdown.ts
+var SAFE_SCHEME = /^(https?:|mailto:)/i;
+var HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+var INVISIBLE = /[\u0000-\u001f\u007f]/g;
+var FENCE = /^(`{3,}|~{3,})\s*(\S*)/;
+var HEADING = /^(#{1,6})\s+(.*)$/;
+var RULE = /^(-{3,}|\*{3,}|_{3,})$/;
+var QUOTE = /^>\s?(.*)$/;
+var BULLET = /^([-*+])\s+(.*)$/;
+var NUMBER = /^(\d{1,9})[.)]\s+(.*)$/;
+var CHECKBOX = /^\[([ xX])\]\s+(.*)$/;
+var INDENT = /^[ \t]*/;
+var TAB_WIDTH = 4;
+function renderMarkdown(source) {
+  return blocks(source.replace(/\r\n?/g, `
+`).split(`
+`));
+}
+function indentOf(line) {
+  let width = 0;
+  for (const character of INDENT.exec(line)?.[0] ?? "") {
+    width += character === "\t" ? TAB_WIDTH - width % TAB_WIDTH : 1;
+  }
+  return width;
+}
+function prefixLength(line, column) {
+  let width = 0;
+  let at = 0;
+  while (at < line.length && width < column) {
+    const character = line[at];
+    if (character !== " " && character !== "\t")
+      break;
+    width += character === "\t" ? TAB_WIDTH - width % TAB_WIDTH : 1;
+    at++;
+  }
+  return at;
+}
+function blocks(lines) {
+  const out = [];
+  let at = 0;
+  while (at < lines.length) {
+    const trimmed = lines[at].trim();
+    if (trimmed === "") {
+      at++;
+      continue;
+    }
+    const fence = FENCE.exec(trimmed);
+    if (fence) {
+      const closed = fenceEnd(lines, at + 1, fence[1][0]);
+      out.push(codeBlock(lines.slice(at + 1, closed), fence[2]));
+      at = closed < lines.length ? closed + 1 : closed;
+      continue;
+    }
+    const heading = HEADING.exec(trimmed);
+    if (heading) {
+      const level = heading[1].length;
+      out.push(`<h${level}>${inline(heading[2].trim())}</h${level}>`);
+      at++;
+      continue;
+    }
+    if (RULE.test(trimmed)) {
+      out.push("<hr>");
+      at++;
+      continue;
+    }
+    if (QUOTE.test(trimmed)) {
+      const end2 = runOf(lines, at, (line) => QUOTE.test(line.trim()));
+      const inner = lines.slice(at, end2).map((line) => QUOTE.exec(line.trim())?.[1] ?? "");
+      out.push(`<blockquote>${blocks(inner)}</blockquote>`);
+      at = end2;
+      continue;
+    }
+    if (BULLET.test(trimmed) || NUMBER.test(trimmed)) {
+      const list = listAt(lines, at, indentOf(lines[at]));
+      out.push(list.html);
+      at = list.next;
+      continue;
+    }
+    const end = runOf(lines, at, (line) => line.trim() !== "" && !opensABlock(line.trim()));
+    const text = lines.slice(at, end).map((line) => line.trim()).join(`
+`);
+    out.push(`<p>${inline(text)}</p>`);
+    at = end;
+  }
+  return out.join("");
+}
+function opensABlock(trimmed) {
+  return FENCE.test(trimmed) || HEADING.test(trimmed) || RULE.test(trimmed) || QUOTE.test(trimmed) || BULLET.test(trimmed) || NUMBER.test(trimmed);
+}
+function runOf(lines, at, holds) {
+  let end = at + 1;
+  while (end < lines.length && holds(lines[end]))
+    end++;
+  return end;
+}
+function fenceEnd(lines, from, marker) {
+  for (let at = from;at < lines.length; at++) {
+    const found = FENCE.exec(lines[at].trim());
+    if (found && found[1][0] === marker)
+      return at;
+  }
+  return lines.length;
+}
+function codeBlock(lines, language) {
+  const marked = language === "" ? "" : ` class="language-${escapeHTML(language)}"`;
+  return `<pre><code${marked}>${escapeHTML(lines.join(`
+`))}</code></pre>`;
+}
+function listAt(lines, at, column) {
+  const first = lines[at].trim();
+  const ordered = !BULLET.test(first) && NUMBER.test(first);
+  const start2 = ordered ? Number(NUMBER.exec(first)?.[1] ?? "1") : 1;
+  const items = [];
+  let position = at;
+  while (position < lines.length) {
+    if (lines[position].trim() === "") {
+      const next = runOf(lines, position, (line) => line.trim() === "");
+      if (next >= lines.length || indentOf(lines[next]) < column)
+        break;
+      position = next;
+      continue;
+    }
+    if (indentOf(lines[position]) !== column)
+      break;
+    const marker = (ordered ? NUMBER : BULLET).exec(lines[position].trim());
+    if (!marker)
+      break;
+    let end = position + 1;
+    while (end < lines.length) {
+      if (lines[end].trim() !== "" && indentOf(lines[end]) <= column)
+        break;
+      end++;
+    }
+    while (end > position + 1 && lines[end - 1].trim() === "")
+      end--;
+    const text = column + marker[0].length - marker[2].length;
+    items.push(item([marker[2], ...lines.slice(position + 1, end)], text));
+    position = end;
+  }
+  const tag = ordered ? "ol" : "ul";
+  const from = ordered && start2 !== 1 ? ` start="${start2}"` : "";
+  return { html: `<${tag}${from}>${items.join("")}</${tag}>`, next: position };
+}
+function item(body, column) {
+  const [head = "", ...rest] = body;
+  const box = CHECKBOX.exec(head);
+  const checked = box ? ` <input type="checkbox" disabled${box[1] === " " ? "" : " checked"}>` : "";
+  const inner = blocks([
+    box ? box[2] : head,
+    ...rest.map((line) => line.slice(prefixLength(line, column)))
+  ]);
+  const single = (inner.match(/<p>/g) ?? []).length === 1;
+  const only = single ? inner.replace(/^<p>([\s\S]*?)<\/p>/, "$1") : inner;
+  return `<li${box ? ' class="task-item"' : ""}>${checked}${only}</li>`;
+}
+function escapeHTML(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+var HELD = "\x00";
+function inline(text) {
+  const code = [];
+  const held = escapeHTML(text.replace(new RegExp(HELD, "g"), "")).replace(/(`+)([\s\S]*?)\1/g, (_whole, _ticks, inner) => {
+    code.push(`<code>${trimCodeSpan(inner)}</code>`);
+    return `${HELD}${code.length - 1}${HELD}`;
+  });
+  const marked = held.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (whole, alt, href) => {
+    const url = safeHref(href);
+    return url === null ? whole : `<img src="${url}" alt="${alt}" loading="lazy">`;
+  }).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, label, href) => {
+    const url = safeHref(href);
+    return url === null ? whole : `${anchor(url)}${label}</a>`;
+  }).replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_whole, before, url) => `${before}${anchor(url)}${url}</a>`).replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, "<strong>$2</strong>").replace(/(?<![*\w])\*(?=\S)([^*]*?\S)\*(?![*\w])/g, "<em>$1</em>").replace(/(?<!\w)_(?=\S)([^_]*?\S)_(?!\w)/g, "<em>$1</em>").replace(/~~(?=\S)([\s\S]*?\S)~~/g, "<del>$1</del>").replace(/\n/g, "<br>");
+  return marked.replace(new RegExp(`${HELD}(\\d+)${HELD}`, "g"), (_whole, at) => code[Number(at)]);
+}
+function trimCodeSpan(text) {
+  return /^ [\s\S]*[^ ] $/.test(text) ? text.slice(1, -1) : text;
+}
+function safeHref(href) {
+  const cleaned = href.replace(INVISIBLE, "");
+  return HAS_SCHEME.test(cleaned) && !SAFE_SCHEME.test(cleaned) ? null : cleaned;
+}
+function anchor(url) {
+  return `<a href="${url}" target="_blank" rel="noreferrer noopener">`;
+}
+
+// frontend/components/Markdown.vue?type=script
+var _hoisted_110 = ["innerHTML"];
+var Markdown_default = /* @__PURE__ */ defineComponent({
+  __name: "Markdown",
+  props: {
+    source: { type: String, required: true }
+  },
+  setup(__props) {
+    const props = __props;
+    const html = computed2(() => renderMarkdown(props.source));
+    return (_ctx, _cache) => {
+      return openBlock(), createElementBlock("div", {
+        class: "markdown",
+        innerHTML: html.value
+      }, null, 8, _hoisted_110);
+    };
+  }
+});
+
+// frontend/components/Markdown.vue
+var Markdown_default2 = Markdown_default;
+
 // frontend/components/NotesPanel.vue?type=script
-var _hoisted_19 = { class: "notes-section" };
-var _hoisted_26 = {
+var _hoisted_111 = { class: "notes-section" };
+var _hoisted_27 = { class: "note-row" };
+var _hoisted_36 = {
   key: 0,
   class: "notes-empty"
 };
-var _hoisted_35 = { class: "note-head" };
-var _hoisted_44 = { class: "note-time" };
-var _hoisted_53 = ["onMousedown", "onClick"];
-var _hoisted_63 = ["onKeydown", "onBlur"];
-var _hoisted_72 = {
+var _hoisted_44 = {
+  key: 1,
+  class: "note detached"
+};
+var _hoisted_53 = { class: "note-head" };
+var _hoisted_63 = { class: "note-time" };
+var _hoisted_72 = ["onMousedown", "onClick"];
+var _hoisted_8 = ["onKeydown", "onBlur"];
+var _hoisted_9 = {
   key: 1,
   class: "note-text"
 };
-var _hoisted_8 = { class: "note-row" };
-var _hoisted_9 = ["value"];
 var NotesPanel_default = /* @__PURE__ */ defineComponent({
   __name: "NotesPanel",
   props: {
     notes: { type: Array, required: true },
-    draft: { type: String, required: true }
+    commit: { type: Function, required: true },
+    append: { type: Function, required: true }
   },
-  emits: ["edit", "update:draft", "append"],
-  setup(__props, { emit: __emit }) {
+  setup(__props) {
     const props = __props;
-    const emit2 = __emit;
-    const list = ref(null);
+    const list = useTemplateRef("list");
+    const draft = ref("");
     const editing = ref(null);
     const editor = ref("");
-    function beginEdit(note) {
-      if (editing.value === note)
-        return;
-      if (editing.value !== null)
-        commit(editing.value);
-      editing.value = note;
-      editor.value = note.text;
-      nextTick(() => {
-        const area = list.value?.querySelector("textarea.note-editor");
-        if (area instanceof HTMLTextAreaElement) {
-          area.focus();
-          area.setSelectionRange(area.value.length, area.value.length);
-        }
-      });
+    let writing = false;
+    function same(one, other) {
+      return one !== null && one.timestamp === other.timestamp && one.text === other.text;
     }
-    function finish(keep, note) {
-      if (editing.value !== note)
-        return;
-      editing.value = null;
-      if (keep)
-        commit(note);
-    }
-    function commit(note) {
-      editing.value = null;
-      const text = noteLines(editor.value).join(`
+    const editingAt = computed2(() => props.notes.findIndex((note) => same(editing.value, note)));
+    const detached = computed2(() => editing.value !== null && editingAt.value === -1);
+    async function write(note, raw) {
+      if (writing)
+        return false;
+      const text = noteLines(raw).join(`
 `);
-      if (text !== "" && text !== note.text)
-        emit2("edit", note, text);
+      if (text === "" || text === note.text)
+        return true;
+      writing = true;
+      try {
+        return await props.commit(note, text);
+      } finally {
+        writing = false;
+      }
     }
-    function onEnter(event, commit2) {
+    async function beginEdit(note) {
+      if (same(editing.value, note))
+        return;
+      if (editing.value !== null && !await write(editing.value, editor.value))
+        return;
+      editing.value = { ...note };
+      editor.value = note.text;
+      await nextTick();
+      const area = list.value?.querySelector("textarea.note-editor");
+      if (area instanceof HTMLTextAreaElement) {
+        area.focus();
+        area.setSelectionRange(area.value.length, area.value.length);
+      }
+    }
+    async function finish(keep, note) {
+      if (!same(editing.value, note))
+        return;
+      if (!keep) {
+        editing.value = null;
+        return;
+      }
+      if (await write(note, editor.value))
+        editing.value = null;
+    }
+    async function send() {
+      const text = draft.value;
+      if (text.trim() === "" || writing)
+        return;
+      writing = true;
+      try {
+        if (await props.append(text))
+          draft.value = "";
+      } finally {
+        writing = false;
+      }
+    }
+    function onEnter(event, act) {
       if (event.shiftKey)
         return;
       event.preventDefault();
-      commit2();
+      act();
     }
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("section", _hoisted_19, [
-        _cache[4] || (_cache[4] = createBaseVNode("h3", { class: "notes-title" }, "Notes", -1)),
+      return openBlock(), createElementBlock("section", _hoisted_111, [
+        _cache[6] || (_cache[6] = createBaseVNode("h3", { class: "task-section" }, "Notes", -1)),
+        createBaseVNode("div", _hoisted_27, [
+          withDirectives(createBaseVNode("textarea", {
+            id: "task-note",
+            "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => draft.value = $event),
+            class: "note-draft",
+            rows: "2",
+            placeholder: "Write a note…",
+            onKeydown: _cache[1] || (_cache[1] = withKeys(($event) => onEnter($event, send), ["enter"]))
+          }, null, 544), [
+            [vModelText, draft.value]
+          ]),
+          createBaseVNode("button", {
+            id: "task-note-add",
+            type: "button",
+            class: "primary",
+            onClick: send
+          }, "Send")
+        ]),
         createBaseVNode("ul", {
           id: "task-notes",
           ref_key: "list",
           ref: list,
           class: "notes"
         }, [
-          __props.notes.length === 0 ? (openBlock(), createElementBlock("li", _hoisted_26, "No notes yet.")) : createCommentVNode("v-if", true),
+          __props.notes.length === 0 && !detached.value ? (openBlock(), createElementBlock("li", _hoisted_36, "No notes yet.")) : createCommentVNode("v-if", true),
+          detached.value && editing.value !== null ? (openBlock(), createElementBlock("li", _hoisted_44, [
+            _cache[5] || (_cache[5] = createBaseVNode("p", {
+              id: "task-note-detached",
+              class: "note-moved"
+            }, " The note you were editing is no longer in the file as you opened it. Nothing was written — copy what you need, then press Escape. ", -1)),
+            withDirectives(createBaseVNode("textarea", {
+              "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => editor.value = $event),
+              class: "note-editor",
+              rows: "2",
+              onKeydown: _cache[3] || (_cache[3] = withKeys(withModifiers(($event) => editing.value = null, ["prevent", "stop"]), ["esc"]))
+            }, null, 544), [
+              [vModelText, editor.value]
+            ])
+          ])) : createCommentVNode("v-if", true),
           (openBlock(true), createElementBlock(Fragment, null, renderList(__props.notes, (note, position) => {
             return openBlock(), createElementBlock("li", {
               key: position,
               class: "note"
             }, [
-              createBaseVNode("div", _hoisted_35, [
-                createBaseVNode("time", _hoisted_44, toDisplayString(note.timestamp === "" ? "note" : unref(formatTime)(note.timestamp)), 1),
+              createBaseVNode("div", _hoisted_53, [
+                createBaseVNode("time", _hoisted_63, toDisplayString(note.timestamp === "" ? "note" : unref(formatTime)(note.timestamp)), 1),
                 createBaseVNode("button", {
                   type: "button",
                   class: "ghost icon",
@@ -7143,41 +7636,24 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
                   "aria-label": "Edit this note",
                   onMousedown: withModifiers(($event) => beginEdit(note), ["prevent"]),
                   onClick: ($event) => beginEdit(note)
-                }, " ✎ ", 40, _hoisted_53)
+                }, " ✎ ", 40, _hoisted_72)
               ]),
-              editing.value === note ? withDirectives((openBlock(), createElementBlock("textarea", {
+              editingAt.value === position ? withDirectives((openBlock(), createElementBlock("textarea", {
                 key: 0,
-                "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => editor.value = $event),
+                "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => editor.value = $event),
                 class: "note-editor",
                 rows: "2",
                 onKeydown: [
                   withKeys(($event) => onEnter($event, () => finish(true, note)), ["enter"]),
-                  withKeys(withModifiers(($event) => finish(false, note), ["prevent"]), ["esc"])
+                  withKeys(withModifiers(($event) => finish(false, note), ["prevent", "stop"]), ["esc"])
                 ],
                 onBlur: ($event) => finish(true, note)
-              }, null, 40, _hoisted_63)), [
+              }, null, 40, _hoisted_8)), [
                 [vModelText, editor.value]
-              ]) : (openBlock(), createElementBlock("p", _hoisted_72, toDisplayString(note.text), 1))
+              ]) : (openBlock(), createElementBlock("p", _hoisted_9, toDisplayString(note.text), 1))
             ]);
           }), 128))
-        ], 512),
-        createBaseVNode("div", _hoisted_8, [
-          createBaseVNode("textarea", {
-            id: "task-note",
-            class: "note-draft",
-            rows: "2",
-            placeholder: "Append a timestamped note…",
-            value: __props.draft,
-            onInput: _cache[1] || (_cache[1] = ($event) => emit2("update:draft", $event.target.value)),
-            onKeydown: _cache[2] || (_cache[2] = withKeys(($event) => onEnter($event, () => emit2("append")), ["enter"]))
-          }, null, 40, _hoisted_9),
-          createBaseVNode("button", {
-            id: "task-note-add",
-            type: "button",
-            class: "ghost",
-            onClick: _cache[3] || (_cache[3] = ($event) => emit2("append"))
-          }, "Add note")
-        ])
+        ], 512)
       ]);
     };
   }
@@ -7186,23 +7662,142 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
 // frontend/components/NotesPanel.vue
 var NotesPanel_default2 = NotesPanel_default;
 
+// frontend/components/TokenField.vue?type=script
+var _hoisted_112 = ["id"];
+var _hoisted_28 = ["title", "aria-label", "onClick"];
+var _hoisted_37 = ["id", "placeholder", "aria-label", "onKeydown"];
+var _hoisted_45 = ["id", "title", "aria-label"];
+var TokenField_default = /* @__PURE__ */ defineComponent({
+  __name: "TokenField",
+  props: {
+    values: { type: Array, required: true },
+    id: { type: String, required: true },
+    label: { type: String, required: true },
+    placeholder: { type: String, required: false },
+    commit: { type: Function, required: true }
+  },
+  setup(__props) {
+    const props = __props;
+    const adding = ref(false);
+    const draft = ref("");
+    const input = useTemplateRef("input");
+    let writing = false;
+    function begin() {
+      adding.value = true;
+      draft.value = "";
+      nextTick(() => input.value?.focus());
+    }
+    async function add() {
+      if (writing)
+        return;
+      const value = draft.value.trim();
+      if (value === "" || props.values.includes(value)) {
+        adding.value = false;
+        return;
+      }
+      writing = true;
+      try {
+        if (await props.commit([...props.values, value]))
+          adding.value = false;
+      } finally {
+        writing = false;
+      }
+    }
+    async function remove2(value) {
+      if (writing)
+        return;
+      writing = true;
+      try {
+        await props.commit(props.values.filter((candidate) => candidate !== value));
+      } finally {
+        writing = false;
+      }
+    }
+    return (_ctx, _cache) => {
+      return openBlock(), createElementBlock("div", {
+        id: __props.id,
+        class: "tokens"
+      }, [
+        (openBlock(true), createElementBlock(Fragment, null, renderList(__props.values, (value) => {
+          return openBlock(), createElementBlock("span", {
+            key: value,
+            class: "token"
+          }, [
+            renderSlot(_ctx.$slots, "default", { value }, () => [
+              createTextVNode(toDisplayString(value), 1)
+            ]),
+            createBaseVNode("button", {
+              type: "button",
+              class: "ghost icon token-remove",
+              title: `Remove ${value}`,
+              "aria-label": `Remove ${value}`,
+              onClick: ($event) => remove2(value)
+            }, " ✕ ", 8, _hoisted_28)
+          ]);
+        }), 128)),
+        adding.value ? withDirectives((openBlock(), createElementBlock("input", {
+          key: 0,
+          id: `${__props.id}-input`,
+          ref_key: "input",
+          ref: input,
+          "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => draft.value = $event),
+          class: "token-input",
+          type: "text",
+          autocomplete: "off",
+          placeholder: __props.placeholder,
+          "aria-label": `Add ${__props.label}`,
+          onKeydown: [
+            withKeys(withModifiers(add, ["prevent"]), ["enter"]),
+            _cache[1] || (_cache[1] = withKeys(withModifiers(($event) => adding.value = false, ["prevent", "stop"]), ["esc"]))
+          ],
+          onBlur: add
+        }, null, 40, _hoisted_37)), [
+          [vModelText, draft.value]
+        ]) : (openBlock(), createElementBlock("button", {
+          key: 1,
+          id: `${__props.id}-add`,
+          type: "button",
+          class: "ghost icon token-add",
+          title: `Add ${__props.label}`,
+          "aria-label": `Add ${__props.label}`,
+          onClick: begin
+        }, " ＋ ", 8, _hoisted_45))
+      ], 8, _hoisted_112);
+    };
+  }
+});
+
+// frontend/components/TokenField.vue
+var TokenField_default2 = TokenField_default;
+
 // frontend/components/TaskDialog.vue?type=script
-var _hoisted_110 = { class: "dialog-header" };
-var _hoisted_27 = {
+var _hoisted_113 = { class: "task-sheet" };
+var _hoisted_29 = { class: "task-head" };
+var _hoisted_38 = { class: "task-head-text" };
+var _hoisted_46 = {
   id: "task-dialog-id",
   class: "task-id"
 };
-var _hoisted_36 = ["hidden"];
-var _hoisted_45 = ["hidden"];
-var _hoisted_54 = { class: "grid" };
+var _hoisted_54 = ["value"];
 var _hoisted_64 = ["value"];
-var _hoisted_73 = ["value", "title"];
+var _hoisted_73 = ["hidden"];
 var _hoisted_82 = ["hidden"];
-var _hoisted_92 = { class: "dialog-footer" };
-var _hoisted_10 = {
+var _hoisted_92 = { class: "task-columns" };
+var _hoisted_10 = { class: "task-main" };
+var _hoisted_11 = {
+  key: 1,
+  class: "task-empty"
+};
+var _hoisted_122 = { class: "token-id" };
+var _hoisted_132 = ["hidden"];
+var _hoisted_142 = { class: "task-side" };
+var _hoisted_152 = ["value"];
+var _hoisted_162 = ["value", "title"];
+var _hoisted_172 = {
   id: "task-timestamps",
   class: "timestamps"
 };
+var EDITORS = ".inline-editor, .note-editor, .token-input";
 var TaskDialog_default = /* @__PURE__ */ defineComponent({
   __name: "TaskDialog",
   props: {
@@ -7213,166 +7808,154 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
     const props = __props;
     const emit2 = __emit;
     const dialog = ref(null);
-    const opened = splitBody(props.task.body ?? "");
-    const baseline = ref({
-      content: opened.content,
-      notes: opened.notes.map((note) => ({ ...note }))
-    });
-    const title = ref(props.task.title);
-    const status = ref(props.task.status);
-    const priority = ref(props.task.priority || defaultPriority(priorities.value));
-    const assignee = ref(props.task.assignee ?? "");
-    const labelList = ref((props.task.labels ?? []).join(", "));
-    const dependsOn = ref((props.task.depends_on ?? []).join(", "));
-    const content = ref(opened.content);
-    const notes = ref(opened.notes.map((note) => ({ ...note })));
-    const noteDraft = ref("");
-    const kept = ref([priority.value]);
-    watch2(priority, (value) => {
-      if (!kept.value.includes(value))
-        kept.value = [...kept.value, value];
-    });
-    const priorityChoices = computed2(() => priorityOptions(priorities.value, kept.value));
+    const split = computed2(() => splitBody(props.task.body ?? ""));
+    const priority = computed2(() => props.task.priority || defaultPriority(priorities.value));
+    const priorityChoices = computed2(() => priorityOptions(priorities.value, [priority.value]));
     const pending = computed2(() => pendingDependencies(props.task, index.value, columns.value));
     const timestamps = computed2(() => `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`);
     onMounted(() => dialog.value?.showModal());
-    function field(label, id, local, from) {
-      return { label, id, local, from, taken: from(props.task) };
-    }
-    const fields = [
-      field("Title", "task-title", title, (task) => task.title),
-      field("Status", "task-status", status, (task) => task.status),
-      field("Priority", "task-priority", priority, (task) => task.priority || defaultPriority(priorities.value)),
-      field("Assignee", "task-assignee", assignee, (task) => task.assignee ?? ""),
-      field("Labels", "task-labels", labelList, (task) => (task.labels ?? []).join(", ")),
-      field("Depends on", "task-depends-on", dependsOn, (task) => (task.depends_on ?? []).join(", "))
-    ];
-    const changed = ref([]);
-    function report(label, withheld) {
-      if (changed.value.includes(label) === withheld)
-        return;
-      changed.value = withheld ? [...changed.value, label] : changed.value.filter((named) => named !== label);
-    }
-    function focused(id) {
-      return document.activeElement?.id === id;
-    }
-    function adopt(task, caret = true) {
-      for (const entry of fields) {
-        const incoming = entry.from(task);
-        switch (adoptField(entry.taken, entry.local.value, incoming, caret && focused(entry.id))) {
-          case "take":
-            entry.local.value = incoming;
-            entry.taken = incoming;
-            report(entry.label, false);
-            break;
-          case "keep":
-            report(entry.label, true);
-            break;
-          case "unchanged":
-            report(entry.label, false);
-            break;
-        }
-      }
-      const adoption = adoptBody(baseline.value, { content: content.value, notes: notes.value }, splitBody(task.body ?? ""), caret && focused("task-body"));
-      content.value = adoption.edited.content;
-      notes.value = adoption.edited.notes;
-      baseline.value = adoption.baseline;
-      report("Body", adoption.content === "overridden");
-    }
-    watch2(() => props.task, (task) => adopt(task));
-    let refocus;
-    function onFocusOut() {
-      clearTimeout(refocus);
-      refocus = setTimeout(() => adopt(props.task), 0);
-    }
-    onBeforeUnmount(() => clearTimeout(refocus));
     function dismiss() {
       dialog.value?.close();
     }
-    async function buildPatch() {
-      adopt(props.task, false);
-      const opened2 = baseline.value;
-      const edited = { content: content.value, notes: notes.value };
-      const patch = {
-        title: title.value,
-        status: status.value,
-        priority: priority.value,
-        assignee: assignee.value,
-        labels: splitList(labelList.value),
-        depends_on: splitList(dependsOn.value)
-      };
-      const current = splitBody((await fetchTask(props.task.id)).body ?? "");
-      const merged = mergeBody(opened2, edited, current);
-      if (merged.outcome === "conflict")
-        return null;
-      if (merged.outcome === "write")
-        patch.body = merged.body;
-      return patch;
+    let pressedOutside = false;
+    function onMouseDown(event) {
+      pressedOutside = event.target === dialog.value;
     }
-    function refuse() {
-      toast(`Not saved: the body of ${props.task.id} changed on disk since this dialog read it. ` + `Your text is still here — copy it, then close and reopen the task.`);
+    function onClick(event) {
+      const outside = pressedOutside && event.target === dialog.value;
+      pressedOutside = false;
+      if (outside && dialog.value?.querySelector(EDITORS) === null)
+        dismiss();
     }
-    function rebase(task) {
-      const written = splitBody(task.body ?? "");
-      content.value = written.content;
-      notes.value = written.notes.map((note) => ({ ...note }));
-      baseline.value = { content: written.content, notes: written.notes.map((note) => ({ ...note })) };
-      for (const entry of fields)
-        entry.taken = entry.local.value;
-      changed.value = [];
+    const TITLE = { what: "title", of: (task) => task.title };
+    const ASSIGNEE = { what: "assignee", of: (task) => task.assignee ?? "" };
+    const DESCRIPTION = {
+      what: "description",
+      of: (task) => splitBody(task.body ?? "").content
+    };
+    const editing = ref(null);
+    const opened = ref("");
+    function begin(field) {
+      editing.value = field;
+      opened.value = field.of(props.task);
     }
-    async function save() {
+    const moved = computed2(() => {
+      const field = editing.value;
+      if (field === null)
+        return "";
+      return field.of(props.task) === opened.value ? "" : field.what;
+    });
+    function refuse(what) {
+      toast(`Not saved: the ${what} of ${props.task.id} changed on disk while you were editing it. ` + `Nothing was written — copy what you need, then press Escape to see the file's version, ` + `and check the change in your VCS.`);
+    }
+    async function writeField(field, was, edited, patch) {
       try {
-        const patch = await buildPatch();
-        if (patch === null) {
-          refuse();
-          return;
+        const commit = commitField(was, edited, field.of(await fetchTask(props.task.id)));
+        if (commit === "unchanged")
+          return true;
+        if (commit === "conflict") {
+          refuse(field.what);
+          return false;
         }
         await patchTask(props.task.id, patch);
-        dismiss();
         await refresh();
+        return true;
       } catch (error) {
         toast(`Could not update ${props.task.id}: ${describe(error)}`);
+        return false;
       }
     }
-    async function append() {
-      const text = noteDraft.value;
-      if (text.trim() === "")
-        return;
+    async function writeBody(what, decide) {
       try {
-        const patch = await buildPatch();
-        if (patch === null) {
-          refuse();
-          return;
+        const commit = decide(splitBody((await fetchTask(props.task.id)).body ?? ""));
+        if (commit.outcome === "conflict") {
+          refuse(what);
+          return false;
         }
-        rebase(await patchTask(props.task.id, patch));
-        rebase(await addNote(props.task.id, text));
-        noteDraft.value = "";
+        if (commit.outcome === "write") {
+          await patchTask(props.task.id, { body: commit.body });
+          await refresh();
+        }
+        return true;
+      } catch (error) {
+        toast(`Could not update ${props.task.id}: ${describe(error)}`);
+        return false;
+      }
+    }
+    async function saveTitle(title) {
+      if (title.trim() === "") {
+        toast(`Not saved: ${props.task.id} needs a title.`);
+        return false;
+      }
+      return writeField(TITLE, opened.value, title, { title });
+    }
+    const saveAssignee = (assignee) => writeField(ASSIGNEE, opened.value, assignee, { assignee });
+    const saveContent = (content) => writeBody(DESCRIPTION.what, (current) => commitContent(opened.value, content, current));
+    const saveNote = (note, text) => writeBody("note", (current) => commitNote(note, text, current));
+    async function choose(field, event, patch) {
+      const select = event.target;
+      const chosen = select.value;
+      const was = field.of(props.task);
+      if (!await writeField(field, was, chosen, patch(chosen)))
+        select.value = was;
+    }
+    const chooseStatus = (event) => choose({ what: "status", of: (task) => task.status }, event, (status) => ({ status }));
+    const choosePriority = (event) => choose({ what: "priority", of: (task) => task.priority || defaultPriority(priorities.value) }, event, (value) => ({ priority: value }));
+    function writeList(what, of, values, patch) {
+      const field = { what, of: (task) => JSON.stringify(of(task)) };
+      return writeField(field, field.of(props.task), JSON.stringify(values), patch);
+    }
+    const saveLabels = (labels2) => writeList("labels", (task) => task.labels ?? [], labels2, { labels: labels2 });
+    const saveDependencies = (depends_on) => writeList("dependencies", (task) => task.depends_on ?? [], depends_on, { depends_on });
+    async function appendNote(text) {
+      try {
+        await addNote(props.task.id, text);
         await refresh();
         toast(`Note added to ${props.task.id}`, "info");
+        return true;
       } catch (error) {
         toast(`Could not add a note to ${props.task.id}: ${describe(error)}`);
+        return false;
       }
-    }
-    function editNote(note, text) {
-      note.text = text;
     }
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("dialog", {
         id: "task-dialog",
         ref_key: "dialog",
         ref: dialog,
-        class: "dialog",
-        onClose: _cache[8] || (_cache[8] = ($event) => emit2("close"))
+        class: "dialog task-dialog",
+        onClose: _cache[6] || (_cache[6] = ($event) => emit2("close")),
+        onMousedown: onMouseDown,
+        onClick
       }, [
-        createBaseVNode("form", {
-          id: "task-form",
-          method: "dialog",
-          onSubmit: withModifiers(save, ["prevent"]),
-          onFocusout: onFocusOut
-        }, [
-          createBaseVNode("header", _hoisted_110, [
-            createBaseVNode("span", _hoisted_27, toDisplayString(__props.task.id), 1),
+        createBaseVNode("div", _hoisted_113, [
+          createBaseVNode("header", _hoisted_29, [
+            createBaseVNode("div", _hoisted_38, [
+              createBaseVNode("span", _hoisted_46, toDisplayString(__props.task.id), 1),
+              createVNode(InlineText_default2, {
+                id: "task-title",
+                heading: "",
+                label: "Title",
+                value: __props.task.title,
+                commit: saveTitle,
+                onOpen: _cache[0] || (_cache[0] = ($event) => begin(TITLE)),
+                onClose: _cache[1] || (_cache[1] = ($event) => editing.value = null)
+              }, null, 8, ["value"]),
+              createBaseVNode("select", {
+                id: "task-status",
+                class: "task-status",
+                "aria-label": "Status",
+                value: __props.task.status,
+                onChange: chooseStatus
+              }, [
+                (openBlock(true), createElementBlock(Fragment, null, renderList(unref(columns), (column) => {
+                  return openBlock(), createElementBlock("option", {
+                    key: column.name,
+                    value: column.name
+                  }, toDisplayString(column.display_name), 9, _hoisted_64);
+                }), 128))
+              ], 40, _hoisted_54)
+            ]),
             createBaseVNode("button", {
               type: "button",
               class: "ghost close",
@@ -7385,138 +7968,99 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
             id: "task-gone",
             class: "dialog-note gone",
             hidden: !unref(openTaskMissing)
-          }, toDisplayString(__props.task.id) + " is no longer in the queue — it may have been deleted. Copy anything you still need here: a save has nothing left to write to. ", 9, _hoisted_36),
+          }, toDisplayString(__props.task.id) + " is no longer in the queue — it may have been deleted. Copy anything you still need here: a write has nothing left to land on. ", 9, _hoisted_73),
           createBaseVNode("p", {
             id: "task-changed",
-            class: "dialog-note",
-            hidden: changed.value.length === 0
-          }, " Changed on disk while you were editing: " + toDisplayString(changed.value.join(", ")) + ". Your text was kept. ", 9, _hoisted_45),
-          createBaseVNode("label", null, [
-            _cache[9] || (_cache[9] = createTextVNode(" Title ", -1)),
-            withDirectives(createBaseVNode("input", {
-              id: "task-title",
-              "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => title.value = $event),
-              name: "title",
-              type: "text",
-              required: ""
-            }, null, 512), [
-              [vModelText, title.value]
-            ])
-          ]),
-          createBaseVNode("div", _hoisted_54, [
-            createBaseVNode("label", null, [
-              _cache[10] || (_cache[10] = createTextVNode(" Status ", -1)),
-              withDirectives(createBaseVNode("select", {
-                id: "task-status",
-                "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => status.value = $event),
-                name: "status"
-              }, [
-                (openBlock(true), createElementBlock(Fragment, null, renderList(unref(columns), (column) => {
-                  return openBlock(), createElementBlock("option", {
-                    key: column.name,
-                    value: column.name
-                  }, toDisplayString(column.display_name), 9, _hoisted_64);
-                }), 128))
-              ], 512), [
-                [vModelSelect, status.value]
-              ])
+            class: "dialog-note moved",
+            hidden: moved.value === ""
+          }, " The " + toDisplayString(moved.value) + " of " + toDisplayString(__props.task.id) + " changed on disk while you were editing it. Nothing here has been written — copy what you need, press Escape to see the file's version, and check the change in your VCS. ", 9, _hoisted_82),
+          createBaseVNode("div", _hoisted_92, [
+            createBaseVNode("section", _hoisted_10, [
+              _cache[7] || (_cache[7] = createBaseVNode("h3", { class: "task-section" }, "Description", -1)),
+              createVNode(InlineText_default2, {
+                id: "task-body",
+                multiline: "",
+                label: "Description",
+                value: split.value.content,
+                commit: saveContent,
+                onOpen: _cache[2] || (_cache[2] = ($event) => begin(DESCRIPTION)),
+                onClose: _cache[3] || (_cache[3] = ($event) => editing.value = null)
+              }, {
+                default: withCtx(() => [
+                  split.value.content !== "" ? (openBlock(), createBlock(Markdown_default2, {
+                    key: 0,
+                    source: split.value.content
+                  }, null, 8, ["source"])) : (openBlock(), createElementBlock("p", _hoisted_11, "No description yet — click here to write one."))
+                ]),
+                _: 1
+              }, 8, ["value"]),
+              _cache[8] || (_cache[8] = createBaseVNode("h3", { class: "task-section" }, "Depends on", -1)),
+              createVNode(TokenField_default2, {
+                id: "task-depends-on",
+                label: "a dependency",
+                placeholder: "TQ-0002",
+                values: __props.task.depends_on ?? [],
+                commit: saveDependencies
+              }, {
+                default: withCtx(({ value }) => [
+                  createBaseVNode("span", _hoisted_122, toDisplayString(value), 1)
+                ]),
+                _: 1
+              }, 8, ["values"]),
+              createBaseVNode("p", {
+                id: "task-blocked",
+                class: "blocked-note",
+                hidden: pending.value.length === 0
+              }, " Blocked by " + toDisplayString(pending.value.join(", ")), 9, _hoisted_132),
+              createVNode(NotesPanel_default2, {
+                notes: split.value.notes,
+                commit: saveNote,
+                append: appendNote
+              }, null, 8, ["notes"])
             ]),
-            createBaseVNode("label", null, [
-              _cache[11] || (_cache[11] = createTextVNode(" Priority ", -1)),
-              withDirectives(createBaseVNode("select", {
+            createBaseVNode("aside", _hoisted_142, [
+              _cache[9] || (_cache[9] = createBaseVNode("h3", { class: "task-section" }, "Priority", -1)),
+              createBaseVNode("select", {
                 id: "task-priority",
-                "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => priority.value = $event),
-                name: "priority"
+                "aria-label": "Priority",
+                value: priority.value,
+                onChange: choosePriority
               }, [
                 (openBlock(true), createElementBlock(Fragment, null, renderList(priorityChoices.value, (option) => {
                   return openBlock(), createElementBlock("option", {
                     key: option.name,
                     value: option.name,
                     title: option.configured ? option.name : `${option.name} — not in the project's priority set`
-                  }, toDisplayString(option.display), 9, _hoisted_73);
+                  }, toDisplayString(option.display), 9, _hoisted_162);
                 }), 128))
-              ], 512), [
-                [vModelSelect, priority.value]
-              ])
-            ]),
-            createBaseVNode("label", null, [
-              _cache[12] || (_cache[12] = createTextVNode(" Assignee ", -1)),
-              withDirectives(createBaseVNode("input", {
+              ], 40, _hoisted_152),
+              _cache[10] || (_cache[10] = createBaseVNode("h3", { class: "task-section" }, "Assignee", -1)),
+              createVNode(InlineText_default2, {
                 id: "task-assignee",
-                "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => assignee.value = $event),
-                name: "assignee",
-                type: "text",
-                autocomplete: "off"
-              }, null, 512), [
-                [vModelText, assignee.value]
-              ])
-            ]),
-            createBaseVNode("label", null, [
-              _cache[13] || (_cache[13] = createTextVNode(" Labels ", -1)),
-              withDirectives(createBaseVNode("input", {
+                label: "Assignee",
+                placeholder: "Unassigned",
+                value: __props.task.assignee ?? "",
+                commit: saveAssignee,
+                onOpen: _cache[4] || (_cache[4] = ($event) => begin(ASSIGNEE)),
+                onClose: _cache[5] || (_cache[5] = ($event) => editing.value = null)
+              }, null, 8, ["value"]),
+              _cache[11] || (_cache[11] = createBaseVNode("h3", { class: "task-section" }, "Labels", -1)),
+              createVNode(TokenField_default2, {
                 id: "task-labels",
-                "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => labelList.value = $event),
-                name: "labels",
-                type: "text",
-                placeholder: "backend, auth",
-                autocomplete: "off"
-              }, null, 512), [
-                [vModelText, labelList.value]
-              ])
-            ]),
-            createBaseVNode("label", null, [
-              _cache[14] || (_cache[14] = createTextVNode(" Depends on ", -1)),
-              withDirectives(createBaseVNode("input", {
-                id: "task-depends-on",
-                "onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => dependsOn.value = $event),
-                name: "depends_on",
-                type: "text",
-                placeholder: "TQ-0002, TQ-0003",
-                autocomplete: "off"
-              }, null, 512), [
-                [vModelText, dependsOn.value]
-              ])
+                label: "a label",
+                placeholder: "backend",
+                values: __props.task.labels ?? [],
+                commit: saveLabels
+              }, {
+                default: withCtx(({ value }) => [
+                  createVNode(LabelChip_default2, { name: value }, null, 8, ["name"])
+                ]),
+                _: 1
+              }, 8, ["values"]),
+              createBaseVNode("p", _hoisted_172, toDisplayString(timestamps.value), 1)
             ])
-          ]),
-          createBaseVNode("p", {
-            id: "task-blocked",
-            class: "blocked-note",
-            hidden: pending.value.length === 0
-          }, toDisplayString(pending.value.length === 0 ? "" : `Blocked by ${pending.value.join(", ")}`), 9, _hoisted_82),
-          createBaseVNode("label", null, [
-            _cache[15] || (_cache[15] = createTextVNode(" Body (Markdown) ", -1)),
-            withDirectives(createBaseVNode("textarea", {
-              id: "task-body",
-              "onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => content.value = $event),
-              name: "body",
-              rows: "10",
-              spellcheck: "false"
-            }, null, 512), [
-              [vModelText, content.value]
-            ])
-          ]),
-          createVNode(NotesPanel_default2, {
-            draft: noteDraft.value,
-            "onUpdate:draft": _cache[7] || (_cache[7] = ($event) => noteDraft.value = $event),
-            notes: notes.value,
-            onEdit: editNote,
-            onAppend: append
-          }, null, 8, ["draft", "notes"]),
-          createBaseVNode("footer", _hoisted_92, [
-            createBaseVNode("span", _hoisted_10, toDisplayString(timestamps.value), 1),
-            _cache[16] || (_cache[16] = createBaseVNode("span", { class: "spacer" }, null, -1)),
-            createBaseVNode("button", {
-              type: "button",
-              class: "ghost",
-              "data-close": "task-dialog",
-              onClick: dismiss
-            }, "Cancel"),
-            _cache[17] || (_cache[17] = createBaseVNode("button", {
-              type: "submit",
-              class: "primary"
-            }, "Save", -1))
           ])
-        ], 32)
+        ])
       ], 544);
     };
   }
@@ -7526,7 +8070,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
 var TaskDialog_default2 = TaskDialog_default;
 
 // frontend/components/Toasts.vue?type=script
-var _hoisted_111 = {
+var _hoisted_114 = {
   id: "toasts",
   class: "toasts",
   "aria-live": "polite"
@@ -7535,12 +8079,12 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
   __name: "Toasts",
   setup(__props) {
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("div", _hoisted_111, [
-        (openBlock(true), createElementBlock(Fragment, null, renderList(unref(toasts), (item) => {
+      return openBlock(), createElementBlock("div", _hoisted_114, [
+        (openBlock(true), createElementBlock(Fragment, null, renderList(unref(toasts), (item2) => {
           return openBlock(), createElementBlock("div", {
-            key: item.id,
-            class: normalizeClass(["toast", item.kind])
-          }, toDisplayString(item.message), 3);
+            key: item2.id,
+            class: normalizeClass(["toast", item2.kind])
+          }, toDisplayString(item2.message), 3);
         }), 128))
       ]);
     };
@@ -7551,15 +8095,15 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
 var Toasts_default2 = Toasts_default;
 
 // frontend/components/App.vue?type=script
-var _hoisted_112 = { class: "topbar" };
-var _hoisted_28 = { class: "statusbar" };
-var _hoisted_37 = { id: "status-line" };
+var _hoisted_115 = { class: "topbar" };
+var _hoisted_210 = { class: "statusbar" };
+var _hoisted_39 = { id: "status-line" };
 var App_default = /* @__PURE__ */ defineComponent({
   __name: "App",
   setup(__props) {
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock(Fragment, null, [
-        createBaseVNode("header", _hoisted_112, [
+        createBaseVNode("header", _hoisted_115, [
           _cache[3] || (_cache[3] = createBaseVNode("h1", { class: "brand" }, "tq", -1)),
           createVNode(SearchBar_default2),
           createBaseVNode("button", {
@@ -7570,8 +8114,8 @@ var App_default = /* @__PURE__ */ defineComponent({
           }, "New task")
         ]),
         createVNode(Board_default2),
-        createBaseVNode("footer", _hoisted_28, [
-          createBaseVNode("span", _hoisted_37, toDisplayString(unref(statusLine)), 1)
+        createBaseVNode("footer", _hoisted_210, [
+          createBaseVNode("span", _hoisted_39, toDisplayString(unref(statusLine)), 1)
         ]),
         createVNode(Toasts_default2),
         createCommentVNode(` Keyed by the task: \`openTask\` is a ref rather than a find, so it could be

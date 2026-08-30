@@ -1,21 +1,25 @@
 /**
- * The open task dialog while its own task changes on disk (TQ-0084).
+ * The open task dialog while its own task changes on disk.
  *
- * The board no longer freezes for a dialog, so the task under one moves while
- * it is being edited: an agent claims it, appends a note, retitles it, or
- * deletes it outright. What the dialog does about that is a rule with two
- * halves — follow the file for anything the user is not in the middle of, never
- * overwrite anything they are — and only a real browser can show it, because
- * "in the middle of" means focus and a caret.
+ * The board does not freeze for a dialog (TQ-0084), so the task under one moves
+ * while it is being read: an agent claims it, appends a note, retitles it, or
+ * deletes it outright. TQ-0069 made that the ordinary case rather than a case
+ * to be reconciled — the dialog holds no draft of the task, so every field it
+ * is not being edited in simply *is* the file, and there is nothing to adopt.
  *
- * The arithmetic underneath is in frontend/adopt.test.ts, which also proves the
- * adoption and the save-time merge agree on one snapshot. This is the layer
- * that proves the dialog wires them together.
+ * What is left to prove is the other half, and it is the ticket's own rule:
+ * an editor is never overwritten, and a write whose field moved underneath it
+ * is refused outright — no merge, nothing written, the user's text still on
+ * screen and the collision left for them to look at in the VCS.
+ *
+ * The arithmetic is in frontend/edit.test.ts. This is the layer that proves
+ * the dialog wires it up, because "in the middle of" means focus and a caret
+ * and only a browser has those.
  */
 
 import { expect, test } from "bun:test";
 import type { Page } from "playwright-core";
-import { POLL_INTERVAL_MS, card, cardIn, useBoard, type Board } from "./harness";
+import { POLL_INTERVAL_MS, card, cardIn, editBody, openEditor, useBoard, type Board } from "./harness";
 
 const openBoard = useBoard();
 
@@ -37,21 +41,35 @@ async function openDialog(title = "Under an agent's hands"): Promise<Board & { i
   return { ...board, id };
 }
 
-/** Waits for a form control in the dialog to hold a given value. */
-function holds(page: Page, selector: string, value: string): Promise<unknown> {
+/** Waits for a field the dialog renders as text to say something. */
+function reads(page: Page, selector: string, value: string): Promise<unknown> {
   return page.waitForFunction(
     ([target, wanted]) =>
-      (document.querySelector(target as string) as HTMLInputElement | null)?.value === wanted,
+      document.querySelector(target as string)?.textContent?.trim() === wanted,
     [selector, value],
     BEFORE_A_POLL,
   );
 }
 
+/**
+ * The body changing outside the board, the way an agent revising a Finding
+ * changes it. There is no `tq update --body`, so this goes through the API the
+ * CLI shares — the same store, the same atomic write to the same file.
+ */
+async function reviseBody(board: Board, id: string, body: string): Promise<void> {
+  const response = await fetch(`${board.server.url}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  if (!response.ok) throw new Error(`PATCH /api/tasks/${id} = ${response.status}`);
+}
+
 test("a note written on the CLI appears in the open dialog's panel", async () => {
   const { page, project, id } = await openDialog();
 
-  // The whole point of the ticket: an agent running `tq note` against the task
-  // on screen, while a human reads it.
+  // The whole point of TQ-0084: an agent running `tq note` against the task on
+  // screen, while a human reads it.
   project.mustRun("note", id, "--", "written while you were looking at it");
 
   await page.waitForSelector("#task-notes .note .note-text", BEFORE_A_POLL);
@@ -60,80 +78,182 @@ test("a note written on the CLI appears in the open dialog's panel", async () =>
   );
 });
 
-test("a field nobody has touched adopts what the file holds", async () => {
+// No adoption rule, no dirty flags: a field nobody has an editor open on is
+// drawn from the task the board last read, so it follows the file by being it.
+test("every field nobody is editing follows the file", async () => {
   const { page, project, id } = await openDialog();
 
   project.mustRun("update", id, "--title", "Retitled by an agent", "--assignee", "agent-api");
+  project.mustRun("update", id, "--add-label", "backend");
   project.mustRun("move", id, "in-progress");
 
-  await holds(page, "#task-title", "Retitled by an agent");
-  await holds(page, "#task-assignee", "agent-api");
-  await holds(page, "#task-status", "in-progress");
-  // Nothing was overridden, so the dialog has nothing to report.
+  await reads(page, "#task-title", "Retitled by an agent");
+  await reads(page, "#task-assignee", "agent-api");
+  await page.waitForFunction(
+    () => (document.querySelector("#task-status") as HTMLSelectElement | null)?.value === "in-progress",
+    undefined,
+    BEFORE_A_POLL,
+  );
+  expect(await page.textContent("#task-labels")).toContain("backend");
+  // Nothing is being edited, so there is nothing to warn about.
   expect(await page.$("#task-changed:not([hidden])")).toBeNull();
 });
 
-test("a field the user has edited is kept, and the dialog says the file moved", async () => {
+test("the body follows the file until an editor is opened on it", async () => {
+  let id = "";
+  const board = await openBoard((project) => {
+    id = project.add("Under an agent's hands", "--body", "## Finding\n\nAs filed.");
+  });
+  const { page } = board;
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  // Rendered, not raw: the dialog shows the body as Markdown (TQ-0069).
+  expect(await page.textContent("#task-body .markdown h2")).toBe("Finding");
+
+  await reviseBody(board, id, "## Finding\n\nRevised by an agent.");
+  await reads(page, "#task-body .markdown p", "Revised by an agent.");
+});
+
+// The ticket's rule, in the smallest case there is: an editor is open, the file
+// moves under that very field, and the dialog says so while the user is still
+// typing rather than when they finish.
+test("a field the file moved under an open editor is said, and the write refused", async () => {
   const { page, project, server, id } = await openDialog();
 
-  await page.fill("#task-title", "Retitled in the dialog");
+  await openEditor(page, "task-title", "Retitled in the dialog");
   project.mustRun("update", id, "--title", "Retitled by an agent");
 
   await page.waitForSelector("#task-changed:not([hidden])", BEFORE_A_POLL);
-  expect(await page.textContent("#task-changed")).toContain("Title");
-  expect(await page.inputValue("#task-title")).toBe("Retitled in the dialog");
+  expect(await page.textContent("#task-changed")).toContain("title");
+  expect(await page.inputValue("#task-title-edit")).toBe("Retitled in the dialog");
 
-  // Saying so is not the same as refusing: the save still writes what the user
-  // typed. Only the body has no honest merge and is refused outright (TQ-0079).
-  await page.click("#task-form button[type='submit']");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
+  await page.press("#task-title-edit", "Enter");
 
+  const toast = await page.waitForSelector("#toasts .toast.error");
+  expect(await toast.textContent()).toContain("changed on disk");
+
+  // Nothing was written, and the text that was refused is still on screen: a
+  // refusal is only worth anything if what it refused can still be copied.
+  expect(await page.inputValue("#task-title-edit")).toBe("Retitled in the dialog");
   const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
-  expect(task?.title).toBe("Retitled in the dialog");
+  expect(task?.title).toBe("Retitled by an agent");
 });
 
-// The refinement TQ-0084 flagged rather than smuggled in: a field under the
-// caret has not been edited, but replacing a value someone is about to type
-// over is the same surprise. It is a deferral, not a refusal, so nothing is
-// dropped — the value lands the moment the caret leaves.
-test("a field under the caret is left alone until the caret leaves it", async () => {
+// The way out of a refusal that will not clear. Nothing merges the two, so the
+// only thing the dialog can offer is the file's own value back.
+test("Escape out of a refused edit puts the file's value back", async () => {
   const { page, project, id } = await openDialog();
 
-  await page.focus("#task-assignee");
-  project.mustRun("update", id, "--assignee", "agent-api");
-  await page.waitForTimeout(AFTER_THE_STREAM_MS);
+  await openEditor(page, "task-title", "Retitled in the dialog");
+  project.mustRun("update", id, "--title", "Retitled by an agent");
+  await page.waitForSelector("#task-changed:not([hidden])", BEFORE_A_POLL);
 
-  expect(await page.inputValue("#task-assignee")).toBe("");
-  // Deferring is not overriding: nothing was typed, so there is nothing to say.
+  await page.press("#task-title-edit", "Escape");
+  await page.waitForSelector("#task-title-edit", { state: "detached" });
+  expect(await page.textContent("#task-title")).toBe("Retitled by an agent");
   expect(await page.$("#task-changed:not([hidden])")).toBeNull();
-
-  await page.focus("#task-title");
-  await holds(page, "#task-assignee", "agent-api");
 });
 
-// The deferral is the one hold that says nothing, so the save has to settle it
-// rather than trust the field. Enter in a text input submits the form without
-// ever moving the focus, so focusout alone would let the stale value the field
-// was still showing be written straight back over the agent's.
-test("a deferred field is settled by the save rather than written back stale", async () => {
+// A field with no editor to open is the same question asked at the other end:
+// somebody chose from a select showing a value the file no longer holds.
+test("a select used against a value the file has moved past is refused", async () => {
   const { page, project, server, id } = await openDialog();
 
-  await page.focus("#task-assignee");
-  project.mustRun("update", id, "--assignee", "agent-api");
+  // The board is stopped from hearing about the change, so the select is still
+  // offering what the dialog opened with when it is used.
+  await page.route("**/api/tasks", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  );
+  project.mustRun("update", id, "--priority", "urgent");
   await page.waitForTimeout(AFTER_THE_STREAM_MS);
-  expect(await page.inputValue("#task-assignee")).toBe("");
 
-  // Enter from inside the deferred field itself: the form submits and the
-  // focus never leaves.
-  await page.press("#task-assignee", "Enter");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
+  await page.selectOption("#task-priority", "low");
+  const toast = await page.waitForSelector("#toasts .toast.error");
+  expect(await toast.textContent()).toContain("changed on disk");
 
   const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
-  expect(task?.assignee).toBe("agent-api");
+  expect(task?.priority).toBe("urgent");
+  // And the control is put back, because nothing local would re-render it.
+  expect(await page.inputValue("#task-priority")).toBe("normal");
+});
+
+// The body is two fields in one string, and this is the half that must not
+// refuse: appending a note is the commonest thing to happen under an open
+// dialog, and it is not a change to the paragraph above the rule.
+test("a note appended under an open description editor does not block it", async () => {
+  let id = "";
+  const board = await openBoard((project) => {
+    id = project.add("Under an agent's hands", "--body", "## Finding\n\nAs filed.");
+  });
+  const { page, project, server } = board;
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  await openEditor(page, "task-body", "## Finding\n\nRewritten in the dialog.");
+  project.mustRun("note", id, "--", "arrived while editing");
+  await page.waitForTimeout(AFTER_THE_STREAM_MS);
+
+  await page.click(".inline-actions button.primary");
+  await page.waitForSelector("#task-body-edit", { state: "detached" });
+
+  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  expect(task?.body).toContain("Rewritten in the dialog.");
+  expect(task?.body).toContain("arrived while editing");
+  expect(task?.body).not.toContain("As filed.");
+});
+
+// And the half that must: both sides rewrote the paragraph, and there is no
+// honest answer, so nothing is written at all.
+test("a description rewritten on both sides is refused, and the typing is kept", async () => {
+  let id = "";
+  const board = await openBoard((project) => {
+    id = project.add("Under an agent's hands", "--body", "## Finding\n\nAs filed.");
+  });
+  const { page, project, server } = board;
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  await openEditor(page, "task-body", "## Finding\n\nRewritten in the dialog.");
+  await reviseBody(board, id, "## Finding\n\nRevised by an agent.");
+  await page.waitForSelector("#task-changed:not([hidden])", BEFORE_A_POLL);
+  expect(await page.textContent("#task-changed")).toContain("description");
+
+  await page.click(".inline-actions button.primary");
+  const toast = await page.waitForSelector("#toasts .toast.error");
+  expect(await toast.textContent()).toContain("changed on disk");
+
+  expect(await page.inputValue("#task-body-edit")).toBe("## Finding\n\nRewritten in the dialog.");
+  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  expect(task?.body).toContain("Revised by an agent.");
+  expect(task?.body).not.toContain("Rewritten in the dialog.");
+});
+
+// A description written here while notes land under it must not take those
+// notes with it — TQ-0010's property, on the path TQ-0069 built.
+test("writing the description keeps the notes the file gained under it", async () => {
+  let id = "";
+  const board = await openBoard((project) => {
+    id = project.add("Under an agent's hands", "--body", "## Finding\n\nAs filed.");
+    project.mustRun("note", id, "--", "the note the dialog opened with");
+  });
+  const { page, project, server } = board;
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  project.mustRun("note", id, "--", "written by an agent");
+  await page.waitForSelector("#task-notes .note:nth-of-type(2)", BEFORE_A_POLL);
+
+  await editBody(page, "## Finding\n\nRewritten in the dialog.");
+
+  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
+  expect(task?.body).toContain("Rewritten in the dialog.");
+  expect(task?.body).toContain("the note the dialog opened with");
+  expect(task?.body).toContain("written by an agent");
 });
 
 // The panel used to name the note under edit by its position in the list. The
-// list follows the file now, so a position is a name that can come to mean a
+// list follows the file, so a position is a name that can come to mean a
 // different note between two keystrokes — and the edit would land on that one.
 test("a note being edited keeps its identity when the list changes underneath", async () => {
   let id = "";
@@ -153,17 +273,14 @@ test("a note being edited keeps its identity when the list changes underneath", 
   // The note *above* the one being edited comes off the file, so every position
   // below it shifts by one while the editor is open.
   const kept = (await project.tasks(server)).find((candidate) => candidate.id === id)?.body ?? "";
-  const response = await fetch(`${server.url}/api/tasks/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      body: kept
-        .split("\n")
-        .filter((line) => !line.includes("the first note"))
-        .join("\n"),
-    }),
-  });
-  if (!response.ok) throw new Error(`PATCH /api/tasks/${id} = ${response.status}`);
+  await reviseBody(
+    board,
+    id,
+    kept
+      .split("\n")
+      .filter((line) => !line.includes("the first note"))
+      .join("\n"),
+  );
 
   await page.waitForFunction(
     () => document.querySelectorAll("#task-notes .note").length === 2,
@@ -171,22 +288,47 @@ test("a note being edited keeps its identity when the list changes underneath", 
     BEFORE_A_POLL,
   );
 
-  // Rebuilding the list takes the focused textarea with it, which keeps the
-  // edit the way losing focus always does. Which note it was kept *on* is the
-  // point: by position it landed on the third note.
+  // Rebuilding the list takes the focused textarea with it, which writes the
+  // edit the way losing focus always does. Which note it was written *to* is
+  // the point: by position it would have landed on the third note.
+  await page.waitForSelector("#task-notes .note-editor", { state: "detached" });
   const texts = await page.$$eval("#task-notes .note .note-text", (items) =>
     items.map((item) => item.textContent ?? ""),
   );
   expect(texts).toEqual(["the second note, reworded", "the third note"]);
+
+  const written = (await project.tasks(server)).find((candidate) => candidate.id === id)?.body ?? "";
+  expect(written).toContain("the second note, reworded");
+  expect(written).not.toContain("the third note, reworded");
+});
+
+// The note under an editor going off the file is the one collision that would
+// otherwise be silent: the reword has nowhere to land, and dropping it without
+// a word is exactly what this ticket refuses.
+test("a note that leaves the file under its own editor keeps the typing on screen", async () => {
+  let id = "";
+  const board = await openBoard((project) => {
+    id = project.add("Under an agent's hands");
+    project.mustRun("note", id, "--", "the note to lose");
+  });
+  const { page } = board;
+  await page.click(cardIn("todo", id));
+  await page.waitForSelector("#task-dialog[open]");
+
+  await page.click("#task-notes .note button.icon");
+  await page.fill("#task-notes .note-editor", "reworded, and about to be orphaned");
+  await reviseBody(board, id, "");
+
+  await page.waitForSelector("#task-note-detached", BEFORE_A_POLL);
+  expect(await page.inputValue("#task-notes .note-editor")).toBe(
+    "reworded, and about to be orphaned",
+  );
 });
 
 // A scan the store could not square with the directory comes back a task short
 // on purpose (TQ-0012). That is not a deletion, and the dialog must not say it
-// is — the task is back on the very next scan.
-// A listing without the task is not proof of anything: the store returns a
-// short one rather than pretend it read the whole directory (TQ-0012), and
-// leaves out a file it could not parse or one whose ID two files claim. Saying
-// "deleted" over any of those would be a red line about a task that is fine.
+// is — the task is back on the very next scan. Saying "deleted" over a file it
+// could not parse, or an ID two files claim, would be the same red line.
 test("a task missing from a listing is not called deleted while its file is there", async () => {
   const { page, project, id } = await openDialog();
 
@@ -211,81 +353,10 @@ test("a task missing from a listing is not called deleted while its file is ther
   expect(await page.textContent("#task-gone")).toContain(id);
 });
 
-test("the body follows the file until the user types in it", async () => {
-  let id = "";
-  const board = await openBoard((project) => {
-    id = project.add("Under an agent's hands", "--body", "## Finding\n\nAs filed.");
-  });
-  const { page, server } = board;
-  await page.click(cardIn("todo", id));
-  await page.waitForSelector("#task-dialog[open]");
-
-  const revise = async (body: string) => {
-    const response = await fetch(`${server.url}/api/tasks/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body }),
-    });
-    if (!response.ok) throw new Error(`PATCH /api/tasks/${id} = ${response.status}`);
-  };
-
-  await revise("## Finding\n\nRevised by an agent.");
-  await holds(page, "#task-body", "## Finding\n\nRevised by an agent.");
-
-  // Now the user takes it over, and the next revision cannot have it back.
-  await page.fill("#task-body", "## Finding\n\nRewritten in the dialog.");
-  await page.focus("#task-title");
-  await revise("## Finding\n\nRevised again.");
-
-  await page.waitForSelector("#task-changed:not([hidden])", BEFORE_A_POLL);
-  expect(await page.textContent("#task-changed")).toContain("Body");
-  expect(await page.inputValue("#task-body")).toBe("## Finding\n\nRewritten in the dialog.");
-});
-
-// The adoption moves the dialog's baseline with it, or the save-time merge
-// would read the note the dialog adopted as a note the dialog invented — and
-// write it a second time (TQ-0010's arithmetic, on TQ-0084's new path).
-test("a note adopted while the dialog was open is not written twice by the save", async () => {
-  const { page, project, server, id } = await openDialog();
-
-  project.mustRun("note", id, "--", "written by an agent");
-  await page.waitForSelector("#task-notes .note .note-text", BEFORE_A_POLL);
-
-  await page.fill("#task-title", "Saved after the note arrived");
-  await page.click("#task-form button[type='submit']");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
-
-  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
-  expect(task?.title).toBe("Saved after the note arrived");
-  const written = task?.body ?? "";
-  expect(written).toContain("written by an agent");
-  expect(written.split("written by an agent").length - 1).toBe(1);
-});
-
-test("a note adopted and then reworded here is saved reworded, once", async () => {
-  const { page, project, server, id } = await openDialog();
-
-  project.mustRun("note", id, "--", "written by an agent");
-  await page.waitForSelector("#task-notes .note .note-text", BEFORE_A_POLL);
-
-  await page.click("#task-notes .note button.icon");
-  await page.fill("#task-notes .note-editor", "reworded after it arrived");
-  await page.press("#task-notes .note-editor", "Enter");
-  await page.waitForSelector("#task-notes .note-editor", { state: "detached" });
-
-  await page.click("#task-form button[type='submit']");
-  await page.waitForSelector("#task-dialog[open]", { state: "detached" });
-
-  const task = (await project.tasks(server)).find((candidate) => candidate.id === id);
-  const written = task?.body ?? "";
-  expect(written).toContain("reworded after it arrived");
-  expect(written).not.toContain("written by an agent");
-});
-
 test("the open task leaving the queue is said in the dialog", async () => {
   const { page, project, id } = await openDialog();
 
-  await page.fill("#task-title", "half-typed when it vanished");
+  await openEditor(page, "task-title", "half-typed when it vanished");
   project.remove(id);
 
   await page.waitForSelector("#task-gone:not([hidden])", BEFORE_A_POLL);
@@ -294,7 +365,7 @@ test("the open task leaving the queue is said in the dialog", async () => {
   // Said in the dialog, not by unmounting it: the text is still recoverable,
   // which is the whole reason a refresh is allowed under an open dialog at all.
   expect(await page.$("#task-dialog[open]")).not.toBeNull();
-  expect(await page.inputValue("#task-title")).toBe("half-typed when it vanished");
+  expect(await page.inputValue("#task-title-edit")).toBe("half-typed when it vanished");
 });
 
 test("typing in a composer survives a change arriving mid-draft, caret included", async () => {

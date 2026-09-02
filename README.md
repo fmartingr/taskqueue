@@ -46,38 +46,104 @@ only needed at build time.
 
 ## Quick start
 
+A task is a Markdown file in `.tasks/`, committed with the code it describes.
+The CLI and the board are two views of those files, so an agent's `tq move` and
+a card you drag are the same edit — and `git diff` shows both.
+
+### 1. Create the queue
+
 ```bash
 cd your-project
-tq init                                        # mandatory: creates .tasks/ and .taskqueue.yaml here
-tq add "Implement REST API" --priority high --label backend
-tq add "Build Kanban board" --label frontend --depends-on TQ-0001
-tq ready                                       # what can be picked up right now
-tq move TQ-0001 in-progress
-tq note TQ-0001 "CRUD endpoints implemented; tests remain."
-tq done TQ-0001
-tq serve                                       # board on http://127.0.0.1:7331
+tq init
 ```
 
 `tq init` is **mandatory**, and it creates the queue **in the directory you run
 it in** — `.tasks/` and `.taskqueue.yaml`, side by side, with no searching and
 no guessing. Run it at the root of your project. Other commands need both of
-those files to exist and never create them. It is harmless to repeat: besides
-the directory and the config it writes `.tasks/AGENTS.md` — a short CLI cheat
-sheet for coding agents, generated from the statuses, priorities and exit codes
-the binary actually implements.
+those files to exist and never create them.
 
-**Run it again after every edit to `.taskqueue.yaml`.** That is what regenerates
-the guide and moves the tasks a removed column stranded — see
-[After editing `.taskqueue.yaml`, run `tq init` again](#after-editing-taskqueueyaml-run-tq-init-again).
+It prints the loop below with your project's own column names, so the next step
+is on screen when you need it.
 
-Point your agents at it yourself, by referencing that guide from your
-`AGENTS.md`, `CLAUDE.md` or whatever your tool reads — an `@.tasks/AGENTS.md`
-include, a Markdown link, whatever the tool understands.
+### 2. Work one task through
+
+```bash
+tq add "Implement REST API" --priority high --label backend
+tq move TQ-0001 todo                # queue it, so tq ready offers it
+tq ready                            # unblocked and unclaimed work
+tq move TQ-0001 in-progress         # claim it, before you touch a file
+tq note TQ-0001 "CRUD endpoints done; tests remain."
+tq done TQ-0001                     # close it once the work is verified
+```
+
+Four of those steps exist for a reason worth knowing:
+
+- **`tq add` files into `inbox`**, not into the queue. Inbox is intake — a task
+  nobody has decided to do yet — so `tq ready` does not hand it out. Moving it
+  to `todo` is the decision, and that is what queues it.
+- **Claim before the first edit.** `tq move <id> in-progress` takes the task out
+  of `tq ready`, which is what stops a second agent starting the same work.
+- **Note as you go.** `tq note` appends a timestamped entry to the file:
+  decisions, surprises, whatever the next reader needs. Notes are kept when the
+  body is rewritten, so the record of how a task got here survives an edit.
+- **`tq done` closes it, and unblocks whatever waited on it.** Do it when the
+  work is verified, not when it is written.
+
+`inbox`, `todo`, `in-progress`, `done` and `rejected` are the columns a fresh
+queue starts with. They are the project's, declared in `.taskqueue.yaml` and
+editable — see [Columns](#columns) — which is why `tq init` prints these steps
+with your board's names rather than these.
+
+### 3. Let dependencies decide the order
+
+```bash
+tq add "Add OIDC login" --status todo                                  # TQ-0002
+tq add "Document the flow" --status todo --depends-on TQ-0002          # TQ-0003
+tq ready                            # only TQ-0002: TQ-0003 waits on it
+tq done TQ-0002
+tq ready                            # now TQ-0003 as well
+```
+
+A task is **ready** when it is neither `done` nor `in-progress` and every task
+in `depends_on` exists and is done. That is what makes `tq ready` a work queue
+rather than a list: an agent asks what it can pick up, and the answer is already
+ordered by what is finished. A dependency on a task that does not exist blocks
+rather than passes, so a typo shows up as blocked work.
+
+`--status todo` files straight into the queue, skipping intake — worth it for
+work you have already decided on, and the reason `tq ready` shows TQ-0002 here
+without a `tq move` first.
+
+### 4. Open the board
+
+```bash
+tq serve                            # http://127.0.0.1:7331
+```
+
+The same tasks, as cards you can drag between columns, click to edit, and narrow
+with one search box — `status=todo`, `-priority=low`, `ready`, or just words to
+look for. The board is live: a task an agent creates or moves appears within
+about half a second, without a reload. See
+[The human workflow](#the-human-workflow) for what the board can do, and
+[The agent workflow](#the-agent-workflow) for the `--json` side.
+
+### Then: point your agents at the guide
+
+`tq init` also writes `.tasks/AGENTS.md` — a short CLI cheat sheet for coding
+agents, generated from the statuses, priorities and exit codes the binary
+actually implements. Reference it from your `AGENTS.md`, `CLAUDE.md` or whatever
+your tool reads: an `@.tasks/AGENTS.md` include, a Markdown link, whatever the
+tool understands.
 
 `tq init` prints the guide's full path every time, so you never have to
 remember where it is; how you reference it, and from which file, is yours to
 decide. It does not edit those files: they are yours, they are committed, and a
 tool that rewrites a document it did not author eventually destroys something.
+
+**Run `tq init` again after every edit to `.taskqueue.yaml`.** It is harmless to
+repeat — an existing queue is left as it is — and it is what regenerates the
+guide and moves the tasks a removed column stranded; see
+[After editing `.taskqueue.yaml`, run `tq init` again](#after-editing-taskqueueyaml-run-tq-init-again).
 
 Commit `.tasks/` with your code — task history lives in the same repository as
 the work it describes.

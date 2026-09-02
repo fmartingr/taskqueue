@@ -1469,6 +1469,102 @@ func TestCLIInitWritesTheGuideAndNothingElse(t *testing.T) {
 	}
 }
 
+// Init is where someone meets the queue, and the queue it just made is empty:
+// the loop it prints is what gets them from here to a task they have finished
+// (TQ-0102). The commands are checked as whole lines because they are meant to
+// be pasted.
+func TestCLIInitPrintsTheLoopTheQueueIsWorkedIn(t *testing.T) {
+	tc := newBareCLI(t)
+
+	out := tc.mustRun("init")
+	for _, want := range []string{
+		"\nNext steps:\n",
+		`tq add "Your first task"`,
+		"tq move " + task.FormatID(1) + " " + task.StatusTodo,
+		`tq note ` + task.FormatID(1) + ` "what happened"`,
+		"tq done " + task.FormatID(1),
+		"tq ready lists the work that is unblocked and unclaimed",
+		"tq move <id> <status> before the first edit",
+		strings.Join(task.Columns{}.Names(), ", "),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("init should print %q in its next steps, got %q", want, out)
+		}
+	}
+
+	// The IDs are pasteable: TQ-0001 is what this queue hands out first, so the
+	// lines work in the order they are printed.
+	var created task.Task
+	tc.mustRunJSON(&created, "add", "Your first task", "--json")
+	if created.ID != task.FormatID(1) {
+		t.Errorf("the first task is %q; init's next steps name %q", created.ID, task.FormatID(1))
+	}
+	tc.mustRun("move", created.ID, task.StatusTodo)
+	tc.mustRun("note", created.ID, "what happened")
+	tc.mustRun("done", created.ID)
+
+	// A second init prints them again: it is idempotent and run after every
+	// config edit, so the steps follow the board rather than the first run.
+	if !strings.Contains(tc.mustRun("init"), "\nNext steps:\n") {
+		t.Error("the second init should still print the next steps")
+	}
+}
+
+// The steps are the project's board, not the built-in one: a project that
+// renamed its columns would otherwise be handed commands its own config
+// refuses.
+func TestCLIInitNextStepsFollowTheProjectsBoard(t *testing.T) {
+	// customBoard files new work in `doing`, offers `spotted` and finishes in
+	// `shipped` — so the queueing step names spotted, and none of the built-in
+	// column names appear at all.
+	tc := cliWithBoard(t)
+
+	out := tc.stdout.String()
+	for _, want := range []string{
+		"files it in doing",
+		"tq move " + task.FormatID(1) + " spotted",
+		"tq done " + task.FormatID(1),
+		"spotted, doing, shipped",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("init should print %q for this board, got %q", want, out)
+		}
+	}
+	// `tq done` is a command rather than a column name, so the built-in columns
+	// checked for here are the ones only a board could have put on the page.
+	for _, unwanted := range []string{task.StatusTodo, task.StatusInbox, task.StatusInProgress} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("init named the built-in column %q on a board that has none, got %q", unwanted, out)
+		}
+	}
+}
+
+// A board where work is filed straight into the column that offers it has
+// nothing to queue, and one with no `consider_done` column has nothing for
+// `tq done` to mean — the step is left out rather than printed as advice that
+// fails.
+func TestCLIInitNextStepsLeaveOutStepsTheBoardCannotTake(t *testing.T) {
+	tc := newBareCLI(t)
+	tqtest.WriteConfig(t, tc.root, "version: 1\npath: .tasks\ncolumns:\n"+
+		"  - {name: queued, consider_ready: true, default: true}\n  - {name: doing}\n")
+
+	out := tc.mustRun("init")
+	if !strings.Contains(out, "files it in queued, where tq ready offers it") {
+		t.Errorf("init should say the default column already offers work, got %q", out)
+	}
+	if strings.Contains(out, "tq move "+task.FormatID(1)) {
+		t.Errorf("init should not print a queueing step on this board, got %q", out)
+	}
+	if strings.Contains(out, "tq done ") {
+		t.Errorf("init should not print tq done on a board with no consider_done column, got %q", out)
+	}
+	// Still a loop: the note step and the sentence naming the columns hold on
+	// any board.
+	if !strings.Contains(out, `tq note `+task.FormatID(1)) || !strings.Contains(out, "queued, doing") {
+		t.Errorf("init should still print the rest of the loop, got %q", out)
+	}
+}
+
 // --port 0 asks the OS for a free port, which is how anything driving the real
 // binary avoids racing for one. The banner has to say which port it got, or the
 // caller has no way to find out.

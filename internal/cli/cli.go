@@ -395,6 +395,13 @@ func (c *cli) runInit(args []string) int {
 	for _, path := range written {
 		fmt.Fprintf(c.stdout, "Wrote %s\n", path)
 	}
+	// The queue is empty and the next thing to do is work one task through it,
+	// so init says what that is rather than leaving it to a README the reader
+	// may not have (TQ-0102). Through the store's board, so a project that
+	// renamed its columns is not handed commands its own config refuses.
+	if board, err := st.Columns(); err == nil {
+		c.printNextSteps(board)
+	}
 	// tq does not edit the repository's own agent instructions, so it names the
 	// guide and leaves the choice of file to the person running it. The path is
 	// absolute because tq does not know which file they will reference it from,
@@ -405,6 +412,70 @@ func (c *cli) runInit(args []string) int {
 	fmt.Fprint(c.stdout, "\nInclude it in your preferred agent context file (AGENTS.md, CLAUDE.md, or\n"+
 		"whatever your tool reads) so agents pick up the task workflow.\n")
 	return exitOK
+}
+
+// printNextSteps is the loop a queue is worked in, written out with the
+// project's own column names: what a task is filed in, what queues it for `tq
+// ready`, and what closes it. Only what the board can answer is spelled as a
+// command — there is no flag saying which column holds claimed work, so
+// claiming is named in the sentence below rather than guessed at.
+//
+// Init is idempotent and is run again after every config edit, so this stays
+// short: someone settling a board change reads past it every time.
+func (c *cli) printNextSteps(board task.Columns) {
+	// The ID a fresh queue hands out first, so the lines can be pasted in
+	// order on the queue init has just created.
+	exampleID := task.FormatID(1)
+
+	entry := board.Default()
+	var queue string
+	for _, name := range board.Names() {
+		if board.Offers(name) {
+			queue = name
+			break
+		}
+	}
+	// A board with no `consider_done` column, or several, has nothing for
+	// `tq done` to mean — the same error the command itself gives — so the
+	// step is left out rather than printed as advice that fails.
+	finish, err := board.SatisfyingColumn()
+	if err != nil {
+		finish = ""
+	}
+
+	filed := fmt.Sprintf("files it in %s", entry)
+	if queue == entry {
+		filed = fmt.Sprintf("files it in %s, where tq ready offers it", entry)
+	}
+	steps := [][2]string{{`tq add "Your first task"`, filed}}
+	if queue != "" && queue != entry {
+		steps = append(steps, [2]string{
+			fmt.Sprintf("tq move %s %s", exampleID, queue),
+			"queues it, so tq ready offers it",
+		})
+	}
+	steps = append(steps, [2]string{
+		fmt.Sprintf(`tq note %s "what happened"`, exampleID),
+		"appends a timestamped note as you go",
+	})
+	if finish != "" {
+		steps = append(steps, [2]string{
+			fmt.Sprintf("tq done %s", exampleID),
+			"closes it once the work is verified",
+		})
+	}
+
+	width := 0
+	for _, step := range steps {
+		width = max(width, len(step[0]))
+	}
+	fmt.Fprint(c.stdout, "\nNext steps:\n\n")
+	for _, step := range steps {
+		fmt.Fprintf(c.stdout, "    %-*s  %s\n", width, step[0], step[1])
+	}
+	fmt.Fprint(c.stdout, "\ntq ready lists the work that is unblocked and unclaimed; claim one with\n"+
+		"tq move <id> <status> before the first edit. The columns are:\n\n")
+	fmt.Fprintf(c.stdout, "    %s\n", strings.Join(board.Names(), ", "))
 }
 
 func (c *cli) runAdd(args []string) int {

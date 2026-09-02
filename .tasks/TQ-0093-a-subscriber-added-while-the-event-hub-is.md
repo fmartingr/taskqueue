@@ -7,7 +7,7 @@ labels:
   - bug
   - component/api
 created: 2026-08-28T12:58:14+02:00
-updated: 2026-08-28T12:58:14+02:00
+updated: 2026-09-02T22:43:47+02:00
 ---
 
 ## Finding
@@ -69,3 +69,13 @@ Re-check `h.done` inside the same `h.mu` critical section that does the insert.
 
 Found by a code review of the TQ-0033/TQ-0034 event stream work, re-flagged in
 several later passes. Line numbers drift; locate by symbol.
+
+---
+
+## Notes
+
+- 2026-09-02T22:43:47+02:00 — TQ-0104 is the third finding here from the other side, and it is filed because a test already fails on it: TestAScanFailureIsReportedAgainToAFreshBoard, red on main.
+
+  The clearing this task suggests — h.lastErr cleared when the last subscriber leaves — is in the code today, at subscribe's release. It is not enough. A board that reconnects overlaps its own teardown, so the map is never empty between the two streams and the standing failure is never reported again. Both findings are the same root: lastErr is hub-wide state answering a per-subscriber question. Fixing that closes both.
+
+  The other two findings here — the subscribe/stop race and writeEvent discarding its error — are untouched by TQ-0104.

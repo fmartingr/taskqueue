@@ -765,8 +765,28 @@ textarea.inline-editor {
   border-top: 1px solid var(--border);
 }
 
+/* A table is the one block a task body can make wider than the sheet, so it
+   scrolls inside its own box rather than widening the dialog. */
+.markdown .table-scroll {
+  overflow-x: auto;
+  margin: 0 0 8px;
+}
+
 .markdown table {
   border-collapse: collapse;
+  font-size: 13px;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  text-align: left;
+}
+
+.markdown th {
+  background: var(--surface-alt);
+  font-weight: 600;
 }
 
 /* ── Token lists ─────────────────────────────────────────────── */

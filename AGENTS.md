@@ -147,6 +147,14 @@ frontend`, `make typecheck` or `make dev` will run.
   (`ERR_PACKAGE_PATH_NOT_EXPORTED`); 6.0.3 is the newest JavaScript-implemented
   release. Upstream content mappers targeted at TypeScript 7.1 are the condition
   for lifting the pin (see TQ-0076).
+- Bun itself is pinned, in `.bun-version`, and every `oven-sh/setup-bun` step
+  reads it through `bun-version-file`. The bundler is not byte-stable across
+  releases: 1.4.2 renames a shadowed identifier where 1.4.0 renamed a different
+  one, which rewrote 311 lines of `internal/web/public/app.js` with no change to
+  any source here. `app.js` is committed and CI rebuilds it to check it is not
+  stale, so an unpinned runner fails that check on a commit nobody touched — it
+  is what broke the `v0.2.0` release. Bumping the pin is a deliberate change:
+  raise `.bun-version`, run `make frontend`, and commit the new bundle with it.
 - The task dialog holds no draft of its task, and writes one field at a time
   (TQ-0069). Every control is drawn from the task the board last read, so the
   whole dialog follows the file and there is nothing local for an incoming

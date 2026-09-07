@@ -73,6 +73,9 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: oven-sh/setup-bun@v2
+        with:
+          # One Bun for every job; see the frontend job for why it is pinned.
+          bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - name: Cache the browser
         uses: actions/cache@v4
@@ -101,6 +104,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned: the bundle in internal/web/public/ is committed, and Bun's
+          # bundler renames shadowed identifiers differently between releases.
+          # An unpinned runner rebuilds that file byte-for-byte differently and
+          # fails the staleness check below on a commit nobody touched.
+          bun-version-file: .bun-version
       # Vue and the SFC loader are build-time dependencies now, so the build
       # needs them installed before it can produce anything.
       - run: bun install --frozen-lockfile

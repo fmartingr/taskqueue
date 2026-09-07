@@ -19,6 +19,12 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned: the bundle in internal/web/public/ is committed, and Bun's
+          # bundler renames shadowed identifiers differently between releases.
+          # An unpinned runner rebuilds that file byte-for-byte differently and
+          # fails the staleness check below on a commit nobody touched.
+          bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: make ci-lint
       - run: make test

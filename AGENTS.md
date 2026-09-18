@@ -177,6 +177,17 @@ frontend`, `make typecheck` or `make dev` will run.
   common ancestor of its mousedown and mouseup and a selection released past
   the edge of the sheet is otherwise indistinguishable from a click on the
   backdrop.
+- The dialog's Depends on list is a row per dependency — ID, status, title —
+  resolved against the listing the board is already holding, so it costs no
+  endpoint and no fetch of its own (TQ-0105). A dependency the listing does not
+  carry is drawn as text saying so rather than as a link: it is why its
+  dependent is blocked for good, and there is no task to point the dialog at.
+  Following a row sets the board's open task, which `App.vue` keys the dialog
+  on, and it stands down for an open editor exactly as the click outside does
+  and for the same reason — the press writes, the write can be refused, and the
+  dialog a refusal has to speak from is the one being replaced. The card
+  carries the count instead of the IDs, because the dialog is where they are in
+  full.
 - A write whose field moved on disk since its editor opened is **refused**, not
   merged: nothing is written at all, the dialog names the field, and the user's
   text stays on screen for them to copy. Settling the two versions is theirs to

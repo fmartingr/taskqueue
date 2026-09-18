@@ -149,14 +149,48 @@ export function indexTasks(tasks: Task[]): Map<string, Task> {
   return new Map(tasks.map((task) => [task.id, task]));
 }
 
+/**
+ * One dependency, resolved: the ID the file holds, and what the listing knows
+ * about it.
+ *
+ * `task` absent is an ID nothing in the queue answers to. That is a state to
+ * draw rather than a lookup that failed — a missing dependency blocks its
+ * dependent for good, so the dialog says so instead of leaving the row out.
+ */
+export interface Dependency {
+  id: string;
+  task?: Task;
+  /** The board's wording for the dependency's status, empty when there is no
+   *  task to have one. */
+  status: string;
+  /** Whether this one is what the dependent is waiting for. */
+  pending: boolean;
+}
+
+/** Every dependency the task lists, in the order the file holds them. */
+export function resolveDependencies(
+  task: Task,
+  index: Map<string, Task>,
+  columns: ColumnSet,
+): Dependency[] {
+  return (task.depends_on ?? []).map((id) => {
+    const other = index.get(id);
+    return {
+      id,
+      task: other,
+      status: other === undefined ? "" : columnDisplay(other.status, columns),
+      // A missing dependency blocks rather than being ignored, which is what
+      // task.IsBlocked does too — the two are one rule, written twice.
+      pending: other === undefined || !columnSatisfies(other.status, columns),
+    };
+  });
+}
+
 /** Returns the dependencies that are missing or not done yet. */
 export function pendingDependencies(task: Task, index: Map<string, Task>, columns: ColumnSet): string[] {
-  return (task.depends_on ?? []).filter((id) => {
-    const other = index.get(id);
-    // A missing dependency blocks rather than being ignored, which is what
-    // task.IsBlocked does too — the two are one rule, written twice.
-    return other === undefined || !columnSatisfies(other.status, columns);
-  });
+  return resolveDependencies(task, index, columns)
+    .filter((dependency) => dependency.pending)
+    .map((dependency) => dependency.id);
 }
 
 export function isReady(task: Task, index: Map<string, Task>, columns: ColumnSet): boolean {

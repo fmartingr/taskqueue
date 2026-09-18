@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatTime, splitList } from "./format";
+import { formatTime, splitList, taskCount } from "./format";
 
 describe("splitList", () => {
   test("splits on commas and trims each entry", () => {
@@ -41,5 +41,17 @@ describe("formatTime", () => {
   test("what is not a time is passed through untouched", () => {
     expect(formatTime("not a time")).toBe("not a time");
     expect(formatTime("")).toBe("");
+  });
+});
+
+describe("taskCount", () => {
+  test("one task is singular, and everything else is not", () => {
+    expect(taskCount(1)).toBe("1 task");
+    expect(taskCount(2)).toBe("2 tasks");
+    expect(taskCount(11)).toBe("11 tasks");
+  });
+
+  test("none is plural, the way English wants it", () => {
+    expect(taskCount(0)).toBe("0 tasks");
   });
 });

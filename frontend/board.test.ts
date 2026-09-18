@@ -10,6 +10,7 @@ import {
   labelHalves,
   labelsInUse,
   pendingDependencies,
+  resolveDependencies,
   visibleTasks,
   defaultColumn,
   defaultPriority,
@@ -117,6 +118,56 @@ describe("pendingDependencies", () => {
   test("the declared order is kept and done dependencies drop out", () => {
     const pending = pendingDependencies(task("TQ-0100", "todo", "TQ-0002", "TQ-0001", "TQ-9999"), index, FALLBACK_COLUMNS);
     expect(pending).toEqual(["TQ-0002", "TQ-9999"]);
+  });
+});
+
+describe("resolveDependencies", () => {
+  const tasks = [task("TQ-0001", "done"), task("TQ-0002", "in-progress")];
+  const index = indexTasks(tasks);
+
+  test("a dependency carries the task the listing holds and the column's wording", () => {
+    const [first, second] = resolveDependencies(
+      task("TQ-0100", "todo", "TQ-0001", "TQ-0002"),
+      index,
+      FALLBACK_COLUMNS,
+    );
+    expect(first).toEqual({ id: "TQ-0001", task: tasks[0]!, status: "Done", pending: false });
+    expect(second).toEqual({
+      id: "TQ-0002",
+      task: tasks[1]!,
+      status: "In Progress",
+      pending: true,
+    });
+  });
+
+  test("a missing dependency is a row of its own, pending and with no task", () => {
+    const [only] = resolveDependencies(task("TQ-0100", "todo", "TQ-9999"), index, FALLBACK_COLUMNS);
+    expect(only).toEqual({ id: "TQ-9999", task: undefined, status: "", pending: true });
+  });
+
+  test("a status the board has no column for is shown as the file spells it", () => {
+    const stranded = indexTasks([task("TQ-0001", "archived")]);
+    const [only] = resolveDependencies(task("TQ-0100", "todo", "TQ-0001"), stranded, FALLBACK_COLUMNS);
+    expect(only?.status).toBe("archived");
+    expect(only?.pending).toBe(true);
+  });
+
+  test("the file's order is kept, and no dependencies is no rows", () => {
+    const rows = resolveDependencies(
+      task("TQ-0100", "todo", "TQ-0002", "TQ-0001"),
+      index,
+      FALLBACK_COLUMNS,
+    );
+    expect(rows.map((row) => row.id)).toEqual(["TQ-0002", "TQ-0001"]);
+    expect(resolveDependencies(task("TQ-0100", "todo"), index, FALLBACK_COLUMNS)).toEqual([]);
+  });
+
+  test("it is the one rule pendingDependencies answers with", () => {
+    const dependent = task("TQ-0100", "todo", "TQ-0001", "TQ-0002", "TQ-9999");
+    const rows = resolveDependencies(dependent, index, FALLBACK_COLUMNS);
+    expect(rows.filter((row) => row.pending).map((row) => row.id)).toEqual(
+      pendingDependencies(dependent, index, FALLBACK_COLUMNS),
+    );
   });
 });
 

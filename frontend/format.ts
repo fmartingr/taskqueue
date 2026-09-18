@@ -1,7 +1,7 @@
 /**
- * The two conversions the dialogs do between what a field holds and what the
- * API takes. Kept out of the components because both dialogs need them and
- * neither one owns them.
+ * The conversions between what a field holds, what the API takes and what the
+ * page says. Kept out of the components because more than one of them needs
+ * each of these and none of them owns one.
  */
 
 /** "backend, auth" — the comma-separated text fields the dialogs offer. */
@@ -16,4 +16,9 @@ export function splitList(value: string): string[] {
 export function formatTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+/** "3 tasks", "1 task": a number of tasks, where naming them would not fit. */
+export function taskCount(count: number): string {
+  return `${count} task${count === 1 ? "" : "s"}`;
 }

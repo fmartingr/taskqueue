@@ -5604,11 +5604,19 @@ function defaultColumn(columns) {
 function indexTasks(tasks) {
   return new Map(tasks.map((task) => [task.id, task]));
 }
-function pendingDependencies(task, index, columns) {
-  return (task.depends_on ?? []).filter((id) => {
+function resolveDependencies(task, index, columns) {
+  return (task.depends_on ?? []).map((id) => {
     const other = index.get(id);
-    return other === undefined || !columnSatisfies(other.status, columns);
+    return {
+      id,
+      task: other,
+      status: other === undefined ? "" : columnDisplay(other.status, columns),
+      pending: other === undefined || !columnSatisfies(other.status, columns)
+    };
   });
+}
+function pendingDependencies(task, index, columns) {
+  return resolveDependencies(task, index, columns).filter((dependency) => dependency.pending).map((dependency) => dependency.id);
 }
 function isReady(task, index, columns) {
   if (!columnOffersWork(task.status, columns))
@@ -6004,6 +6012,18 @@ function listen() {
   });
 }
 
+// frontend/format.ts
+function splitList(value) {
+  return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+function formatTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+function taskCount(count) {
+  return `${count} task${count === 1 ? "" : "s"}`;
+}
+
 // frontend/notes.ts
 var NOTES_HEADING = "## Notes";
 var NOTES_RULE = "---";
@@ -6327,7 +6347,10 @@ var Card_default = /* @__PURE__ */ defineComponent({
             count: noteCount.value
           }, null, 8, ["count"])) : createCommentVNode("v-if", true)
         ])) : createCommentVNode("v-if", true),
-        pending.value.length > 0 ? (openBlock(), createElementBlock("p", _hoisted_7, "Blocked by " + toDisplayString(pending.value.join(", ")), 1)) : createCommentVNode("v-if", true)
+        createCommentVNode(` A count rather than the IDs: three of them is three lines of the card
+         saying what a number says in one, and the dialog has them in full
+         (TQ-0105). `),
+        pending.value.length > 0 ? (openBlock(), createElementBlock("p", _hoisted_7, "Blocked by " + toDisplayString(unref(taskCount)(pending.value.length)), 1)) : createCommentVNode("v-if", true)
       ], 42, _hoisted_14);
     };
   }
@@ -6505,15 +6528,6 @@ var Board_default = /* @__PURE__ */ defineComponent({
 
 // frontend/components/Board.vue
 var Board_default2 = Board_default;
-
-// frontend/format.ts
-function splitList(value) {
-  return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
-}
-function formatTime(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
 
 // frontend/components/CreateDialog.vue?type=script
 var _hoisted_17 = { class: "grid" };
@@ -7147,10 +7161,51 @@ function commitNote(opened, text, current) {
   return { outcome: "write", body: joinBody({ content: current.content, notes }) };
 }
 
+// frontend/components/DependencyRow.vue?type=script
+var _hoisted_19 = ["title"];
+var _hoisted_26 = { class: "token-id" };
+var _hoisted_35 = { class: "dep-title" };
+var _hoisted_44 = {
+  key: 1,
+  class: "dep gone"
+};
+var _hoisted_53 = { class: "token-id" };
+var DependencyRow_default = /* @__PURE__ */ defineComponent({
+  __name: "DependencyRow",
+  props: {
+    dependency: { type: Object, required: true },
+    open: { type: Function, required: true }
+  },
+  setup(__props) {
+    return (_ctx, _cache) => {
+      return __props.dependency.task ? (openBlock(), createElementBlock("button", {
+        key: 0,
+        type: "button",
+        class: "ghost dep",
+        title: `Open ${__props.dependency.id}`,
+        onClick: _cache[0] || (_cache[0] = ($event) => __props.open(__props.dependency.id))
+      }, [
+        createBaseVNode("span", _hoisted_26, toDisplayString(__props.dependency.id), 1),
+        createBaseVNode("span", {
+          class: normalizeClass(["dep-status", { pending: __props.dependency.pending }])
+        }, toDisplayString(__props.dependency.status), 3),
+        createBaseVNode("span", _hoisted_35, toDisplayString(__props.dependency.task.title), 1)
+      ], 8, _hoisted_19)) : (openBlock(), createElementBlock("span", _hoisted_44, [
+        createBaseVNode("span", _hoisted_53, toDisplayString(__props.dependency.id), 1),
+        _cache[1] || (_cache[1] = createBaseVNode("span", { class: "dep-status pending" }, "missing", -1)),
+        _cache[2] || (_cache[2] = createBaseVNode("span", { class: "dep-title" }, "not in the queue", -1))
+      ]));
+    };
+  }
+});
+
+// frontend/components/DependencyRow.vue
+var DependencyRow_default2 = DependencyRow_default;
+
 // frontend/components/InlineText.vue?type=script
-var _hoisted_19 = ["id", "aria-label", "onKeydown"];
-var _hoisted_26 = ["id", "aria-label", "onKeydown"];
-var _hoisted_35 = {
+var _hoisted_110 = ["id", "aria-label", "onKeydown"];
+var _hoisted_27 = ["id", "aria-label", "onKeydown"];
+var _hoisted_36 = {
   key: 2,
   class: "inline-actions"
 };
@@ -7232,7 +7287,7 @@ var InlineText_default = /* @__PURE__ */ defineComponent({
               _cache[2] || (_cache[2] = withKeys(withModifiers(($event) => finish(true), ["meta", "prevent"]), ["enter"]))
             ],
             onBlur: _cache[3] || (_cache[3] = ($event) => finish(true))
-          }, null, 40, _hoisted_19)), [
+          }, null, 40, _hoisted_110)), [
             [vModelText, draft.value]
           ]) : withDirectives((openBlock(), createElementBlock("input", {
             key: 1,
@@ -7249,10 +7304,10 @@ var InlineText_default = /* @__PURE__ */ defineComponent({
               withKeys(withModifiers(cancel, ["prevent", "stop"]), ["esc"])
             ],
             onBlur: _cache[6] || (_cache[6] = ($event) => finish(true))
-          }, null, 40, _hoisted_26)), [
+          }, null, 40, _hoisted_27)), [
             [vModelText, draft.value]
           ]),
-          __props.multiline ? (openBlock(), createElementBlock("div", _hoisted_35, [
+          __props.multiline ? (openBlock(), createElementBlock("div", _hoisted_36, [
             createBaseVNode("button", {
               type: "button",
               class: "primary",
@@ -7297,10 +7352,10 @@ var InlineText_default2 = InlineText_default;
 // node_modules/mdurl/index.mjs
 var exports_mdurl = {};
 __export(exports_mdurl, {
-  decode: () => decode_default,
-  encode: () => encode_default,
+  parse: () => parse_default,
   format: () => format,
-  parse: () => parse_default
+  encode: () => encode_default,
+  decode: () => decode_default
 });
 
 // node_modules/mdurl/lib/decode.mjs
@@ -7655,12 +7710,12 @@ var parse_default = urlParse;
 // node_modules/uc.micro/build/index.mjs
 var exports_build = {};
 __export(exports_build, {
-  Any: () => Any,
-  Cc: () => Cc,
-  Cf: () => Cf,
-  P: () => P,
+  Z: () => Z,
   S: () => S,
-  Z: () => Z
+  P: () => P,
+  Cf: () => Cf,
+  Cc: () => Cc,
+  Any: () => Any
 });
 var Any = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/;
 var Cc = /[\0-\x1F\x7F-\x9F]/;
@@ -12472,7 +12527,7 @@ function taskLists(state) {
 }
 
 // frontend/components/Markdown.vue?type=script
-var _hoisted_110 = ["innerHTML"];
+var _hoisted_111 = ["innerHTML"];
 var Markdown_default = /* @__PURE__ */ defineComponent({
   __name: "Markdown",
   props: {
@@ -12485,7 +12540,7 @@ var Markdown_default = /* @__PURE__ */ defineComponent({
       return openBlock(), createElementBlock("div", {
         class: "markdown",
         innerHTML: html.value
-      }, null, 8, _hoisted_110);
+      }, null, 8, _hoisted_111);
     };
   }
 });
@@ -12494,17 +12549,17 @@ var Markdown_default = /* @__PURE__ */ defineComponent({
 var Markdown_default2 = Markdown_default;
 
 // frontend/components/NotesPanel.vue?type=script
-var _hoisted_111 = { class: "notes-section" };
-var _hoisted_27 = { class: "note-row" };
-var _hoisted_36 = {
+var _hoisted_112 = { class: "notes-section" };
+var _hoisted_28 = { class: "note-row" };
+var _hoisted_37 = {
   key: 0,
   class: "notes-empty"
 };
-var _hoisted_44 = {
+var _hoisted_45 = {
   key: 1,
   class: "note detached"
 };
-var _hoisted_53 = { class: "note-head" };
+var _hoisted_54 = { class: "note-head" };
 var _hoisted_63 = { class: "note-time" };
 var _hoisted_72 = ["onMousedown", "onClick"];
 var _hoisted_8 = ["onKeydown", "onBlur"];
@@ -12588,9 +12643,9 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
       act();
     }
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("section", _hoisted_111, [
+      return openBlock(), createElementBlock("section", _hoisted_112, [
         _cache[6] || (_cache[6] = createBaseVNode("h3", { class: "task-section" }, "Notes", -1)),
-        createBaseVNode("div", _hoisted_27, [
+        createBaseVNode("div", _hoisted_28, [
           withDirectives(createBaseVNode("textarea", {
             id: "task-note",
             "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => draft.value = $event),
@@ -12614,8 +12669,8 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
           ref: list2,
           class: "notes"
         }, [
-          __props.notes.length === 0 && !detached.value ? (openBlock(), createElementBlock("li", _hoisted_36, "No notes yet.")) : createCommentVNode("v-if", true),
-          detached.value && editing.value !== null ? (openBlock(), createElementBlock("li", _hoisted_44, [
+          __props.notes.length === 0 && !detached.value ? (openBlock(), createElementBlock("li", _hoisted_37, "No notes yet.")) : createCommentVNode("v-if", true),
+          detached.value && editing.value !== null ? (openBlock(), createElementBlock("li", _hoisted_45, [
             _cache[5] || (_cache[5] = createBaseVNode("p", {
               id: "task-note-detached",
               class: "note-moved"
@@ -12634,7 +12689,7 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
               key: position,
               class: "note"
             }, [
-              createBaseVNode("div", _hoisted_53, [
+              createBaseVNode("div", _hoisted_54, [
                 createBaseVNode("time", _hoisted_63, toDisplayString(note.timestamp === "" ? "note" : unref(formatTime)(note.timestamp)), 1),
                 createBaseVNode("button", {
                   type: "button",
@@ -12670,10 +12725,10 @@ var NotesPanel_default = /* @__PURE__ */ defineComponent({
 var NotesPanel_default2 = NotesPanel_default;
 
 // frontend/components/TokenField.vue?type=script
-var _hoisted_112 = ["id"];
-var _hoisted_28 = ["title", "aria-label", "onClick"];
-var _hoisted_37 = ["id", "placeholder", "aria-label", "onKeydown"];
-var _hoisted_45 = ["id", "title", "aria-label"];
+var _hoisted_113 = ["id"];
+var _hoisted_29 = ["title", "aria-label", "onClick"];
+var _hoisted_38 = ["id", "placeholder", "aria-label", "onKeydown"];
+var _hoisted_46 = ["id", "title", "aria-label"];
 var TokenField_default = /* @__PURE__ */ defineComponent({
   __name: "TokenField",
   props: {
@@ -12739,7 +12794,7 @@ var TokenField_default = /* @__PURE__ */ defineComponent({
               title: `Remove ${value}`,
               "aria-label": `Remove ${value}`,
               onClick: ($event) => remove2(value)
-            }, " ✕ ", 8, _hoisted_28)
+            }, " ✕ ", 8, _hoisted_29)
           ]);
         }), 128)),
         adding.value ? withDirectives((openBlock(), createElementBlock("input", {
@@ -12758,7 +12813,7 @@ var TokenField_default = /* @__PURE__ */ defineComponent({
             _cache[1] || (_cache[1] = withKeys(withModifiers(($event) => adding.value = false, ["prevent", "stop"]), ["esc"]))
           ],
           onBlur: add
-        }, null, 40, _hoisted_37)), [
+        }, null, 40, _hoisted_38)), [
           [vModelText, draft.value]
         ]) : (openBlock(), createElementBlock("button", {
           key: 1,
@@ -12768,8 +12823,8 @@ var TokenField_default = /* @__PURE__ */ defineComponent({
           title: `Add ${__props.label}`,
           "aria-label": `Add ${__props.label}`,
           onClick: begin
-        }, " ＋ ", 8, _hoisted_45))
-      ], 8, _hoisted_112);
+        }, " ＋ ", 8, _hoisted_46))
+      ], 8, _hoisted_113);
     };
   }
 });
@@ -12778,14 +12833,14 @@ var TokenField_default = /* @__PURE__ */ defineComponent({
 var TokenField_default2 = TokenField_default;
 
 // frontend/components/TaskDialog.vue?type=script
-var _hoisted_113 = { class: "task-sheet" };
-var _hoisted_29 = { class: "task-head" };
-var _hoisted_38 = { class: "task-head-text" };
-var _hoisted_46 = {
+var _hoisted_114 = { class: "task-sheet" };
+var _hoisted_210 = { class: "task-head" };
+var _hoisted_39 = { class: "task-head-text" };
+var _hoisted_47 = {
   id: "task-dialog-id",
   class: "task-id"
 };
-var _hoisted_54 = ["value"];
+var _hoisted_55 = ["value"];
 var _hoisted_64 = ["value"];
 var _hoisted_73 = ["hidden"];
 var _hoisted_82 = ["hidden"];
@@ -12795,12 +12850,10 @@ var _hoisted_11 = {
   key: 1,
   class: "task-empty"
 };
-var _hoisted_122 = { class: "token-id" };
-var _hoisted_132 = ["hidden"];
-var _hoisted_142 = { class: "task-side" };
-var _hoisted_152 = ["value"];
-var _hoisted_162 = ["value", "title"];
-var _hoisted_172 = {
+var _hoisted_122 = { class: "task-side" };
+var _hoisted_132 = ["value"];
+var _hoisted_142 = ["value", "title"];
+var _hoisted_152 = {
   id: "task-timestamps",
   class: "timestamps"
 };
@@ -12818,21 +12871,34 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
     const split = computed2(() => splitBody(props.task.body ?? ""));
     const priority = computed2(() => props.task.priority || defaultPriority(priorities.value));
     const priorityChoices = computed2(() => priorityOptions(priorities.value, [priority.value]));
-    const pending = computed2(() => pendingDependencies(props.task, index.value, columns.value));
+    const dependencies = computed2(() => resolveDependencies(props.task, index.value, columns.value));
+    function dependencyOf(id) {
+      return dependencies.value.find((dependency) => dependency.id === id) ?? { id, status: "", pending: true };
+    }
     const timestamps = computed2(() => `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`);
     onMounted(() => dialog.value?.showModal());
     function dismiss() {
       dialog.value?.close();
     }
     let pressedOutside = false;
+    let pressedWithEditor = false;
     function onMouseDown(event) {
       pressedOutside = event.target === dialog.value;
+      pressedWithEditor = editorOpen();
+    }
+    function editorOpen() {
+      return dialog.value?.querySelector(EDITORS) != null;
     }
     function onClick(event) {
       const outside = pressedOutside && event.target === dialog.value;
       pressedOutside = false;
-      if (outside && dialog.value?.querySelector(EDITORS) === null)
+      pressedWithEditor = false;
+      if (outside && !editorOpen())
         dismiss();
+    }
+    function follow(id) {
+      if (!pressedWithEditor && !editorOpen())
+        openTaskID.value = id;
     }
     const TITLE = { what: "title", of: (task) => task.title };
     const ASSIGNEE = { what: "assignee", of: (task) => task.assignee ?? "" };
@@ -12935,10 +13001,10 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
         onMousedown: onMouseDown,
         onClick
       }, [
-        createBaseVNode("div", _hoisted_113, [
-          createBaseVNode("header", _hoisted_29, [
-            createBaseVNode("div", _hoisted_38, [
-              createBaseVNode("span", _hoisted_46, toDisplayString(__props.task.id), 1),
+        createBaseVNode("div", _hoisted_114, [
+          createBaseVNode("header", _hoisted_210, [
+            createBaseVNode("div", _hoisted_39, [
+              createBaseVNode("span", _hoisted_47, toDisplayString(__props.task.id), 1),
               createVNode(InlineText_default2, {
                 id: "task-title",
                 heading: "",
@@ -12961,7 +13027,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                     value: column.name
                   }, toDisplayString(column.display_name), 9, _hoisted_64);
                 }), 128))
-              ], 40, _hoisted_54)
+              ], 40, _hoisted_55)
             ]),
             createBaseVNode("button", {
               type: "button",
@@ -13004,28 +13070,27 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
               _cache[8] || (_cache[8] = createBaseVNode("h3", { class: "task-section" }, "Depends on", -1)),
               createVNode(TokenField_default2, {
                 id: "task-depends-on",
+                class: "token-rows",
                 label: "a dependency",
                 placeholder: "TQ-0002",
                 values: __props.task.depends_on ?? [],
                 commit: saveDependencies
               }, {
                 default: withCtx(({ value }) => [
-                  createBaseVNode("span", _hoisted_122, toDisplayString(value), 1)
+                  createVNode(DependencyRow_default2, {
+                    dependency: dependencyOf(value),
+                    open: follow
+                  }, null, 8, ["dependency"])
                 ]),
                 _: 1
               }, 8, ["values"]),
-              createBaseVNode("p", {
-                id: "task-blocked",
-                class: "blocked-note",
-                hidden: pending.value.length === 0
-              }, " Blocked by " + toDisplayString(pending.value.join(", ")), 9, _hoisted_132),
               createVNode(NotesPanel_default2, {
                 notes: split.value.notes,
                 commit: saveNote,
                 append: appendNote
               }, null, 8, ["notes"])
             ]),
-            createBaseVNode("aside", _hoisted_142, [
+            createBaseVNode("aside", _hoisted_122, [
               _cache[9] || (_cache[9] = createBaseVNode("h3", { class: "task-section" }, "Priority", -1)),
               createBaseVNode("select", {
                 id: "task-priority",
@@ -13038,9 +13103,9 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                     key: option.name,
                     value: option.name,
                     title: option.configured ? option.name : `${option.name} — not in the project's priority set`
-                  }, toDisplayString(option.display), 9, _hoisted_162);
+                  }, toDisplayString(option.display), 9, _hoisted_142);
                 }), 128))
-              ], 40, _hoisted_152),
+              ], 40, _hoisted_132),
               _cache[10] || (_cache[10] = createBaseVNode("h3", { class: "task-section" }, "Assignee", -1)),
               createVNode(InlineText_default2, {
                 id: "task-assignee",
@@ -13064,7 +13129,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
                 ]),
                 _: 1
               }, 8, ["values"]),
-              createBaseVNode("p", _hoisted_172, toDisplayString(timestamps.value), 1)
+              createBaseVNode("p", _hoisted_152, toDisplayString(timestamps.value), 1)
             ])
           ])
         ])
@@ -13077,7 +13142,7 @@ var TaskDialog_default = /* @__PURE__ */ defineComponent({
 var TaskDialog_default2 = TaskDialog_default;
 
 // frontend/components/Toasts.vue?type=script
-var _hoisted_114 = {
+var _hoisted_115 = {
   id: "toasts",
   class: "toasts",
   "aria-live": "polite"
@@ -13086,7 +13151,7 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
   __name: "Toasts",
   setup(__props) {
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock("div", _hoisted_114, [
+      return openBlock(), createElementBlock("div", _hoisted_115, [
         (openBlock(true), createElementBlock(Fragment, null, renderList(unref(toasts), (item) => {
           return openBlock(), createElementBlock("div", {
             key: item.id,
@@ -13102,15 +13167,15 @@ var Toasts_default = /* @__PURE__ */ defineComponent({
 var Toasts_default2 = Toasts_default;
 
 // frontend/components/App.vue?type=script
-var _hoisted_115 = { class: "topbar" };
-var _hoisted_210 = { class: "statusbar" };
-var _hoisted_39 = { id: "status-line" };
+var _hoisted_116 = { class: "topbar" };
+var _hoisted_211 = { class: "statusbar" };
+var _hoisted_310 = { id: "status-line" };
 var App_default = /* @__PURE__ */ defineComponent({
   __name: "App",
   setup(__props) {
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock(Fragment, null, [
-        createBaseVNode("header", _hoisted_115, [
+        createBaseVNode("header", _hoisted_116, [
           _cache[3] || (_cache[3] = createBaseVNode("h1", { class: "brand" }, "tq", -1)),
           createVNode(SearchBar_default2),
           createBaseVNode("button", {
@@ -13121,8 +13186,8 @@ var App_default = /* @__PURE__ */ defineComponent({
           }, "New task")
         ]),
         createVNode(Board_default2),
-        createBaseVNode("footer", _hoisted_210, [
-          createBaseVNode("span", _hoisted_39, toDisplayString(unref(statusLine)), 1)
+        createBaseVNode("footer", _hoisted_211, [
+          createBaseVNode("span", _hoisted_310, toDisplayString(unref(statusLine)), 1)
         ]),
         createVNode(Toasts_default2),
         createCommentVNode(` Keyed by the task: \`openTask\` is a ref rather than a find, so it could be

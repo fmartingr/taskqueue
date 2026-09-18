@@ -822,6 +822,73 @@ textarea.inline-editor {
   max-width: 140px;
 }
 
+/* ── Dependencies ────────────────────────────────────────────── */
+
+/* The dependencies are a list, not a row of chips: each one carries a title
+   and a status, which do not read wrapped beside the next one's. */
+.tokens.token-rows {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.tokens.token-rows .token {
+  width: 100%;
+}
+
+/* Text that opens a task, so the affordance is the hover rather than a border
+   — the same one the click-to-edit fields above use. */
+.dep {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  text-align: left;
+}
+
+button.dep:hover {
+  background: var(--surface-alt);
+  border-color: var(--border);
+}
+
+.dep-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+/* Fixed, so the statuses read as one column and every title starts at the same
+   place. A longer column name is cut rather than allowed to shift the list. */
+.dep-status {
+  flex: none;
+  width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.dep-status.pending {
+  color: var(--blocked);
+  border-color: var(--blocked);
+}
+
+.dep.gone .dep-title {
+  color: var(--blocked);
+  font-style: italic;
+}
+
 /* ── Notes ───────────────────────────────────────────────────── */
 
 .note-badge {

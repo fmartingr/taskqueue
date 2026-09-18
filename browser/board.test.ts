@@ -430,7 +430,11 @@ test.each([
   expect(await page.textContent("#task-dialog-id")).toBe(id);
 });
 
-test("a blocked card says what it is waiting for, in the board and the dialog", async () => {
+// The card counts its dependencies and the dialog lists them: an ID on a card
+// is three lines of it saying what a number says in one, and an ID on its own
+// answers neither of the questions about a dependency anyway — what is it, and
+// is it done (TQ-0105).
+test("a blocked card counts what it waits for and the dialog names it in full", async () => {
   let blocker = "";
   let blocked = "";
   const { page } = await openBoard((project) => {
@@ -438,12 +442,93 @@ test("a blocked card says what it is waiting for, in the board and the dialog", 
     blocked = project.add("Then this", "--depends-on", blocker);
   });
 
-  expect(await page.textContent(`${card(blocked)} .blocked-note`)).toContain(blocker);
+  const note = await page.textContent(`${card(blocked)} .blocked-note`);
+  expect(note).toContain("1 task");
+  expect(note).not.toContain(blocker);
 
   await page.click(cardIn("todo", blocked));
   await page.waitForSelector("#task-dialog[open]");
-  expect(await page.textContent("#task-blocked")).toContain(blocker);
-  expect(await page.textContent("#task-depends-on")).toContain(blocker);
+
+  // The row says everything the dialog's old "Blocked by TQ-0001, TQ-0002"
+  // line said, per dependency, so that line is gone with the IDs it repeated.
+  const row = await page.textContent("#task-depends-on .dep");
+  expect(row).toContain(blocker);
+  expect(row).toContain("Do this first");
+  // The board's own wording for the column, so a renamed one reads the same
+  // here as in the header above it.
+  expect(row).toContain("To do");
+});
+
+test("a dependency's row opens that task's dialog", async () => {
+  let blocker = "";
+  let blocked = "";
+  const { page } = await openBoard((project) => {
+    blocker = project.add("Do this first");
+    blocked = project.add("Then this", "--depends-on", blocker);
+  });
+
+  await page.click(cardIn("todo", blocked));
+  await page.waitForSelector("#task-dialog[open]");
+  expect(await page.textContent("#task-dialog-id")).toBe(blocked);
+
+  await page.click("#task-depends-on .dep");
+
+  // The dialog is keyed on the open task, so following a row replaces it with
+  // the dependency's rather than reusing the instance the first task filled.
+  await page.waitForFunction(
+    (id) => document.querySelector("#task-dialog-id")?.textContent === id,
+    blocker,
+  );
+  expect(await page.textContent("#task-title")).toBe("Do this first");
+});
+
+// A dependency nothing answers to is why a task stays blocked forever, so the
+// row is where that is found out. There is nothing to open either: the board
+// has no task to point the dialog at.
+test("a dependency the queue does not hold is named rather than linked", async () => {
+  let blocked = "";
+  const { page } = await openBoard((project) => {
+    blocked = project.add("Waiting on a ghost", "--depends-on", "TQ-9999");
+  });
+
+  await page.click(cardIn("todo", blocked));
+  await page.waitForSelector("#task-dialog[open]");
+
+  const row = await page.textContent("#task-depends-on .dep");
+  expect(row).toContain("TQ-9999");
+  expect(row).toContain("not in the queue");
+  expect(await page.$("#task-depends-on button.dep")).toBeNull();
+});
+
+// The same rule as the click outside, and for the same reason: the press that
+// lands on the row blurs the editor, a blur writes, and a write can be refused
+// — following the row on that click would take the text a refusal exists to
+// preserve with it, out of the dialog that has to say so (TQ-0069).
+test("following a dependency stands down for an open editor", async () => {
+  let blocker = "";
+  let blocked = "";
+  const { project, server, page } = await openBoard((p) => {
+    blocker = p.add("Do this first");
+    blocked = p.add("Then this", "--depends-on", blocker);
+  });
+
+  await page.click(cardIn("todo", blocked));
+  await page.waitForSelector("#task-dialog[open]");
+  await openEditor(page, "task-title", "Renamed while a row was clicked");
+
+  await page.click("#task-depends-on .dep");
+  await page.waitForSelector("#task-title-edit", { state: "detached" });
+  expect(await page.textContent("#task-dialog-id")).toBe(blocked);
+
+  const written = (await project.tasks(server)).find((task) => task.id === blocked);
+  expect(written?.title).toBe("Renamed while a row was clicked");
+
+  // With the editor settled, the next click is the one that follows the row.
+  await page.click("#task-depends-on .dep");
+  await page.waitForFunction(
+    (id) => document.querySelector("#task-dialog-id")?.textContent === id,
+    blocker,
+  );
 });
 
 // Two files claiming one ID used to reach the board as two cards on a single

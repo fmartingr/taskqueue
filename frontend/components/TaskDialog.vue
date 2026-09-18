@@ -29,11 +29,18 @@
 import { computed, onMounted, ref } from "vue";
 
 import { addNote, describe, fetchTask, patchTask, type TaskInput } from "../api";
-import { defaultPriority, pendingDependencies, priorityOptions, type Task } from "../board";
+import {
+  defaultPriority,
+  type Dependency,
+  priorityOptions,
+  resolveDependencies,
+  type Task,
+} from "../board";
 import { commitContent, commitField, commitNote, type Commit } from "../edit";
 import { formatTime } from "../format";
 import { splitBody, type Note } from "../notes";
-import { columns, index, openTaskMissing, priorities, refresh, toast } from "../state";
+import { columns, index, openTaskID, openTaskMissing, priorities, refresh, toast } from "../state";
+import DependencyRow from "./DependencyRow.vue";
 import InlineText from "./InlineText.vue";
 import LabelChip from "./LabelChip.vue";
 import Markdown from "./Markdown.vue";
@@ -58,7 +65,17 @@ const priority = computed(() => props.task.priority || defaultPriority(prioritie
  */
 const priorityChoices = computed(() => priorityOptions(priorities.value, [priority.value]));
 
-const pending = computed(() => pendingDependencies(props.task, index.value, columns.value));
+/** What the file lists under depends_on, resolved against the listing the
+ *  board is already holding: no second endpoint, and no fetch of its own. */
+const dependencies = computed(() => resolveDependencies(props.task, index.value, columns.value));
+
+/** The row for one chip. TokenField draws the chips from the same list, so the
+ *  fallback is only there for the instant between a write and the refresh. */
+function dependencyOf(id: string): Dependency {
+  return (
+    dependencies.value.find((dependency) => dependency.id === id) ?? { id, status: "", pending: true }
+  );
+}
 const timestamps = computed(
   () => `created ${formatTime(props.task.created)} · updated ${formatTime(props.task.updated)}`,
 );
@@ -83,8 +100,24 @@ const EDITORS = ".inline-editor, .note-editor, .token-input";
  */
 let pressedOutside = false;
 
+/**
+ * Whether an editor was open when the press that becomes this click began.
+ *
+ * Asked on the mousedown rather than on the click because the press itself is
+ * what settles the editor: the blur writes, and by the time the click arrives
+ * the editor it has to wait for may be gone from the DOM.
+ */
+let pressedWithEditor = false;
+
 function onMouseDown(event: MouseEvent): void {
   pressedOutside = event.target === dialog.value;
+  pressedWithEditor = editorOpen();
+}
+
+/** Whether an editor is open in the dialog. There is at most one, and it is
+ *  what both rules below have to stand down for. */
+function editorOpen(): boolean {
+  return dialog.value?.querySelector(EDITORS) != null;
 }
 
 /**
@@ -104,8 +137,25 @@ function onMouseDown(event: MouseEvent): void {
  */
 function onClick(event: MouseEvent): void {
   const outside = pressedOutside && event.target === dialog.value;
+  // Every click inside the dialog bubbles to here, which is what keeps the
+  // press flags from outliving the press that set them.
   pressedOutside = false;
-  if (outside && dialog.value?.querySelector(EDITORS) === null) dismiss();
+  pressedWithEditor = false;
+  if (outside && !editorOpen()) dismiss();
+}
+
+/**
+ * Opens a dependency's own task: App.vue keys this dialog on the open ID, so
+ * pointing it at another task replaces the dialog with that task's.
+ *
+ * It stands down for an open editor for the same reason the click outside
+ * does, and it is the same click. Losing focus writes, that write can be
+ * refused, and the dialog a refusal has to speak from is the one this would
+ * have replaced — so the first click settles the editor, and the second one
+ * follows the row.
+ */
+function follow(id: string): void {
+  if (!pressedWithEditor && !editorOpen()) openTaskID.value = id;
 }
 
 // ── Saying the file moved ───────────────────────────────────────
@@ -376,18 +426,16 @@ async function appendNote(text: string): Promise<boolean> {
           <h3 class="task-section">Depends on</h3>
           <TokenField
             id="task-depends-on"
+            class="token-rows"
             label="a dependency"
             placeholder="TQ-0002"
             :values="task.depends_on ?? []"
             :commit="saveDependencies"
           >
             <template #default="{ value }">
-              <span class="token-id">{{ value }}</span>
+              <DependencyRow :dependency="dependencyOf(value)" :open="follow" />
             </template>
           </TokenField>
-          <p id="task-blocked" class="blocked-note" :hidden="pending.length === 0">
-            Blocked by {{ pending.join(", ") }}
-          </p>
 
           <NotesPanel :notes="split.notes" :commit="saveNote" :append="appendNote" />
         </section>

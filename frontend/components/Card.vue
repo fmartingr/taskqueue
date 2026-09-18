@@ -6,6 +6,7 @@
 import { computed } from "vue";
 
 import { pendingDependencies, type Task } from "../board";
+import { taskCount } from "../format";
 import { splitBody } from "../notes";
 import { columns, dragging, index, openTaskID } from "../state";
 import LabelChip from "./LabelChip.vue";
@@ -58,6 +59,9 @@ function onKeydown(event: KeyboardEvent): void {
       <NoteBadge v-if="noteCount > 0" :count="noteCount" />
     </div>
 
-    <p v-if="pending.length > 0" class="blocked-note">Blocked by {{ pending.join(", ") }}</p>
+    <!-- A count rather than the IDs: three of them is three lines of the card
+         saying what a number says in one, and the dialog has them in full
+         (TQ-0105). -->
+    <p v-if="pending.length > 0" class="blocked-note">Blocked by {{ taskCount(pending.length) }}</p>
   </article>
 </template>

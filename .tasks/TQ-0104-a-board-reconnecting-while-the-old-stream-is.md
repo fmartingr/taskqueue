@@ -1,14 +1,14 @@
 ---
 id: TQ-0104
 title: A board reconnecting while the old stream is still closing never hears a standing scan failure
-status: todo
+status: done
 priority: high
 labels:
   - bug
   - component/api
   - tests
 created: 2026-09-02T22:43:38+02:00
-updated: 2026-09-02T22:43:47+02:00
+updated: 2026-09-20T15:44:16+02:00
 ---
 
 `make test` is red on main. `internal/web`'s
@@ -77,3 +77,29 @@ per-subscriber question closes both; they can be taken in either order.
   it, repeatedly (`-count=10`).
 - A board that reloads while the task directory is unreadable says so.
 - `make test` is green on main.
+
+---
+
+## Notes
+
+- 2026-09-20T15:44:16+02:00 — Fixed by making the standing scan failure part of what a stream opens with,
+  the first of the two directions the finding suggested.
+
+  - hub.lastErr now means "the failure standing right now", not "a board has
+    been told". The clearing in subscribe's release is gone: that was the whole
+    bug, since a reconnect overlaps its own teardown and the map is never empty
+    between the two streams.
+  - current() returns it beside the two fingerprints, and handleEvents writes a
+    scan-failed frame after the opening tasks/config pair when one stands.
+  - subscribe seeds lastErr from the fresh read it already takes when it is the
+    first subscriber. Nothing ticks while nobody listens, so the recorded failure
+    may be over by the time the next board arrives; that read is the only current
+    answer.
+
+  TestAScanFailureIsReportedAgainToAFreshBoard passed 5 of 5 (it failed 3 of 3
+  before). Added TestAHealedDirectoryIsNotAnnouncedAsStillBroken to cover the
+  other side of the seeding: a board arriving after the directory healed must not
+  be greeted with the old complaint.
+
+  make test, make lint, make test-integration and make build-go all green.
+  No frontend change, so the committed bundle is untouched.

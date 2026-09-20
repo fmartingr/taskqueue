@@ -520,3 +520,45 @@ func TestWriteEventKeepsOneFrameOnOneLine(t *testing.T) {
 		t.Errorf("frame = %q, want the newline in the data flattened into one frame", body)
 	}
 }
+
+// The hub does not tick while nobody is connected, so the failure it recorded
+// before the last board left says nothing about now. A board arriving after the
+// directory healed must not be greeted with the old complaint.
+func TestAHealedDirectoryIsNotAnnouncedAsStillBroken(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads an unreadable directory anyway")
+	}
+	st := tqtest.NewStore(t)
+	h := newHub(st, tick)
+	h.start()
+	t.Cleanup(h.stop)
+
+	_, release := h.subscribe()
+	if err := os.Chmod(st.Dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(st.Dir, 0o755) })
+
+	deadline := time.Now().Add(eventuallyDifferent)
+	for {
+		if _, _, scanErr := h.current(); scanErr != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the hub never recorded the failure within %s", eventuallyDifferent)
+		}
+		time.Sleep(tick)
+	}
+
+	// The last board leaves, and the queue is readable again before the next.
+	release()
+	if err := os.Chmod(st.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, secondRelease := h.subscribe()
+	defer secondRelease()
+	if _, _, scanErr := h.current(); scanErr != "" {
+		t.Errorf("a stream opening on a readable queue starts with %q, want no failure", scanErr)
+	}
+}

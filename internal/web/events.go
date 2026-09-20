@@ -162,8 +162,12 @@ type hub struct {
 	// apart: an edit to the marker must not look like an edit to a task.
 	lastTasks  string
 	lastConfig string
-	lastErr    string
-	scans      int
+	// lastErr is the scan failure that is standing right now, or empty while
+	// the directory reads. It says what the queue is doing, not who has been
+	// told about it: a stream opens with it, so a board that arrives mid-failure
+	// hears about it on connect rather than on the next change (TQ-0104).
+	lastErr string
+	scans   int
 
 	done     chan struct{}
 	stopOnce sync.Once
@@ -298,6 +302,13 @@ func (h *hub) subscribe() (*subscriber, func()) {
 	if len(h.subscribers) == 0 {
 		if err == nil {
 			h.lastTasks = freshTasks
+			h.lastErr = ""
+		} else {
+			// Nothing ticked while nobody was listening, so a failure recorded
+			// before the last board left may be over by now, and one that began
+			// while the hub was idle has never been recorded at all. This read
+			// is the only current answer either way.
+			h.lastErr = err.Error()
 		}
 		h.lastConfig = freshConfig
 	}
@@ -313,22 +324,17 @@ func (h *hub) subscribe() (*subscriber, func()) {
 				delete(h.subscribers, sub)
 				close(sub.wake)
 			}
-			// The next board to connect has not been told about a failure that
-			// is still going on, so let it be reported again rather than
-			// swallowed as a repeat.
-			if len(h.subscribers) == 0 {
-				h.lastErr = ""
-			}
 		})
 	}
 }
 
-// current is the pair of fingerprints as the hub last read them, for the frames
-// a stream opens with.
-func (h *hub) current() (tasks, cfg string) {
+// current is what a stream opens with: the pair of fingerprints as the hub last
+// read them, and the scan failure standing over them, empty when the directory
+// reads.
+func (h *hub) current() (tasks, cfg, scanErr string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.lastTasks, h.lastConfig
+	return h.lastTasks, h.lastConfig, h.lastErr
 }
 
 // drain takes everything waiting for one board, for its handler to write out.
@@ -389,9 +395,16 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// after missing a change refetches on these rather than trusting what it
 	// already had — and the marker can have changed while it was away as
 	// easily as a task can.
-	tasks, cfg := s.events.current()
+	tasks, cfg, scanErr := s.events.current()
 	writeEvent(w, flusher, event{name: tasksEvent, data: tasks})
 	writeEvent(w, flusher, event{name: configEvent, data: cfg})
+	// A failure already standing is part of where this stream starts. The hub
+	// reports one once per spell, so a board connecting into the middle of a
+	// spell would otherwise be told nothing until the directory healed — and it
+	// is the board showing a queue it cannot read (TQ-0104).
+	if scanErr != "" {
+		writeEvent(w, flusher, event{name: scanFailedEvent, data: scanErr})
+	}
 
 	keepAlive := time.NewTicker(keepAliveInterval)
 	defer keepAlive.Stop()
